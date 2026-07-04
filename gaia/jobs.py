@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
+import threading
 from typing import Any
 
 from .models import JobRecord
@@ -12,17 +13,19 @@ from .orchestrator import create_package
 
 JOBS: dict[str, JobRecord] = {}
 JOBS_LOCK = threading.RLock()
+MAX_WORKERS = 4
+JOB_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="gaia-job")
 RUNNING_JOB_TIMEOUT_SECONDS = 180
 TERMINAL_STATUSES = {"done", "failed"}
 
 
-def utc_now() -> str:
+def local_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
 def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None = None) -> JobRecord:
     job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
-    now = utc_now()
+    now = local_now()
     job = JobRecord(
         id=job_id,
         status="created",
@@ -34,8 +37,7 @@ def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes
     )
     with JOBS_LOCK:
         JOBS[job_id] = job
-    thread = threading.Thread(target=run_analyze_job, args=(job_id, project, query, uploaded, profile_id), daemon=True)
-    thread.start()
+    JOB_EXECUTOR.submit(run_analyze_job, job_id, project, query, uploaded, profile_id)
     return job
 
 
@@ -64,7 +66,7 @@ def update_job(job_id: str, **changes: Any) -> None:
             return
         for key, value in changes.items():
             setattr(job, key, value)
-        job.updated_at = utc_now()
+        job.updated_at = local_now()
 
 
 def get_job(job_id: str) -> JobRecord | None:
@@ -95,4 +97,4 @@ def mark_stale_job_failed(job: JobRecord) -> None:
     job.progress = 100
     job.message = "Задача остановлена watchdog: обработка заняла слишком много времени."
     job.error = "Job timeout. Проверь LM Studio, semantic rerank или тяжелое извлечение источников; повтори запрос."
-    job.updated_at = utc_now()
+    job.updated_at = local_now()

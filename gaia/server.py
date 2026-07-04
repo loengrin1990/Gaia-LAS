@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import cgi
 import json
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from email import policy as email_policy
+from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,18 @@ from .rebuild import rebuild_prompt
 from .scribe import apply_scribe_plan, create_scribe_draft, create_scribe_plan
 from .scribe_inbox import ignore_inbox_item, index_inbox_item, list_scribe_inbox, package_inbox_item, preview_inbox_item
 from .ui import INDEX_HTML
+
+
+MAX_JSON_BODY_SIZE = 1_000_000
+MAX_MULTIPART_BODY_SIZE = 100_000_000
+
+
+@dataclass(frozen=True)
+class MultipartField:
+    name: str
+    value: str
+    content: bytes
+    filename: str = ""
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200) -> None:
@@ -123,6 +136,12 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
+        try:
+            self.dispatch_POST()
+        except ValueError as exc:
+            error_response(self, "invalid_request", str(exc), 400)
+
+    def dispatch_POST(self) -> None:
         route = urlparse(self.path).path
         if route == "/api/analyze":
             self.handle_analyze()
@@ -172,6 +191,12 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def do_PATCH(self) -> None:
+        try:
+            self.dispatch_PATCH()
+        except ValueError as exc:
+            error_response(self, "invalid_request", str(exc), 400)
+
+    def dispatch_PATCH(self) -> None:
         route = urlparse(self.path).path
         if route.startswith("/api/projects/"):
             self.handle_project_action()
@@ -249,22 +274,18 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def handle_analyze(self) -> None:
-        form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={
-            "REQUEST_METHOD": "POST",
-            "CONTENT_TYPE": self.headers.get("Content-Type", ""),
-            "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
-        })
-        project = field_value(form, "project")
-        profile = field_value(form, "profile")
-        query = field_value(form, "query")
+        try:
+            form = parse_multipart(self)
+        except ValueError as exc:
+            error_response(self, "invalid_multipart", str(exc), 400)
+            return
+        project = multipart_value(form, "project")
+        profile = multipart_value(form, "profile")
+        query = multipart_value(form, "query")
         uploaded: list[tuple[str, bytes]] = []
-        file_fields = form["files"] if "files" in form else []
-        if not isinstance(file_fields, list):
-            file_fields = [file_fields]
-        for item in file_fields:
-            if not getattr(item, "filename", ""):
+        for item in multipart_files(form, "files"):
+            if not item.filename:
                 continue
-            content = item.file.read()
             suffix = Path(item.filename).suffix.lower()
             if suffix not in SUPPORTED_EXTENSIONS:
                 error_response(
@@ -275,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"filename": item.filename},
                 )
                 return
-            uploaded.append((item.filename, content))
+            uploaded.append((item.filename, item.content))
         if not query.strip() and not uploaded:
             error_response(self, "empty_analyze_request", "Добавь запрос или файл для анализа.", 400)
             return
@@ -347,21 +368,17 @@ class Handler(BaseHTTPRequestHandler):
         profile = None
         run_local = False
         if content_type.startswith("multipart/form-data"):
-            form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": content_type,
-                "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
-            })
-            text = field_value(form, "text")
-            profile = field_value(form, "profile") or None
-            run_local = field_value(form, "run_local").lower() == "true"
-            file_fields = form["files"] if "files" in form else []
-            if not isinstance(file_fields, list):
-                file_fields = [file_fields]
-            for item in file_fields:
-                if not getattr(item, "filename", ""):
+            try:
+                form = parse_multipart(self)
+            except ValueError as exc:
+                error_response(self, "invalid_multipart", str(exc), 400)
+                return
+            text = multipart_value(form, "text")
+            profile = multipart_value(form, "profile") or None
+            run_local = multipart_value(form, "run_local").lower() == "true"
+            for item in multipart_files(form, "files"):
+                if not item.filename:
                     continue
-                content = item.file.read()
                 suffix = Path(item.filename).suffix.lower()
                 if suffix not in SUPPORTED_EXTENSIONS:
                     error_response(
@@ -372,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"filename": item.filename},
                     )
                     return
-                uploaded.append((item.filename, content))
+                uploaded.append((item.filename, item.content))
         else:
             payload = self.read_json()
             text = str(payload.get("text") or "")
@@ -515,9 +532,11 @@ class Handler(BaseHTTPRequestHandler):
         json_response(self, rebuilt, 200)
 
     def read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        length = content_length(self.headers.get("Content-Length", "0"))
         if not length:
             return {}
+        if length > MAX_JSON_BODY_SIZE:
+            raise ValueError(f"JSON body is too large; limit is {MAX_JSON_BODY_SIZE} bytes.")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -525,16 +544,57 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[{timestamp}] {format % args}")
 
 
-def field_value(form: cgi.FieldStorage, name: str) -> str:
-    field = form[name] if name in form else None
-    if field is None:
-        return ""
-    if isinstance(field, list):
-        field = field[0]
-    value = field.value
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="ignore")
-    return str(value)
+def content_length(value: str | None) -> int:
+    try:
+        length = int(value or "0")
+    except ValueError:
+        raise ValueError("Content-Length must be an integer.")
+    if length < 0:
+        raise ValueError("Content-Length must be non-negative.")
+    return length
+
+
+def parse_multipart(handler: BaseHTTPRequestHandler) -> list[MultipartField]:
+    content_type = handler.headers.get("Content-Type", "")
+    if not content_type.startswith("multipart/form-data"):
+        raise ValueError("Content-Type must be multipart/form-data.")
+    length = content_length(handler.headers.get("Content-Length", "0"))
+    if length > MAX_MULTIPART_BODY_SIZE:
+        raise ValueError(f"Multipart body is too large; limit is {MAX_MULTIPART_BODY_SIZE} bytes.")
+    raw_body = handler.rfile.read(length)
+    headers = (
+        f"Content-Type: {content_type}\r\n"
+        "MIME-Version: 1.0\r\n"
+        "\r\n"
+    ).encode("utf-8")
+    message = BytesParser(policy=email_policy.default).parsebytes(headers + raw_body)
+    if not message.is_multipart():
+        raise ValueError("Multipart body is invalid.")
+
+    fields: list[MultipartField] = []
+    for part in message.iter_parts():
+        if part.get_content_disposition() != "form-data":
+            continue
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename() or ""
+        content = part.get_payload(decode=True) or b""
+        charset = part.get_content_charset() or "utf-8"
+        value = "" if filename else content.decode(charset, errors="ignore")
+        fields.append(MultipartField(name=str(name), value=value, content=content, filename=filename))
+    return fields
+
+
+def multipart_value(fields: list[MultipartField], name: str) -> str:
+    for field in fields:
+        if field.name == name and not field.filename:
+            return field.value
+    return ""
+
+
+def multipart_files(fields: list[MultipartField], name: str) -> list[MultipartField]:
+    return [field for field in fields if field.name == name and field.filename]
 
 
 def main() -> int:

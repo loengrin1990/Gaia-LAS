@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from gaia.jobs import JOBS, JOBS_LOCK, get_job, submit_analyze_job
+from gaia.jobs import JOBS, JOBS_LOCK, JOB_EXECUTOR, MAX_WORKERS, get_job, local_now, submit_analyze_job
 from gaia.models import AnalysisPackage, JobRecord
 
 
@@ -54,6 +54,13 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(final.status, "done")
         self.assertEqual(final.progress, 100)
         self.assertEqual(final.result["prompt"], "test prompt")
+
+    def test_job_executor_is_bounded(self) -> None:
+        self.assertEqual(JOB_EXECUTOR._max_workers, MAX_WORKERS)
+        self.assertEqual(MAX_WORKERS, 4)
+
+    def test_local_now_is_iso_local_timestamp(self) -> None:
+        self.assertRegex(local_now(), r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 
     def test_failed_job_is_available_by_id(self) -> None:
         with patch("gaia.jobs.create_package", side_effect=RuntimeError("boom")):

@@ -24,7 +24,7 @@ class ConversationError(ValueError):
     pass
 
 
-def utc_now() -> str:
+def local_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
@@ -62,7 +62,7 @@ def list_conversations(project: str) -> list[Conversation]:
 def create_conversation(project: str, title: str = "") -> Conversation:
     if project and project_names() and project not in project_names():
         raise ConversationError(f"Проект `{project}` не найден.")
-    now = utc_now()
+    now = local_now()
     conversation = Conversation(
         id=uuid.uuid4().hex[:12],
         project=project,
@@ -87,7 +87,7 @@ def get_conversation(conversation_id: str) -> Conversation:
 def archive_conversation(conversation_id: str) -> Conversation:
     conversation = get_conversation(conversation_id)
     conversation.status = "archived"
-    conversation.updated_at = utc_now()
+    conversation.updated_at = local_now()
     write_conversation(conversation)
     return conversation
 
@@ -117,7 +117,7 @@ def add_user_turn(
         role="user",
         text=query,
         masked_text=user_mask.masked_text,
-        created_at=utc_now(),
+        created_at=local_now(),
         job_id=package.run_id,
         route=package.route,
         safety_status=user_mask.review.status,
@@ -135,7 +135,7 @@ def add_user_turn(
                 role="assistant",
                 text=answer,
                 masked_text=answer,
-                created_at=utc_now(),
+                created_at=local_now(),
                 job_id=package.run_id,
                 route="local",
                 safety_status=str(local_result.get("status") or ("ok" if local_result.get("ok") else "failed")),
@@ -144,7 +144,7 @@ def add_user_turn(
     conversation.rolling_summary = update_summary(conversation)
     if conversation.title == "Новый диалог" and query:
         conversation.title = query[:80]
-    conversation.updated_at = utc_now()
+    conversation.updated_at = local_now()
     write_conversation(conversation)
     return {
         "conversation": asdict(conversation),

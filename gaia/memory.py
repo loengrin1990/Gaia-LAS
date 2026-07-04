@@ -655,9 +655,12 @@ def read_primary_source_text(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix in {".txt", ".md"}:
         return path.read_text(encoding="utf-8", errors="ignore")
-    if suffix in {".pdf", ".docx", ".xlsx"} and extract_text is not None:
+    if suffix in {".pdf", ".docx", ".xlsx"}:
         try:
-            text, _note = extract_text(path)
+            extracted = extract_text(path)
+            if extracted is None:
+                return ""
+            text, _note = extracted
             return text
         except Exception:
             return ""

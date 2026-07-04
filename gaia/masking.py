@@ -5,20 +5,12 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from .config import SETTINGS
 from .models import MaskFinding, MaskReview
 from .module_assist import review_masking_with_local_llm
 from .policy import detect_possible_pii
-
-
-if SETTINGS is not None and str(SETTINGS.obsidian_work) not in sys.path:
-    sys.path.insert(0, str(SETTINGS.obsidian_work))
-
-try:
-    from privacy_masker import PrivacyMasker  # type: ignore
-except Exception:
-    PrivacyMasker = None  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -97,7 +89,8 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
             markdown=build_review_markdown(label, "пустой текст", {}, [], False, False, ""),
         )
         return MaskResult("", review)
-    if PrivacyMasker is None:
+    privacy_masker = load_privacy_masker()
+    if privacy_masker is None:
         suspected = detect_possible_pii(text)
         reason = "Veil недоступен, а текст похож на содержащий ПД." if suspected else ""
         review = MaskReview(
@@ -114,7 +107,7 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
         return MaskResult(text, review)
 
     address_masked, address_counts, address_findings = apply_gaia_rules(text, Counter(), PRE_BASE_RULES)
-    base_masked, base_counts, base_findings = apply_base_masker(address_masked)
+    base_masked, base_counts, base_findings = apply_base_masker(privacy_masker, address_masked)
     counts = Counter(address_counts)
     counts.update(base_counts)
     masked, gaia_counts, gaia_findings = apply_gaia_rules(base_masked, counts, GAIA_RULES)
@@ -186,8 +179,19 @@ def build_llm_review_markdown(llm_review: dict[str, object]) -> str:
     ])
 
 
-def apply_base_masker(text: str) -> tuple[str, Counter, list[MaskFinding]]:
-    masker = PrivacyMasker()
+def load_privacy_masker() -> Any | None:
+    obsidian_work = getattr(SETTINGS, "obsidian_work", None)
+    if obsidian_work is not None and str(obsidian_work) not in sys.path:
+        sys.path.insert(0, str(obsidian_work))
+    try:
+        from privacy_masker import PrivacyMasker  # type: ignore
+    except Exception:
+        return None
+    return PrivacyMasker
+
+
+def apply_base_masker(privacy_masker: Any, text: str) -> tuple[str, Counter, list[MaskFinding]]:
+    masker = privacy_masker()
     result = masker.apply(text)
     findings: list[MaskFinding] = []
     for category, samples in sorted(result.samples.items()):
