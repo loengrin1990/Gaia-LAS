@@ -37,6 +37,10 @@ Local_Analytics_System/config.json
 `config.json` и затем указать локальные пути. `config.json` не предназначен для
 публикации в git.
 
+В конфиге `config_version = 1` задает текущий контракт настроек. Старые локальные
+`config.json` без этого поля читаются как версия 1; неподдержанная версия
+останавливает запуск с понятной ошибкой.
+
 В конфиге задаются пути Obsidian, сервисной документации, рабочей папки,
 транскрибатора, launchers, endpoint LM Studio, host/port, retention Archive и
 опциональный semantic rerank Lore через локальную LM Studio.
@@ -73,6 +77,11 @@ Local_Analytics_System/config.json
 - Forge - сборка безопасного аналитического пакета.
 - Hearth - локальный fallback через LM Studio.
 - Archive - журналирование запросов и результатов в Obsidian.
+
+Кодовая структура сейчас намеренно плоская: `gaia/orchestrator.py` собирает
+pipeline, `gaia/models.py` держит публичные dataclass-контракты, а модули
+`masking.py`, `memory.py`, `scribe.py`, `projects.py`, `archive.py` и другие
+закрывают доменные роли без дробления на подпакеты.
 
 ## Проверка config
 
@@ -225,6 +234,9 @@ API управления:
 - `POST /api/projects/{name}/archive` - архивировать проект.
 - `GET /api/groups`, `POST /api/groups`, `PATCH /api/groups/{code}`,
   `POST /api/groups/{code}/archive` - управление группами.
+
+Формальный контракт endpoints и единый формат JSON-ошибок описаны в
+`docs/obsidian_gaia/API.md`.
 
 ## UX-9 smoke checklist
 

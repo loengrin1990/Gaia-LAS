@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from typing import Any
 
 
+@dataclass(frozen=True)
+class ApiError:
+    code: str
+    message: str
+    details: dict[str, Any]
+    trace_id: str
+
+
 @dataclass
 class ProjectGroup:
     code: str

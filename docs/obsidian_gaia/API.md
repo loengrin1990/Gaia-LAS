@@ -5,6 +5,30 @@
 HTML UI и JSON API отвечают с `Cache-Control: no-store`, чтобы рабочий
 интерфейс не застревал в старой браузерной версии после перезапуска сервиса.
 
+## Ошибки
+
+Все JSON-ошибки возвращаются в едином контракте:
+
+```json
+{
+  "error": {
+    "code": "job_not_ready",
+    "message": "job is not ready",
+    "details": {},
+    "trace_id": "gaia-1a2b3c4d5e6f"
+  }
+}
+```
+
+- `error.code` - стабильный машинный код для UI и contract-тестов.
+- `error.message` - человекочитаемое описание.
+- `error.details` - структурные детали, например имя неподдерживаемого файла.
+- `error.trace_id` - короткий id конкретного ответа для диагностики.
+
+Базовые коды: `not_found`, `invalid_request`, `unsupported_file_type`,
+`empty_analyze_request`, `job_not_found`, `job_not_ready`,
+`project_registry_error`, `conversation_error`, `scribe_blocked`.
+
 ## `GET /`
 
 Возвращает браузерный интерфейс Focus. В интерфейсе есть выбор проекта, выбор профиля задачи, управление группами/проектами, верхний блок `Итог обработки`, проектная вкладка `Диалог`, верхняя вкладка `Память` для обновления памяти, `reviewPanel`, `promptPreview`, `reviewConfirm`, `copyBtn` и техническая вкладка `Диагностика`.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cgi
 import json
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,7 @@ from .conversations import (
 from .jobs import get_job, job_to_dict, submit_analyze_job
 from .launchers import launch_module
 from .local_llm import check_lm_studio, run_lm_studio
+from .models import ApiError
 from .profiles import profile_payloads
 from .projects import (
     ProjectRegistryError,
@@ -50,6 +52,26 @@ def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 2
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def api_error_payload(code: str, message: str, details: dict[str, Any] | None = None, trace_id: str = "") -> dict[str, Any]:
+    error = ApiError(
+        code=code,
+        message=message,
+        details=details or {},
+        trace_id=trace_id or f"gaia-{uuid.uuid4().hex[:12]}",
+    )
+    return {"error": asdict(error)}
+
+
+def error_response(
+    handler: BaseHTTPRequestHandler,
+    code: str,
+    message: str,
+    status: int,
+    details: dict[str, Any] | None = None,
+) -> None:
+    json_response(handler, api_error_payload(code, message, details), status)
 
 
 def text_response(handler: BaseHTTPRequestHandler, body: str, content_type: str = "text/html; charset=utf-8") -> None:
@@ -94,11 +116,11 @@ class Handler(BaseHTTPRequestHandler):
             job_id = self.path.rsplit("/", 1)[-1]
             job = get_job(job_id)
             if job is None:
-                json_response(self, {"error": "job not found"}, 404)
+                error_response(self, "job_not_found", "job not found", 404)
                 return
             json_response(self, job_to_dict(job))
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
         route = urlparse(self.path).path
@@ -147,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
             response = launch_module(str(payload.get("module", "")))
             json_response(self, response, 200 if response.get("ok") else 400)
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def do_PATCH(self) -> None:
         route = urlparse(self.path).path
@@ -157,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
         if route.startswith("/api/groups/"):
             self.handle_group_action()
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def handle_create_project(self) -> None:
         payload = self.read_json()
@@ -169,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(payload.get("description", "")),
             )
         except ProjectRegistryError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "project_registry_error", str(exc), 400)
             return
         json_response(self, asdict(project), 201)
 
@@ -182,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(payload.get("description", "")),
             )
         except ProjectRegistryError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "project_registry_error", str(exc), 400)
             return
         json_response(self, asdict(group), 201)
 
@@ -205,9 +227,9 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, asdict(update_project(project, payload)))
                 return
         except ProjectRegistryError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "project_registry_error", str(exc), 400)
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def handle_group_action(self) -> None:
         parts = urlparse(self.path).path.split("/")
@@ -222,9 +244,9 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, asdict(update_group(group, payload)))
                 return
         except ProjectRegistryError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "project_registry_error", str(exc), 400)
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def handle_analyze(self) -> None:
         form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={
@@ -245,16 +267,22 @@ class Handler(BaseHTTPRequestHandler):
             content = item.file.read()
             suffix = Path(item.filename).suffix.lower()
             if suffix not in SUPPORTED_EXTENSIONS:
-                json_response(self, {"error": f"Неподдерживаемый тип файла: {item.filename}"}, 400)
+                error_response(
+                    self,
+                    "unsupported_file_type",
+                    f"Неподдерживаемый тип файла: {item.filename}",
+                    400,
+                    {"filename": item.filename},
+                )
                 return
             uploaded.append((item.filename, content))
         if not query.strip() and not uploaded:
-            json_response(self, {"error": "Добавь запрос или файл для анализа."}, 400)
+            error_response(self, "empty_analyze_request", "Добавь запрос или файл для анализа.", 400)
             return
         try:
             job = submit_analyze_job(project, query, uploaded, profile)
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "analyze_failed", str(exc), 500)
             return
         json_response(self, {
             "job_id": job.id,
@@ -272,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 conversations = list_conversations(project)
             except ConversationError as exc:
-                json_response(self, {"error": str(exc)}, 400)
+                error_response(self, "conversation_error", str(exc), 400)
                 return
             json_response(self, {"conversations": [asdict(item) for item in conversations]})
             return
@@ -280,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             conversation = get_conversation(conversation_id)
         except ConversationError as exc:
-            json_response(self, {"error": str(exc)}, 404)
+            error_response(self, "conversation_not_found", str(exc), 404)
             return
         json_response(self, asdict(conversation))
 
@@ -292,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(payload.get("title") or ""),
             )
         except ConversationError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "conversation_error", str(exc), 400)
             return
         json_response(self, asdict(conversation), 201)
 
@@ -304,14 +332,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 conversation = archive_conversation(conversation_id)
             except ConversationError as exc:
-                json_response(self, {"error": str(exc)}, 404)
+                error_response(self, "conversation_not_found", str(exc), 404)
                 return
             json_response(self, asdict(conversation))
             return
         if action == "messages":
             self.handle_conversation_message(conversation_id)
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def handle_conversation_message(self, conversation_id: str) -> None:
         content_type = self.headers.get("Content-Type", "")
@@ -336,7 +364,13 @@ class Handler(BaseHTTPRequestHandler):
                 content = item.file.read()
                 suffix = Path(item.filename).suffix.lower()
                 if suffix not in SUPPORTED_EXTENSIONS:
-                    json_response(self, {"error": f"Неподдерживаемый тип файла: {item.filename}"}, 400)
+                    error_response(
+                        self,
+                        "unsupported_file_type",
+                        f"Неподдерживаемый тип файла: {item.filename}",
+                        400,
+                        {"filename": item.filename},
+                    )
                     return
                 uploaded.append((item.filename, content))
         else:
@@ -347,10 +381,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = add_user_turn(conversation_id, text, uploaded, profile_id=profile, run_local=run_local)
         except ConversationError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "conversation_error", str(exc), 400)
             return
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "conversation_message_failed", str(exc), 500)
             return
         json_response(self, result, 201)
 
@@ -358,15 +392,15 @@ class Handler(BaseHTTPRequestHandler):
         payload = self.read_json()
         package = self.package_from_payload_or_job(payload)
         if package is None:
-            json_response(self, {"error": "job is not ready"}, 409)
+            error_response(self, "job_not_ready", "job is not ready", 409)
             return
         try:
             draft = create_scribe_draft(package)
         except ValueError as exc:
-            json_response(self, {"error": str(exc)}, 409)
+            error_response(self, "scribe_blocked", str(exc), 409)
             return
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "scribe_draft_failed", str(exc), 500)
             return
         json_response(self, asdict(draft), 201)
 
@@ -381,7 +415,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             items = list_scribe_inbox(project, include_preview=params.get("preview", ["false"])[0] == "true")
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "scribe_inbox_error", str(exc), 400)
             return
         json_response(self, {"items": [asdict(item) for item in items]})
 
@@ -405,20 +439,20 @@ class Handler(BaseHTTPRequestHandler):
                 json_response(self, asdict(item), 200)
                 return
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "scribe_inbox_error", str(exc), 400)
             return
-        json_response(self, {"error": "not found"}, 404)
+        error_response(self, "not_found", "not found", 404)
 
     def handle_scribe_plan(self) -> None:
         payload = self.read_json()
         package = self.package_from_payload_or_job(payload)
         if package is None:
-            json_response(self, {"error": "job is not ready"}, 409)
+            error_response(self, "job_not_ready", "job is not ready", 409)
             return
         try:
             plan = create_scribe_plan(package)
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "scribe_plan_failed", str(exc), 500)
             return
         json_response(self, asdict(plan), 200 if plan.status != "blocked" else 409)
 
@@ -427,11 +461,11 @@ class Handler(BaseHTTPRequestHandler):
         job_id = str(payload.get("job_id", ""))
         selected_ids = payload.get("selected_item_ids", [])
         if not isinstance(selected_ids, list):
-            json_response(self, {"error": "selected_item_ids must be a list"}, 400)
+            error_response(self, "invalid_request", "selected_item_ids must be a list", 400)
             return
         package = self.package_from_payload_or_job(payload)
         if package is None:
-            json_response(self, {"error": "job is not ready"}, 409)
+            error_response(self, "job_not_ready", "job is not ready", 409)
             return
         try:
             result = apply_scribe_plan(package, [str(item) for item in selected_ids])
@@ -439,10 +473,10 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(origin, dict) and origin.get("type") == "inbox" and origin.get("relative_path") and result.applied:
                 index_inbox_item(str(package.get("project") or ""), str(origin.get("relative_path") or ""))
         except ValueError as exc:
-            json_response(self, {"error": str(exc)}, 409)
+            error_response(self, "scribe_blocked", str(exc), 409)
             return
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "scribe_apply_failed", str(exc), 500)
             return
         json_response(self, asdict(result), 200)
 
@@ -461,22 +495,22 @@ class Handler(BaseHTTPRequestHandler):
         job_id = str(payload.get("job_id", ""))
         job = get_job(job_id)
         if job is None:
-            json_response(self, {"error": "job not found"}, 404)
+            error_response(self, "job_not_found", "job not found", 404)
             return
         if job.status != "done" or not job.result:
-            json_response(self, {"error": "job is not ready"}, 409)
+            error_response(self, "job_not_ready", "job is not ready", 409)
             return
         selected_ids = payload.get("selected_memory_source_ids", [])
         if not isinstance(selected_ids, list):
-            json_response(self, {"error": "selected_memory_source_ids must be a list"}, 400)
+            error_response(self, "invalid_request", "selected_memory_source_ids must be a list", 400)
             return
         try:
             rebuilt = rebuild_prompt(job.result, selected_ids)
         except ValueError as exc:
-            json_response(self, {"error": str(exc)}, 400)
+            error_response(self, "rebuild_error", str(exc), 400)
             return
         except Exception as exc:
-            json_response(self, {"error": str(exc)}, 500)
+            error_response(self, "rebuild_failed", str(exc), 500)
             return
         json_response(self, rebuilt, 200)
 

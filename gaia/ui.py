@@ -1242,6 +1242,14 @@ INDEX_HTML = r"""
       ];
     }
 
+    function errorMessage(error, fallback) {
+      if (!error) return fallback;
+      if (typeof error === 'string') return error;
+      if (error.message) return error.message;
+      if (error.code) return error.code;
+      return fallback;
+    }
+
     function setHeaderLmState(data) {
       const chip = document.getElementById('lmHeaderChip');
       if (!chip) return;
@@ -1306,7 +1314,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/conversations?project=${encodeURIComponent(project)}`);
       const data = await res.json();
       if (!res.ok) {
-        root.appendChild(emptyCard('Диалоги', data.error || 'Не удалось загрузить диалоги.'));
+        root.appendChild(emptyCard('Диалоги', errorMessage(data.error, 'Не удалось загрузить диалоги.')));
         return;
       }
       conversations = data.conversations || [];
@@ -1385,7 +1393,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        conversationMessage(data.error || 'Не удалось создать диалог.', false);
+        conversationMessage(errorMessage(data.error, 'Не удалось создать диалог.'), false);
         return;
       }
       currentConversation = data;
@@ -1421,7 +1429,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        conversationMessage(data.error || 'Не удалось отправить сообщение.', false);
+        conversationMessage(errorMessage(data.error, 'Не удалось отправить сообщение.'), false);
         setOutput(JSON.stringify(data, null, 2));
         return;
       }
@@ -1436,8 +1444,8 @@ INDEX_HTML = r"""
       await loadConversations();
       if (runLocal) renderConversationLocalSummary(data);
       if (runLocal && data.local_result && !data.local_result.ok) {
-        conversationMessage(data.local_result.error || 'Turn сохранен, но локальный ответ не получен.', false);
-        addDialogCard('error', 'Локальный ответ не получен', data.local_result.error || 'LM Studio не вернула ответ.');
+        conversationMessage(errorMessage(data.local_result.error, 'Turn сохранен, но локальный ответ не получен.'), false);
+        addDialogCard('error', 'Локальный ответ не получен', errorMessage(data.local_result.error, 'LM Studio не вернула ответ.'));
       } else if (runLocal && data.local_result && data.local_result.prompt_compacted) {
         conversationMessage('Turn сохранен. Локальный ответ получен; prompt был сокращен для LM Studio.', true);
         addDialogCard('gaia', 'Безопасные токены', safeTokenExplanation(data.package));
@@ -1453,7 +1461,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/conversations/${currentConversation.id}/archive`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
-        conversationMessage(data.error || 'Не удалось архивировать диалог.', false);
+        conversationMessage(errorMessage(data.error, 'Не удалось архивировать диалог.'), false);
         return;
       }
       currentConversation = null;
@@ -1610,7 +1618,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        managementMessage(data.error || 'Не удалось создать группу.', false);
+        managementMessage(errorMessage(data.error, 'Не удалось создать группу.'), false);
         return;
       }
       managementMessage(`Группа создана: ${data.title}`, true);
@@ -1626,7 +1634,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        managementMessage(data.error || 'Не удалось создать проект.', false);
+        managementMessage(errorMessage(data.error, 'Не удалось создать проект.'), false);
         return;
       }
       managementMessage(`Проект создан: ${data.title}`, true);
@@ -1646,7 +1654,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        managementMessage(data.error || 'Не удалось обновить проект.', false);
+        managementMessage(errorMessage(data.error, 'Не удалось обновить проект.'), false);
         return;
       }
       managementMessage(`Проект обновлен: ${data.title}`, true);
@@ -1665,7 +1673,7 @@ INDEX_HTML = r"""
         const res = await fetch(`/api/projects/${encodeURIComponent(current.name)}/validate`, { method: 'POST' });
         const data = await res.json();
         if (!res.ok) {
-          managementMessage(data.error || 'Не удалось проверить проект.', false);
+          managementMessage(errorMessage(data.error, 'Не удалось проверить проект.'), false);
           return;
         }
         managementMessage(data.ok ? 'Структура проекта в порядке.' : `Найдены проблемы: ${(data.issues || []).join('; ')}`, data.ok);
@@ -1682,7 +1690,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/projects/${encodeURIComponent(current.name)}/repair`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
-        managementMessage(data.error || 'Не удалось починить проект.', false);
+        managementMessage(errorMessage(data.error, 'Не удалось починить проект.'), false);
         return;
       }
       managementMessage(`Структура восстановлена: ${data.title}`, true);
@@ -1794,7 +1802,7 @@ INDEX_HTML = r"""
       const res = await fetch('/api/analyze', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) {
-        renderReadableError(data.error || 'Не удалось создать задачу анализа.', data);
+        renderReadableError(errorMessage(data.error, 'Не удалось создать задачу анализа.'), data);
         return;
       }
       currentJobId = data.job_id;
@@ -1851,7 +1859,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/jobs/${jobId}`);
       const job = await res.json();
       if (!res.ok) {
-        renderReadableError(job.error || 'Не удалось получить статус обработки.', job);
+        renderReadableError(errorMessage(job.error, 'Не удалось получить статус обработки.'), job);
         return;
       }
       document.getElementById('route').textContent = `${job.status} ${job.progress}%`;
@@ -1868,7 +1876,7 @@ INDEX_HTML = r"""
       }
       if (job.status === 'failed') {
         document.getElementById('route').textContent = 'failed';
-        renderReadableError(job.error || job.message || 'Задача завершилась ошибкой.', job);
+        renderReadableError(errorMessage(job.error, job.message || 'Задача завершилась ошибкой.'), job);
         return;
       }
       setOutput(JSON.stringify(job, null, 2));
@@ -2206,8 +2214,8 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/scribe-inbox?project=${encodeURIComponent(project)}`);
       const data = await res.json();
       if (!res.ok) {
-        list.appendChild(emptyCard('Файлы', data.error || 'Не удалось загрузить список файлов.'));
-        preview.textContent = data.error || 'Не удалось загрузить список файлов.';
+        list.appendChild(emptyCard('Файлы', errorMessage(data.error, 'Не удалось загрузить список файлов.')));
+        preview.textContent = errorMessage(data.error, 'Не удалось загрузить список файлов.');
         return;
       }
       scribeInboxItems = data.items || [];
@@ -2265,7 +2273,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/scribe-inbox/preview?project=${encodeURIComponent(project)}&path=${encodeURIComponent(item.relative_path)}`);
       const data = await res.json();
       if (!res.ok) {
-        preview.textContent = data.error || 'Предварительный просмотр недоступен.';
+        preview.textContent = errorMessage(data.error, 'Предварительный просмотр недоступен.');
         return;
       }
       if (data.excel?.normalized_markdown) {
@@ -2305,7 +2313,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        setScribeInboxState(data.error || 'Не удалось разобрать выбранный файл.', false);
+        setScribeInboxState(errorMessage(data.error, 'Не удалось разобрать выбранный файл.'), false);
         setOutput(JSON.stringify(data, null, 2));
         return;
       }
@@ -2327,7 +2335,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        setScribeInboxState(data.error || 'Не удалось исключить файл.', false);
+        setScribeInboxState(errorMessage(data.error, 'Не удалось исключить файл.'), false);
         return;
       }
       currentScribeInboxItem = null;
@@ -2450,7 +2458,7 @@ INDEX_HTML = r"""
         });
         const data = await res.json();
         if (!res.ok) {
-          state.textContent = data.error || 'Не удалось пересобрать prompt.';
+          state.textContent = errorMessage(data.error, 'Не удалось пересобрать prompt.');
           state.className = 'action-note danger';
           button.disabled = false;
           return;
@@ -2518,7 +2526,7 @@ INDEX_HTML = r"""
         ? 'Внешний маршрут не использовался.'
         : 'Внешний маршрут не использовался; локальный ответ не получен.';
       const reason = !ok
-        ? (localResult.error || 'LM Studio не вернула локальный ответ.')
+        ? errorMessage(localResult.error, 'LM Studio не вернула локальный ответ.')
         : (hasUnresolvedPii(packageData) ? blockReason(packageData) : '');
       setProcessingSummary({
         badge: ok ? 'локально' : 'ошибка',
@@ -2733,9 +2741,9 @@ INDEX_HTML = r"""
           addDialogCard('gaia', 'Безопасные токены', safeTokenExplanation(lastPackage));
           setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
         } else if (data.status === 'timeout') {
-          showLocalAnswerTimedOut(data.error);
+          showLocalAnswerTimedOut(errorMessage(data.error, 'LM Studio не завершила ответ вовремя.'));
         } else {
-          showLocalUnavailable(data.error || 'LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.');
+          showLocalUnavailable(errorMessage(data.error, 'LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.'));
         }
       } catch (error) {
         if (localAnswerCanceled) {
@@ -2878,7 +2886,7 @@ INDEX_HTML = r"""
       const data = await res.json();
       if (!res.ok) {
         renderScribePlan(data.status ? data : null);
-        state.textContent = data.error || data.blocked_reason || 'Gaia не смогла предложить записи в память.';
+        state.textContent = errorMessage(data.error, data.blocked_reason || 'Gaia не смогла предложить записи в память.');
         state.className = 'action-note danger';
         setOutput(JSON.stringify(data, null, 2));
         return;
@@ -2911,7 +2919,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        state.textContent = data.error || 'Gaia не смогла записать выбранное в память.';
+        state.textContent = errorMessage(data.error, 'Gaia не смогла записать выбранное в память.');
         state.className = 'action-note danger';
         setOutput(JSON.stringify(data, null, 2));
         return;
@@ -2962,7 +2970,7 @@ INDEX_HTML = r"""
       });
       const data = await res.json();
       if (!res.ok) {
-        renderReadableError(data.error || 'Gaia не смогла сохранить черновик памяти.', data);
+        renderReadableError(errorMessage(data.error, 'Gaia не смогла сохранить черновик памяти.'), data);
         return;
       }
       const notes = document.getElementById('notes');

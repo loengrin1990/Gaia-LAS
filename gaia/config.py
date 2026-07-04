@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Any
 
 
+SUPPORTED_CONFIG_VERSION = 1
+
+
 class ConfigError(RuntimeError):
     pass
 
 
 @dataclass(frozen=True)
 class Settings:
+    config_version: int
     app_dir: Path
     workspace: Path
     vault: Path
@@ -90,6 +94,17 @@ def optional_bool(payload: dict[str, Any], key: str, default: bool) -> bool:
     return value
 
 
+def config_version(payload: dict[str, Any]) -> int:
+    value = payload.get("config_version", SUPPORTED_CONFIG_VERSION)
+    if not isinstance(value, int):
+        raise ConfigError("Config value `config_version` must be an integer.")
+    if value != SUPPORTED_CONFIG_VERSION:
+        raise ConfigError(
+            f"Unsupported config_version {value}; supported version is {SUPPORTED_CONFIG_VERSION}."
+        )
+    return value
+
+
 def expand_value(value: str, tokens: dict[str, str]) -> str:
     result = os.path.expanduser(value)
     for key, token_value in tokens.items():
@@ -106,6 +121,7 @@ def load_settings(validate: bool = True) -> Settings:
     workspace = app_dir.parent
     config_path = default_config_path(app_dir)
     payload = read_config(config_path)
+    version = config_version(payload)
     paths = require_mapping(payload, "paths")
     server = require_mapping(payload, "server")
     endpoints = require_mapping(payload, "endpoints")
@@ -139,6 +155,7 @@ def load_settings(validate: bool = True) -> Settings:
     lm_studio_endpoint = require_str(endpoints, "lm_studio")
 
     settings = Settings(
+        config_version=version,
         app_dir=app_dir,
         workspace=workspace,
         vault=vault,
@@ -226,6 +243,7 @@ def describe_settings(settings: Settings | None = SETTINGS) -> str:
         raise ConfigError("Settings are unavailable.")
     return "\n".join([
         f"config: {settings.config_path}",
+        f"config_version: {settings.config_version}",
         f"url: http://{settings.host}:{settings.port}",
         f"vault: {settings.vault}",
         f"projects: {settings.projects}",
