@@ -1,0 +1,18 @@
+[project]
+name = "gaia-local-analytics"
+version = "0.1.0"
+description = "Local-first analytics shell for Obsidian project memory, PII masking, and LM Studio fallback."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [
+  { name = "Ilia" }
+]
+dependencies = []
+
+[tool.setuptools]
+packages = ["gaia"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

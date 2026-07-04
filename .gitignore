@@ -1,0 +1,32 @@
+# Local runtime state
+config.json
+runs/
+outputs/
+backups/
+tmp/
+
+# Uploaded or generated work artifacts
+*.masked.md
+*.review.md
+*.inspect.ndjson
+*.pptx
+*.docx
+*.xlsx
+*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+

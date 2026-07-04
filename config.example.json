@@ -1,0 +1,41 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "paths": {
+    "vault": "${HOME}/Documents/Obsidian Vault",
+    "projects": "${VAULT}/Проекты",
+    "service_docs": "${HOME}/Documents/Obsidian Gaia",
+    "runs": "${APP_DIR}/runs",
+    "obsidian_work": "${WORKSPACE}/Obsidian_System_Work",
+    "transcriber": "${HOME}/path/to/transcribe",
+    "lm_studio_launcher": "${HOME}/path/to/launch-lm-studio.command",
+    "transcriber_launcher": "${HOME}/path/to/launch-transcriber.command"
+  },
+  "endpoints": {
+    "lm_studio": "http://127.0.0.1:1234/v1/chat/completions"
+  },
+  "retention": {
+    "runs_days": 7,
+    "journals_days": 30,
+    "audit_days": 365,
+    "cleanup_on_startup": false
+  },
+  "lore": {
+    "query_rewrite": false,
+    "query_rewrite_timeout_seconds": 4,
+    "semantic_rerank": false,
+    "rerank_candidates": 24,
+    "rerank_timeout_seconds": 45,
+    "gap_detector": false,
+    "gap_detector_timeout_seconds": 4,
+    "veil_llm_review": false,
+    "veil_llm_review_timeout_seconds": 4,
+    "scribe_candidate_classifier": false,
+    "scribe_classifier_timeout_seconds": 5,
+    "project_health_llm": false,
+    "project_health_timeout_seconds": 5
+  }
+}
+

@@ -1,0 +1,257 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+class ConfigError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Settings:
+    app_dir: Path
+    workspace: Path
+    vault: Path
+    projects: Path
+    service_docs: Path
+    run_journal_dir: Path
+    safety_audit_dir: Path
+    runs_dir: Path
+    uploads_dir: Path
+    obsidian_work: Path
+    transcriber_path: Path
+    lm_studio_launcher: Path
+    transcriber_launcher: Path
+    lm_studio_endpoint: str
+    host: str
+    port: int
+    retention_runs_days: int
+    retention_journals_days: int
+    retention_audit_days: int
+    retention_cleanup_on_startup: bool
+    lore_semantic_rerank: bool
+    lore_rerank_candidates: int
+    lore_rerank_timeout_seconds: int
+    lore_query_rewrite: bool
+    lore_query_rewrite_timeout_seconds: int
+    lore_gap_detector: bool
+    lore_gap_detector_timeout_seconds: int
+    veil_llm_review: bool
+    veil_llm_review_timeout_seconds: int
+    scribe_candidate_classifier: bool
+    scribe_classifier_timeout_seconds: int
+    project_health_llm: bool
+    project_health_timeout_seconds: int
+    config_path: Path
+
+
+def default_config_path(app_dir: Path) -> Path:
+    return Path(os.environ.get("GAIA_CONFIG", app_dir / "config.json")).expanduser()
+
+
+def read_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise ConfigError(f"Config file not found: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Config JSON is invalid at {path}: {exc}") from exc
+
+
+def require_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise ConfigError(f"Config section `{key}` must be an object.")
+    return value
+
+
+def require_str(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"Config value `{key}` must be a non-empty string.")
+    return value
+
+
+def optional_int(payload: dict[str, Any], key: str, default: int) -> int:
+    value = payload.get(key, default)
+    if not isinstance(value, int) or value < 0:
+        raise ConfigError(f"Config value `{key}` must be a non-negative integer.")
+    return value
+
+
+def optional_bool(payload: dict[str, Any], key: str, default: bool) -> bool:
+    value = payload.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"Config value `{key}` must be true or false.")
+    return value
+
+
+def expand_value(value: str, tokens: dict[str, str]) -> str:
+    result = os.path.expanduser(value)
+    for key, token_value in tokens.items():
+        result = result.replace("${" + key + "}", token_value)
+    return os.path.expandvars(result)
+
+
+def expand_path(value: str, tokens: dict[str, str]) -> Path:
+    return Path(expand_value(value, tokens)).expanduser()
+
+
+def load_settings(validate: bool = True) -> Settings:
+    app_dir = Path(__file__).resolve().parents[1]
+    workspace = app_dir.parent
+    config_path = default_config_path(app_dir)
+    payload = read_config(config_path)
+    paths = require_mapping(payload, "paths")
+    server = require_mapping(payload, "server")
+    endpoints = require_mapping(payload, "endpoints")
+    retention = payload.get("retention", {})
+    if not isinstance(retention, dict):
+        raise ConfigError("Config section `retention` must be an object.")
+    lore = payload.get("lore", {})
+    if not isinstance(lore, dict):
+        raise ConfigError("Config section `lore` must be an object.")
+
+    base_tokens = {
+        "HOME": str(Path.home()),
+        "APP_DIR": str(app_dir),
+        "WORKSPACE": str(workspace),
+    }
+    vault = expand_path(require_str(paths, "vault"), base_tokens)
+    tokens = dict(base_tokens)
+    tokens["VAULT"] = str(vault)
+
+    projects = expand_path(require_str(paths, "projects"), tokens)
+    service_docs = expand_path(require_str(paths, "service_docs"), tokens)
+    runs_dir = expand_path(require_str(paths, "runs"), tokens)
+    obsidian_work = expand_path(require_str(paths, "obsidian_work"), tokens)
+    transcriber = expand_path(require_str(paths, "transcriber"), tokens)
+    lm_studio_launcher = expand_path(require_str(paths, "lm_studio_launcher"), tokens)
+    transcriber_launcher = expand_path(require_str(paths, "transcriber_launcher"), tokens)
+    host = require_str(server, "host")
+    port_value = server.get("port")
+    if not isinstance(port_value, int) or not 1 <= port_value <= 65535:
+        raise ConfigError("Config value `server.port` must be an integer from 1 to 65535.")
+    lm_studio_endpoint = require_str(endpoints, "lm_studio")
+
+    settings = Settings(
+        app_dir=app_dir,
+        workspace=workspace,
+        vault=vault,
+        projects=projects,
+        service_docs=service_docs,
+        run_journal_dir=service_docs / "Журнал запросов",
+        safety_audit_dir=service_docs / "Аудит безопасности",
+        runs_dir=runs_dir,
+        uploads_dir=runs_dir / "uploads",
+        obsidian_work=obsidian_work,
+        transcriber_path=transcriber,
+        lm_studio_launcher=lm_studio_launcher,
+        transcriber_launcher=transcriber_launcher,
+        lm_studio_endpoint=lm_studio_endpoint,
+        host=host,
+        port=port_value,
+        retention_runs_days=optional_int(retention, "runs_days", 7),
+        retention_journals_days=optional_int(retention, "journals_days", 30),
+        retention_audit_days=optional_int(retention, "audit_days", 365),
+        retention_cleanup_on_startup=optional_bool(retention, "cleanup_on_startup", False),
+        lore_semantic_rerank=optional_bool(lore, "semantic_rerank", False),
+        lore_rerank_candidates=optional_int(lore, "rerank_candidates", 24),
+        lore_rerank_timeout_seconds=optional_int(lore, "rerank_timeout_seconds", 45),
+        lore_query_rewrite=optional_bool(lore, "query_rewrite", False),
+        lore_query_rewrite_timeout_seconds=optional_int(lore, "query_rewrite_timeout_seconds", 4),
+        lore_gap_detector=optional_bool(lore, "gap_detector", False),
+        lore_gap_detector_timeout_seconds=optional_int(lore, "gap_detector_timeout_seconds", 4),
+        veil_llm_review=optional_bool(lore, "veil_llm_review", False),
+        veil_llm_review_timeout_seconds=optional_int(lore, "veil_llm_review_timeout_seconds", 4),
+        scribe_candidate_classifier=optional_bool(lore, "scribe_candidate_classifier", False),
+        scribe_classifier_timeout_seconds=optional_int(lore, "scribe_classifier_timeout_seconds", 5),
+        project_health_llm=optional_bool(lore, "project_health_llm", False),
+        project_health_timeout_seconds=optional_int(lore, "project_health_timeout_seconds", 5),
+        config_path=config_path,
+    )
+    if validate:
+        validate_settings(settings)
+    return settings
+
+
+def validate_settings(settings: Settings) -> None:
+    if not settings.vault.exists():
+        raise ConfigError(f"Vault path does not exist: {settings.vault}")
+    if not settings.projects.exists():
+        raise ConfigError(f"Projects path does not exist: {settings.projects}")
+    if settings.service_docs.is_relative_to(settings.projects):
+        raise ConfigError("Service docs path must be outside the projects path.")
+    if not settings.obsidian_work.exists():
+        raise ConfigError(f"Obsidian work path does not exist: {settings.obsidian_work}")
+
+
+_SETTINGS_ERROR: ConfigError | None = None
+try:
+    SETTINGS: Settings | None = load_settings(validate=False)
+except ConfigError as exc:
+    SETTINGS = None
+    _SETTINGS_ERROR = exc
+
+
+MEDIA_EXTENSIONS = {
+    ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".flac",
+    ".ogg", ".aac", ".aiff", ".aif", ".mov", ".mkv", ".avi", ".m4v", ".mpg",
+    ".3gp",
+}
+DOCUMENT_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx"}
+SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | MEDIA_EXTENSIONS
+
+
+def ensure_dirs() -> None:
+    if _SETTINGS_ERROR:
+        raise _SETTINGS_ERROR
+    if SETTINGS is None:
+        raise ConfigError("Settings are unavailable.")
+    validate_settings(SETTINGS)
+    SETTINGS.runs_dir.mkdir(parents=True, exist_ok=True)
+    SETTINGS.uploads_dir.mkdir(parents=True, exist_ok=True)
+    SETTINGS.service_docs.mkdir(parents=True, exist_ok=True)
+    (SETTINGS.vault / "Контексты" / "Группы").mkdir(parents=True, exist_ok=True)
+    SETTINGS.run_journal_dir.mkdir(parents=True, exist_ok=True)
+    SETTINGS.safety_audit_dir.mkdir(parents=True, exist_ok=True)
+
+
+def describe_settings(settings: Settings | None = SETTINGS) -> str:
+    if settings is None:
+        raise ConfigError("Settings are unavailable.")
+    return "\n".join([
+        f"config: {settings.config_path}",
+        f"url: http://{settings.host}:{settings.port}",
+        f"vault: {settings.vault}",
+        f"projects: {settings.projects}",
+        f"service_docs: {settings.service_docs}",
+        f"runs: {settings.runs_dir}",
+        f"retention: runs={settings.retention_runs_days}d journals={settings.retention_journals_days}d audit={settings.retention_audit_days}d cleanup_on_startup={settings.retention_cleanup_on_startup}",
+        f"lore: semantic_rerank={settings.lore_semantic_rerank} candidates={settings.lore_rerank_candidates} timeout={settings.lore_rerank_timeout_seconds}s query_rewrite={settings.lore_query_rewrite} gap_detector={settings.lore_gap_detector} veil_llm_review={settings.veil_llm_review} scribe_classifier={settings.scribe_candidate_classifier} project_health_llm={settings.project_health_llm}",
+        f"lm_studio_endpoint: {settings.lm_studio_endpoint}",
+    ])
+
+
+def main() -> int:
+    try:
+        if _SETTINGS_ERROR:
+            raise _SETTINGS_ERROR
+        if SETTINGS is None:
+            raise ConfigError("Settings are unavailable.")
+        validate_settings(SETTINGS)
+        ensure_dirs()
+        print("Gaia config OK")
+        print(describe_settings())
+        return 0
+    except ConfigError as exc:
+        print(f"Gaia config error: {exc}")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
