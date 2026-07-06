@@ -121,7 +121,7 @@ class ScribeTests(unittest.TestCase):
 
         self.assertEqual(plan.status, "ready")
         self.assertTrue(any(item.destination == "20_Decisions" for item in plan.items))
-        self.assertTrue(any(item.destination == "50_Sources" for item in plan.items))
+        self.assertFalse(any(item.destination == "50_Sources" for item in plan.items))
         self.assertTrue(any(item.destination == "exclude" and not item.selected for item in plan.items))
         self.assertIn("Scribe plan", plan.preview)
 
@@ -149,9 +149,405 @@ class ScribeTests(unittest.TestCase):
 
         bodies = "\n".join(item.body for item in plan.items)
         self.assertIn("АПР - {Бэклог}.xlsx", bodies)
-        self.assertIn("Excel preview: Бэклог", bodies)
+        self.assertIn("структурно нормализован Excel", bodies)
+        self.assertNotIn("Excel preview: Бэклог", bodies)
         self.assertNotIn("Паспорт системы", bodies)
         self.assertTrue(all("АПР - {Бэклог}.xlsx" in item.evidence for item in plan.items if item.destination == "50_Sources"))
+
+    def test_dialog_scribe_plan_uses_uploaded_files_when_classifier_is_empty(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [
+            {
+                "name": "meeting_audio.mp3",
+                "kind": "media",
+                "stored_path": "/tmp/meeting_audio.mp3",
+                "extraction_note": "готово: transcript.txt",
+                "masked_text": "Обсуждалась текущая архитектура и планируемая схема интеграции.",
+                "mask_review": {"unresolved_pii": False},
+            }
+        ]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        self.assertEqual(plan.status, "ready")
+        self.assertTrue(any(item.destination == "50_Sources" for item in plan.items))
+        self.assertTrue(any("meeting_audio.mp3" in item.body for item in plan.items))
+        source_items = [item for item in plan.items if item.destination == "50_Sources"]
+        self.assertFalse(any("Обсуждалась текущая архитектура" in item.body for item in source_items))
+        self.assertFalse(any(item.title == "Нет кандидатов" for item in plan.items))
+
+    def test_lore_evidence_excerpt_is_not_written_as_source_summary(self) -> None:
+        package = package_fixture()
+        package["files"] = []
+        package["evidence_plan"] = [
+            {
+                "status": "confirmed",
+                "heading": "АПР - АП_Полное_описание_работы_сервиса_с_ПД",
+                "source_path": "/tmp/source.docx",
+                "excerpt": "# Заголовок " + ("сырой текст " * 80),
+            }
+        ]
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        bodies = "\n".join(item.body for item in plan.items)
+        self.assertNotIn("сырой текст", bodies)
+        self.assertFalse(any(item.destination == "50_Sources" for item in plan.items))
+        self.assertTrue(any(item.destination == "exclude" for item in plan.items))
+
+    def test_generic_process_words_are_excluded_without_domain_pattern(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [
+            {
+                "name": "generic.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/generic.docx",
+                "extraction_note": "текст извлечен",
+                "masked_text": "Источник содержит архитектуру, процесс, систему и отчет без конкретных доменных фактов.",
+                "mask_review": {"unresolved_pii": False},
+            }
+        ]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        fallback = [item for item in plan.items if "общие архитектурные" in item.body]
+        self.assertTrue(fallback)
+        self.assertTrue(all(item.destination == "exclude" and not item.selected for item in fallback))
+
+    def test_ocr_osmi_document_extracts_domain_context(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [
+            {
+                "name": "Полное_описание_работы_сервиса_с_ПД.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/Полное_описание_работы_сервиса_с_ПД.docx",
+                "extraction_note": "текст извлечен из Word",
+                "masked_text": (
+                    "Отправляется POST /recognize. Файл pdf/docx, из него формируется meta.json. "
+                    "Происходит разделение на страницы и сохранение jpg в S3. "
+                    "Обработка каждой страницы Tesseract, извлечение ocr_confidence. "
+                    "Извлечение ПД: GLiNER + regex, координаты на странице, повторный поиск падежных форм ФИО. "
+                    "backend делает GET /pii и получает страницы, координаты и данные ПД. "
+                    "OSMI получает txt с заменой всех ПД на [REDACTED], start_context.txt и jpg с закрытием ПД. "
+                    "Создаются defects.json и defects.xlsx, backend сохраняет дефекты в БД."
+                ),
+                "mask_review": {"unresolved_pii": False},
+            }
+        ]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        domain_items = [item for item in plan.items if item.title == "OCR OSMI ПД"]
+        self.assertEqual(len(domain_items), 1)
+        item = domain_items[0]
+        self.assertTrue(item.selected)
+        self.assertEqual(item.destination, "10_Branches")
+        self.assertLessEqual(len(item.title.split()), 3)
+        self.assertIn("POST /recognize", item.body)
+        self.assertIn("GLiNER + regex", item.body)
+        self.assertIn("defects.json", item.body)
+
+    def test_source_summary_uses_short_memory_title_not_file_slug(self) -> None:
+        package = package_fixture()
+        package["files"] = [{
+            "name": "АПР - Баг-лист и бэклог ФСК Экспертизы 2026-07-02.xlsx",
+            "kind": "xlsx",
+            "stored_path": "/tmp/АПР - Баг-лист и бэклог ФСК Экспертизы 2026-07-02.xlsx",
+            "extraction_note": "структурно нормализован Excel",
+            "masked_text": "Баг-лист и бэклог содержат статусы, критичность, ретест и backlog.",
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Баги бэклог")
+        self.assertIn("50_Sources/АПР - Баги бэклог.md", source.target_path)
+        self.assertIn("АПР - Баг-лист и бэклог ФСК Экспертизы", source.body)
+
+    def test_code_findings_source_summary_gets_contextual_body(self) -> None:
+        package = package_fixture()
+        package["files"] = [{
+            "name": "avtopretenzii_zamechaniya_3.docx",
+            "kind": "docx",
+            "stored_path": "/tmp/avtopretenzii_zamechaniya_3.docx",
+            "extraction_note": "текст извлечен из Word",
+            "masked_text": (
+                "Автопретензии. Реестр замечаний по коду. "
+                "I. Обработка ошибок. Документ может навсегда зависнуть. "
+                "II. Надёжность и потеря данных. Событие из CRM теряется. "
+                "III. Статусы и синхронизация интерфейса. "
+                "Интерфейс сам проставляет статус готов к проверке."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Замечания кода")
+        self.assertIn("50_Sources/АПР - Замечания кода.md", source.target_path)
+        self.assertIn("обработка ошибок", source.body)
+        self.assertIn("потеря данных", source.body)
+        self.assertIn("готов к проверке", source.body)
+
+    def test_hash_named_pdf_gets_contextual_mvp2_role_summary(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [{
+            "name": "418532867_c32bc21dcf96467c9cfeacacdcf811de-060726-1812-756.pdf",
+            "kind": "pdf",
+            "stored_path": "/tmp/418532867_c32bc21dcf96467c9cfeacacdcf811de-060726-1812-756.pdf",
+            "extraction_note": "извлечен текст PDF",
+            "masked_text": (
+                "2. Описание ролевой модели и процесса работы MVP2. "
+                "Перечень ролей: Эксперт, Расчетчик, Администратор системы. "
+                "Матрица ролей включает вход в систему, управление пользователями, права доступа, "
+                "загрузку документов, валидацию результата работы сервиса, направление результата на расчетчика, "
+                "получение заполненной формы компенсации и отправку результата в Техзор."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Роли MVP2")
+        self.assertTrue(source.selected)
+        self.assertIn("50_Sources/UTP - Роли MVP2.md", source.target_path)
+        self.assertIn("Эксперт, Расчетчик и Администратор", source.body)
+        self.assertNotIn("418532867 c32bc21dcf96467c9cfeacac", source.title)
+
+    def test_hash_named_pdf_gets_contextual_mvp2_user_stories_summary(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [{
+            "name": "418532862_b4fba7eb7c3d4bc2b7a3f5ba64486280-060726-1812-754.pdf",
+            "kind": "pdf",
+            "stored_path": "/tmp/418532862_b4fba7eb7c3d4bc2b7a3f5ba64486280-060726-1812-754.pdf",
+            "extraction_note": "извлечен текст PDF",
+            "masked_text": (
+                "1. Описание User Story по MVP2. Документ описывает пользовательские сценарии "
+                "для системы автоматизированной обработки заявок. US-07 Направление результата "
+                "на расчетчика. US-08 Получение и просмотр задачи на расчет. US-09 Заполнение "
+                "формы компенсации. US-10 Валидация и редактирование цен. US-11 Отправка "
+                "заполненной формы Эксперту. US-12 Формирование шаблона соглашения. "
+                "US-13 Выгрузка шаблона соглашения Word/PDF."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Сценарии MVP2")
+        self.assertTrue(source.selected)
+        self.assertIn("50_Sources/UTP - Сценарии MVP2.md", source.target_path)
+        self.assertIn("US-07..US-13", source.body)
+        self.assertIn("TBD", source.body)
+        self.assertNotIn("418532862 b4fba7eb7c3d4bc2b7a3f5ba", source.title)
+
+    def test_hash_named_pdf_gets_contextual_mvp2_data_model_summary(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [{
+            "name": "418532873_66e0cb0268e64d60bc1954da62144b02-060726-1812-760.pdf",
+            "kind": "pdf",
+            "stored_path": "/tmp/418532873_66e0cb0268e64d60bc1954da62144b02-060726-1812-760.pdf",
+            "extraction_note": "извлечен текст PDF",
+            "masked_text": (
+                "4. Описание модели данных MVP2. Модель данных для карточки Заявки. "
+                "Поля: ID заявки, Проект, Объект, Квартира / помещение, Статус заявки, "
+                "Ответственный, Источник CRM / Ручное / Импорт, связанные файлы, результат ИИ, "
+                "статус отправки в Техзор, лог интеграций CRM / AI / Техзор. "
+                "Модель данных для фильтров, сортировки, поиска и таблице заявок."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Модель данных")
+        self.assertTrue(source.selected)
+        self.assertIn("50_Sources/UTP - Модель данных.md", source.target_path)
+        self.assertIn("карточки заявки", source.body)
+        self.assertIn("Техзор", source.body)
+        self.assertNotIn("418532873 66e0cb0268e64d60bc1954da", source.title)
+
+    def test_hash_named_pdf_gets_contextual_mvp2_status_model_summary(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [{
+            "name": "418532871_5902d13e9e8f404f91804b67686d015e-060726-1812-758.pdf",
+            "kind": "pdf",
+            "stored_path": "/tmp/418532871_5902d13e9e8f404f91804b67686d015e-060726-1812-758.pdf",
+            "extraction_note": "извлечен текст PDF",
+            "masked_text": (
+                "3. Статусная модель MVP2\n"
+                "3.1 Статусная модель для MVP2. Статусы Заявки. "
+                "Отправлено в расчет, Расчет в процессе, Расчет завершен, "
+                "Формирование соглашения, Готово к отправке в Техзор, Отправлено в Техзор. "
+                "Статусы негативного сценария: Ошибка расчета цен, Форма неполная, Ошибка формирования соглашения."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Статусная модель")
+        self.assertTrue(source.selected)
+        self.assertIn("50_Sources/UTP - Статусная модель.md", source.target_path)
+        self.assertIn("Отправлено в расчет", source.body)
+        self.assertIn("Негативные сценарии", source.body)
+        self.assertNotIn("418532871 5902d13e9e8f404f91804b67", source.title)
+
+    def test_hash_named_pdf_uses_content_heading_fallback(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [{
+            "name": "999999999_deadbeefdeadbeefdeadbeef.pdf",
+            "kind": "pdf",
+            "stored_path": "/tmp/999999999_deadbeefdeadbeefdeadbeef.pdf",
+            "extraction_note": "извлечен текст PDF",
+            "masked_text": (
+                "5. Интеграционный контур\n"
+                "Документ описывает обмен данными между внутренними системами, очередь событий и обработку ошибок."
+            ),
+            "mask_review": {"unresolved_pii": False},
+        }]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        source = next(item for item in plan.items if item.destination == "50_Sources")
+        self.assertEqual(source.title, "Интеграционный контур")
+        self.assertTrue(source.selected)
+        self.assertIn("50_Sources/UTP - Интеграционный контур.md", source.target_path)
+        self.assertIn("Смысловое имя получено из извлеченного текста", source.body)
+
+    def test_related_launch_sources_are_merged_into_one_source_summary(self) -> None:
+        package = package_fixture()
+        package["project"] = "Unit Test Project"
+        package["files"] = [
+            {
+                "name": "АПР - Определение дальнейших шагов по реализации Автопретензий.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/steps.docx",
+                "extraction_note": "текст извлечен",
+                "masked_text": "Определение дальнейших шагов по реализации Автопретензии: риски, владельцы, сроки.",
+                "mask_review": {"unresolved_pii": False},
+            },
+            {
+                "name": "АПР_Определение дальнейших шагов по реализации Автопретензий-20260616_170334-Запись собрания.txt",
+                "kind": "text",
+                "stored_path": "/tmp/steps-transcript.txt",
+                "extraction_note": "transcript готов",
+                "masked_text": "Встреча про дальнейшие шаги Автопретензии: запуск, список вопросов и статусы.",
+                "mask_review": {"unresolved_pii": False},
+            },
+        ]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        sources = [item for item in plan.items if item.destination == "50_Sources"]
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].title, "Шаги запуска")
+        self.assertEqual(sources[0].operation, "merge")
+        self.assertIn("/tmp/steps.docx", sources[0].body)
+        self.assertIn("/tmp/steps-transcript.txt", sources[0].body)
+
+    def test_dialog_scribe_plan_extracts_deterministic_architecture_signals(self) -> None:
+        package = package_fixture()
+        package["files"] = [
+            {
+                "name": "gdrs_meeting.mp3",
+                "kind": "media",
+                "stored_path": "/tmp/gdrs_meeting.mp3",
+                "extraction_note": "готово: transcript.txt",
+                "masked_text": (
+                    "Обсуждали СКУД, синхронизатор данных, базу данных и Face ID для отчетности. "
+                    "Для разовых пропусков не ясно, как фиксировать подрядчик. "
+                    "Проход по кнопке охраны уходит в бумажный журнал. "
+                    "Нужно выбрать мастер-систему для названий проектов. "
+                    "Старый TelegramBot и битрикс-бот требуют разделения ролей."
+                ),
+                "mask_review": {"unresolved_pii": False},
+            }
+        ]
+        package["evidence_plan"] = []
+
+        with patch("gaia.scribe.classify_scribe_candidates_with_local_llm", return_value=None):
+            plan = create_scribe_plan(package)
+
+        destinations = {item.destination for item in plan.items}
+        self.assertIn("10_Branches", destinations)
+        self.assertIn("30_Open_Questions", destinations)
+        self.assertIn("40_Risks", destinations)
+        self.assertTrue(any("СКУД" in item.body and "Face ID" in item.body for item in plan.items))
+        architecture = next(item for item in plan.items if "СКУД" in item.body and "Face ID" in item.body)
+        self.assertIn("## Суть", architecture.body)
+        self.assertIn("## Контекст", architecture.body)
+        self.assertIn("## Как использовать в Gaia", architecture.body)
+
+    def test_existing_target_is_not_selected_for_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "Проекты"
+            project_dir = projects / "Автопретензии"
+            (project_dir / "Память_Graph" / "50_Sources").mkdir(parents=True)
+            (project_dir / "АПР - Память.md").write_text("# Автопретензии\n", encoding="utf-8")
+            settings = SimpleNamespace(
+                projects=projects,
+                service_docs=root / "Сервис",
+                scribe_candidate_classifier=False,
+                scribe_classifier_timeout_seconds=1,
+            )
+            package = package_fixture()
+            package["files"] = [{
+                "name": "meeting_audio.mp3",
+                "kind": "media",
+                "stored_path": "/tmp/meeting_audio.mp3",
+                "extraction_note": "готово: transcript.txt",
+                "masked_text": "Короткий источник встречи.",
+                "mask_review": {"unresolved_pii": False},
+            }]
+            with patch("gaia.scribe.SETTINGS", settings), patch("gaia.projects.SETTINGS", settings):
+                first = create_scribe_plan(package)
+                source = next(item for item in first.items if item.destination == "50_Sources")
+                (project_dir / source.target_path).write_text("already exists", encoding="utf-8")
+                second = create_scribe_plan(package)
+
+        source = next(item for item in second.items if item.destination == "50_Sources")
+        self.assertFalse(source.selected)
+        self.assertEqual(source.status, "existing")
+        self.assertEqual(source.operation, "skip")
 
     def test_scribe_apply_writes_selected_graph_node_with_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

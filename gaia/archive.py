@@ -62,6 +62,19 @@ def write_run_journal(package: AnalysisPackage) -> None:
         ])
         if package.query_mask_review.unresolved_reason:
             parts.append(f"- Причина: {package.query_mask_review.unresolved_reason}")
+    if package.prompt_mask_review:
+        parts.extend([
+            "",
+            "## Veil: итоговый prompt",
+            "",
+            f"- Статус: {package.prompt_mask_review.status}",
+            f"- Замен: {package.prompt_mask_review.total_replacements}",
+            f"- Категории: {format_counts(package.prompt_mask_review.counts)}",
+            f"- Неподтвержденный риск ПД: {'да' if package.prompt_mask_review.unresolved_pii else 'нет'}",
+            f"- Ручное подтверждение: {'да' if package.prompt_mask_review.manual_confirmation_required else 'нет'}",
+        ])
+        if package.prompt_mask_review.unresolved_reason:
+            parts.append(f"- Причина: {package.prompt_mask_review.unresolved_reason}")
     parts.extend(["", "## Lore: выбранные разделы памяти", ""])
     if package.memory_sources:
         for source in package.memory_sources:
@@ -118,6 +131,12 @@ def write_safety_audit(package: AnalysisPackage) -> None:
         parts.extend([
             f"- Неподтвержденный риск ПД: {'да' if package.query_mask_review.unresolved_pii else 'нет'}",
             f"- Категории: {format_counts(package.query_mask_review.counts)}",
+        ])
+    if package.prompt_mask_review:
+        parts.extend([
+            f"- Итоговый prompt: {package.prompt_mask_review.status}, замен {package.prompt_mask_review.total_replacements}",
+            f"- Prompt категории: {format_counts(package.prompt_mask_review.counts)}",
+            f"- Prompt ручное подтверждение: {'да' if package.prompt_mask_review.manual_confirmation_required else 'нет'}",
         ])
     parts.extend(["", "## Файлы", ""])
     if package.files:

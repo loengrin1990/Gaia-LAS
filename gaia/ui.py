@@ -714,6 +714,19 @@ INDEX_HTML = r"""
     .lore-source input { margin-top: 2px; }
     .lore-source b { display: block; font-size: 13px; }
     .lore-source span { display: block; color: rgba(32,29,24,.74); margin-top: 3px; }
+    .scribe-plan-body {
+      display: block;
+      margin: 8px 0 0;
+      padding: 10px;
+      border: 1px solid rgba(32,29,24,.12);
+      border-radius: 8px;
+      background: rgba(255,250,240,.76);
+      color: var(--ink);
+      font: inherit;
+      line-height: 1.42;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     .local-status {
       margin-top: 10px;
       font-size: 13px;
@@ -1424,6 +1437,7 @@ INDEX_HTML = r"""
       const tokens = [];
       const reviews = [];
       if (data?.query_mask_review) reviews.push(data.query_mask_review);
+      if (data?.prompt_mask_review) reviews.push(data.prompt_mask_review);
       for (const file of data?.files || []) {
         if (file.mask_review) reviews.push(file.mask_review);
       }
@@ -2200,6 +2214,9 @@ INDEX_HTML = r"""
       if (data.local_fallback_required || !data.safe_for_codex_after_confirmation) {
         state.textContent = "локально";
         state.className = "review-state danger";
+      } else if (hasManualConfirmationRisk(data)) {
+        state.textContent = "нужен просмотр";
+        state.className = "review-state";
       } else {
         state.textContent = "нужно подтверждение";
         state.className = "review-state";
@@ -2224,7 +2241,7 @@ INDEX_HTML = r"""
       }
       if (lastPackage && !checkbox.checked && lastPackage.safe_for_codex_after_confirmation && !lastPackage.local_fallback_required) {
         const state = document.getElementById('reviewState');
-        state.textContent = "нужно подтверждение";
+        state.textContent = hasManualConfirmationRisk(lastPackage) ? "нужен просмотр" : "нужно подтверждение";
         state.className = "review-state";
       }
     }
@@ -2255,6 +2272,9 @@ INDEX_HTML = r"""
       if (data.query_mask_review?.unresolved_reason) {
         root.appendChild(maskCard('Причина блокировки', data.query_mask_review.unresolved_reason, 'danger'));
       }
+      if (data.prompt_mask_review?.unresolved_reason) {
+        root.appendChild(maskCard('Итоговый prompt', data.prompt_mask_review.unresolved_reason, 'danger'));
+      }
       for (const file of data.files || []) {
         const review = file.mask_review;
         if (review?.unresolved_reason) {
@@ -2274,6 +2294,11 @@ INDEX_HTML = r"""
         object: 'Запрос',
         review: data.query_mask_review,
         action: veilAction(data.query_mask_review, data)
+      });
+      if (data.prompt_mask_review) rows.push({
+        object: 'Итоговый prompt',
+        review: data.prompt_mask_review,
+        action: veilAction(data.prompt_mask_review, data)
       });
       for (const file of data.files || []) {
         if (!file.mask_review) continue;
@@ -2316,6 +2341,7 @@ INDEX_HTML = r"""
           const td = document.createElement('td');
           td.textContent = value;
           if (value === 'да' || value === 'Требуется локально' || value === 'Нужна ручная проверка') td.className = 'danger';
+          if (value === 'Ручное подтверждение') td.className = 'warn';
           if (value === 'Разрешено') td.className = 'ok';
           tr.appendChild(td);
         }
@@ -2342,8 +2368,19 @@ INDEX_HTML = r"""
 
     function veilAction(review, data) {
       if (review.unresolved_pii) return 'Нужна ручная проверка';
+      if (review.manual_confirmation_required) return 'Ручное подтверждение';
       if (data.local_fallback_required) return 'Требуется локально';
       return 'Разрешено';
+    }
+
+    function hasManualConfirmationRisk(data) {
+      const reviews = [];
+      if (data?.query_mask_review) reviews.push(data.query_mask_review);
+      if (data?.prompt_mask_review) reviews.push(data.prompt_mask_review);
+      for (const file of data?.files || []) {
+        if (file.mask_review) reviews.push(file.mask_review);
+      }
+      return reviews.some((review) => !!review.manual_confirmation_required);
     }
 
     function updateScribeState(data) {
@@ -2652,7 +2689,8 @@ INDEX_HTML = r"""
         title.textContent = item.title || item.category || 'Запись памяти';
         const meta = document.createElement('span');
         meta.textContent = `${item.category}; ${item.operation}; ${item.destination || '-'}; ${item.confidence}; ${item.target_path || '-'}`;
-        const text = document.createElement('span');
+        const text = document.createElement('pre');
+        text.className = 'scribe-plan-body';
         text.textContent = item.body || "";
         const evidence = document.createElement('span');
         evidence.textContent = item.evidence ? `evidence: ${item.evidence}` : 'evidence: -';
@@ -2788,9 +2826,10 @@ INDEX_HTML = r"""
     function renderPackageSummary(data) {
       const blocked = !!data.local_fallback_required || !data.safe_for_codex_after_confirmation;
       const reason = blockReason(data);
+      const manualRisk = hasManualConfirmationRisk(data);
       const next = blocked
         ? (hasUnresolvedPii(data) ? 'Ответить локально или исправить запрос после ручной проверки.' : 'Ответить локально.')
-        : 'Если нужен внешний маршрут, проверить очищенный пакет; можно также ответить локально.';
+        : (manualRisk ? 'Открой подготовленный запрос, проверь очищенный пакет и подтверди отправку.' : 'Если нужен внешний маршрут, проверить очищенный пакет; можно также ответить локально.');
       setProcessingSummary({
         badge: blocked ? 'локально' : 'готов',
         state: blocked ? 'Требуется локальная обработка.' : 'Контекст готов.',
@@ -2800,7 +2839,7 @@ INDEX_HTML = r"""
         reason: blocked ? reason : ''
       });
       setSummaryDetails([
-        blocked ? 'Внешний маршрут заблокирован: контекст нельзя копировать наружу.' : `${externalRouteReadyText()} Сначала проверь запрос и поставь галочку.`,
+        blocked ? 'Внешний маршрут заблокирован: контекст нельзя копировать наружу.' : (manualRisk ? 'Найден тематический риск ПД: проверь очищенный пакет и подтверди, что конкретные ПД не видны.' : `${externalRouteReadyText()} Сначала проверь запрос и поставь галочку.`),
         `Проект: ${data.project || '-'}`,
         `Группа: ${data.group_title || 'без группы'}`,
         `Профиль: ${data.profile_title || data.profile_id || '-'}`,
@@ -2871,6 +2910,7 @@ INDEX_HTML = r"""
     function unresolvedReason(data) {
       const reviews = [];
       if (data.query_mask_review) reviews.push(data.query_mask_review);
+      if (data.prompt_mask_review) reviews.push(data.prompt_mask_review);
       for (const file of data.files || []) {
         if (file.mask_review) reviews.push(file.mask_review);
       }

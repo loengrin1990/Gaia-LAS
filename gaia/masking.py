@@ -10,7 +10,7 @@ from typing import Any
 from .config import SETTINGS
 from .models import MaskFinding, MaskReview
 from .module_assist import review_masking_with_local_llm
-from .policy import detect_possible_pii
+from .policy import detect_concrete_pii, detect_possible_pii
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,7 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
             findings=[],
             suspected_pii=False,
             unresolved_pii=False,
+            manual_confirmation_required=False,
             markdown=build_review_markdown(label, "пустой текст", {}, [], False, False, ""),
         )
         return MaskResult("", review)
@@ -101,6 +102,7 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
             findings=[],
             suspected_pii=suspected,
             unresolved_pii=suspected,
+            manual_confirmation_required=False,
             unresolved_reason=reason,
             markdown=build_review_markdown(label, "невозможно: модуль Veil недоступен", {}, [], suspected, suspected, reason),
         )
@@ -119,17 +121,25 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
         counts.update(strict_counts)
     findings = address_findings + base_findings + gaia_findings + strict_findings
     suspected = detect_possible_pii(text)
+    concrete = detect_concrete_pii(text)
     total = sum(counts.values())
-    unresolved = suspected and total == 0
+    unresolved = concrete and total == 0
+    manual_confirmation_required = suspected and not unresolved
     reason = "Текст похож на содержащий ПД, но Veil не выполнил замен." if unresolved else ""
-    status = "выполнено" if total else "выполнено, ПД по правилам не найдены"
+    if unresolved:
+        status = "требуется ручная проверка"
+    elif manual_confirmation_required and total == 0:
+        status = "выполнено, нужен ручной просмотр"
+    else:
+        status = "выполнено" if total else "выполнено, ПД по правилам не найдены"
     counts_dict = dict(sorted(counts.items()))
     llm_review = veil_llm_review(label, masked, status, counts_dict, suspected, unresolved)
     if llm_review and llm_review.get("unresolved_pii"):
         unresolved = True
+        manual_confirmation_required = False
         reason = llm_review.get("reason") or reason or "Локальная LLM-проверка Veil отметила остаточный риск ПД."
         status = "требуется ручная проверка после LLM review"
-    markdown = build_review_markdown(label, status, counts_dict, findings, suspected, unresolved, reason)
+    markdown = build_review_markdown(label, status, counts_dict, findings, suspected, unresolved, reason, manual_confirmation_required)
     if llm_review:
         markdown += build_llm_review_markdown(llm_review)
     review = MaskReview(
@@ -140,6 +150,7 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
         findings=findings,
         suspected_pii=suspected,
         unresolved_pii=unresolved,
+        manual_confirmation_required=manual_confirmation_required,
         unresolved_reason=reason,
         markdown=markdown,
     )
@@ -234,6 +245,7 @@ def build_review_markdown(
     suspected: bool,
     unresolved: bool,
     reason: str,
+    manual_confirmation_required: bool = False,
 ) -> str:
     parts = [
         f"# Проверка маскирования: {label}",
@@ -243,6 +255,7 @@ def build_review_markdown(
         f"Статус: {status}",
         f"Есть признаки ПД: {'да' if suspected else 'нет'}",
         f"Есть неподтвержденный риск ПД: {'да' if unresolved else 'нет'}",
+        f"Требуется ручное подтверждение очищенного пакета: {'да' if manual_confirmation_required else 'нет'}",
     ]
     if reason:
         parts.append(f"Причина: {reason}")

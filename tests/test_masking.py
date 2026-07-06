@@ -35,12 +35,23 @@ class VeilMaskingTests(unittest.TestCase):
         self.assertIn("[CONTRACT_", result.masked_text)
         self.assertGreaterEqual(result.review.total_replacements, 3)
 
-    def test_unresolved_pii_is_reported_when_detector_sees_risk_without_replacement(self) -> None:
+    def test_topic_pii_requires_manual_confirmation_without_blocking(self) -> None:
         result = mask_with_review("query", "Проверь паспорт клиента, реквизитов в тексте нет.")
 
         self.assertTrue(result.review.suspected_pii)
-        self.assertTrue(result.review.unresolved_pii)
+        self.assertFalse(result.review.unresolved_pii)
+        self.assertTrue(result.review.manual_confirmation_required)
         self.assertEqual(result.review.total_replacements, 0)
+
+    def test_privacy_policy_text_is_topic_risk_not_unresolved_pii(self) -> None:
+        result = mask_with_review(
+            "document",
+            "Политика обработки персональных данных описывает порядок хранения ПД и ручное подтверждение.",
+        )
+
+        self.assertTrue(result.review.suspected_pii)
+        self.assertFalse(result.review.unresolved_pii)
+        self.assertTrue(result.review.manual_confirmation_required)
 
     def test_masks_inn_as_specific_category(self) -> None:
         result = mask_with_review("query", "Проверь ИНН 772345678901 и КПП 770101001.")
@@ -61,20 +72,48 @@ class VeilMaskingTests(unittest.TestCase):
         self.assertNotIn("Иванова", result.masked_text)
         self.assertEqual(result.review.counts.get("PERSON"), 1)
 
-    def test_unresolved_pii_blocks_external_route(self) -> None:
+    def test_topic_pii_uses_manual_confirmation_route(self) -> None:
         with patch("gaia.orchestrator.write_run_journal"):
             package = create_package("Автопретензии", "Проверь паспорт клиента, реквизитов в тексте нет.", [])
 
-        self.assertTrue(package.local_fallback_required)
-        self.assertFalse(package.safe_for_codex_after_confirmation)
+        self.assertFalse(package.local_fallback_required)
+        self.assertTrue(package.safe_for_codex_after_confirmation)
         self.assertTrue(package.query_mask_review)
-        self.assertTrue(package.query_mask_review.unresolved_pii)
-        self.assertIn("Локально", package.route)
+        self.assertFalse(package.query_mask_review.unresolved_pii)
+        self.assertTrue(package.query_mask_review.manual_confirmation_required)
+        self.assertIn("ручного подтверждения", package.route)
+
+    def test_final_prompt_masks_pii_from_lore_memory(self) -> None:
+        memory_selection = type("MemorySelection", (), {
+            "text": "Встречу вел Иванов Иван Иванович, решение принято.",
+            "sources": [],
+            "evidence_plan": [],
+            "total_sections": 1,
+            "group_code": "",
+            "group_title": "",
+            "group_sections": 0,
+        })()
+        with (
+            patch("gaia.orchestrator.write_run_journal"),
+            patch("gaia.orchestrator.select_project_memory", return_value=memory_selection),
+        ):
+            package = create_package("Автопретензии", "Сделай краткое резюме.", [])
+
+        self.assertTrue(package.prompt_mask_review)
+        self.assertEqual(package.prompt_mask_review.counts.get("PERSON"), 1)
+        self.assertIn("[PERSON_", package.prompt)
+        self.assertNotIn("Иванов Иван Иванович", package.prompt)
+        self.assertFalse(package.local_fallback_required)
 
     def test_llm_review_can_only_raise_residual_risk(self) -> None:
+        class FakeMasker:
+            def apply(self, text: str):
+                return type("Result", (), {"text": text, "counts": {}, "samples": {}})()
+
         settings = type("Settings", (), {"veil_llm_review": True, "veil_llm_review_timeout_seconds": 1})()
         with (
             patch("gaia.masking.SETTINGS", settings),
+            patch("gaia.masking.load_privacy_masker", return_value=FakeMasker),
             patch("gaia.masking.review_masking_with_local_llm", return_value={
                 "unresolved_pii": True,
                 "reason": "Похожий на email остаток.",

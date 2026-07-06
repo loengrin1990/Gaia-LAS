@@ -9,7 +9,7 @@ from .masking import mask_with_review
 from .memory import select_project_memory
 from .models import AnalysisPackage, FileArtifact
 from .packaging import build_prompt
-from .policy import detect_possible_pii, initial_policy_notes
+from .policy import detect_concrete_pii, initial_policy_notes
 from .profiles import get_profile
 
 
@@ -38,9 +38,11 @@ def create_package(
     if query_status.startswith("невозможно"):
         local_fallback_required = True
         policy_notes.append("Veil недоступен для текста запроса, поэтому внешний маршрут заблокирован.")
-    elif query_review.unresolved_pii or (detect_possible_pii(query) and query_replacements == 0):
+    elif query_review.unresolved_pii or (detect_concrete_pii(query) and query_replacements == 0):
         local_fallback_required = True
         policy_notes.append(query_review.unresolved_reason or "Запрос похож на содержащий ПД, но замены не выполнены; нужен локальный маршрут или ручная проверка.")
+    elif query_review.manual_confirmation_required:
+        policy_notes.append("Запрос содержит тематический риск ПД; внешний маршрут доступен только после ручного просмотра очищенного пакета.")
 
     for filename, content in uploaded:
         safe_name = safe_filename(filename)
@@ -56,9 +58,11 @@ def create_package(
         if mask_status.startswith("невозможно"):
             local_fallback_required = True
             policy_notes.append(f"Файл {safe_name}: маскирование невозможно, внешний маршрут заблокирован.")
-        elif review.unresolved_pii or (detect_possible_pii(text) and replacements == 0):
+        elif review.unresolved_pii or (detect_concrete_pii(text) and replacements == 0):
             local_fallback_required = True
             policy_notes.append(f"Файл {safe_name}: {review.unresolved_reason or 'возможны ПД без замен; нужна ручная проверка или локальный маршрут.'}")
+        elif review.manual_confirmation_required:
+            policy_notes.append(f"Файл {safe_name}: тематический риск ПД; требуется ручной просмотр очищенного пакета перед внешним анализом.")
         files.append(FileArtifact(
             name=safe_name,
             kind=kind,
@@ -87,8 +91,6 @@ def create_package(
     group_code = memory_selection.group_code if memory_selection else ""
     group_title = memory_selection.group_title if memory_selection else ""
     group_sections = memory_selection.group_sections if memory_selection else 0
-    safe_for_codex = not local_fallback_required
-    route = "Codex/ChatGPT после ручного подтверждения" if safe_for_codex else "Локально через LM Studio или ручная проверка"
     prompt = build_prompt(
         project,
         memory,
@@ -99,6 +101,22 @@ def create_package(
         evidence_plan=evidence_plan,
         group_title=group_title,
     )
+    prompt_mask = mask_with_review("Итоговый prompt после Lore", prompt)
+    prompt = prompt_mask.masked_text
+    prompt_review = prompt_mask.review
+    if prompt_review.status.startswith("невозможно"):
+        local_fallback_required = True
+        policy_notes.append("Финальная проверка prompt недоступна, внешний маршрут заблокирован.")
+    elif prompt_review.unresolved_pii or (detect_concrete_pii(prompt) and prompt_review.total_replacements == 0):
+        local_fallback_required = True
+        policy_notes.append(prompt_review.unresolved_reason or "Итоговый prompt содержит возможные ПД без надежной замены; нужен локальный маршрут.")
+    elif prompt_review.total_replacements:
+        policy_notes.append(f"Итоговый prompt дополнительно очищен после Lore: замен {prompt_review.total_replacements}.")
+    elif prompt_review.manual_confirmation_required:
+        policy_notes.append("Итоговый prompt тематически связан с ПД; требуется ручной просмотр очищенного пакета перед внешним анализом.")
+
+    safe_for_codex = not local_fallback_required
+    route = "Codex/ChatGPT после ручного подтверждения" if safe_for_codex else "Локально через LM Studio или ручная проверка"
     package = AnalysisPackage(
         run_id=run_id,
         project=project,
@@ -123,6 +141,7 @@ def create_package(
         group_code=group_code,
         group_title=group_title,
         group_sections=group_sections,
+        prompt_mask_review=prompt_review,
     )
     try:
         write_run_journal(package)

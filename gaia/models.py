@@ -68,6 +68,7 @@ class MaskReview:
     findings: list[MaskFinding]
     suspected_pii: bool
     unresolved_pii: bool
+    manual_confirmation_required: bool = False
     unresolved_reason: str = ""
     markdown: str = ""
 
@@ -150,6 +151,7 @@ class AnalysisPackage:
     group_code: str = ""
     group_title: str = ""
     group_sections: int = 0
+    prompt_mask_review: MaskReview | None = None
 
 
 @dataclass
@@ -177,6 +179,7 @@ class ScribePlanItem:
     reason: str
     safety_notes: list[str]
     selected: bool = True
+    related_paths: list[str] | None = None
 
 
 @dataclass

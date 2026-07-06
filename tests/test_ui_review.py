@@ -50,6 +50,12 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Предложить записи в память", INDEX_HTML)
         self.assertIn("Записать выбранное в память", INDEX_HTML)
 
+    def test_scribe_plan_body_preserves_semantic_structure(self) -> None:
+        self.assertIn(".scribe-plan-body", INDEX_HTML)
+        self.assertIn("document.createElement('pre')", INDEX_HTML)
+        self.assertIn("text.className = 'scribe-plan-body'", INDEX_HTML)
+        self.assertIn("white-space: pre-wrap", INDEX_HTML)
+
     def test_profile_selection_is_sent_to_analyze(self) -> None:
         self.assertIn("function loadProfiles()", INDEX_HTML)
         self.assertIn("/api/profiles", INDEX_HTML)
@@ -166,8 +172,13 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("function veilReviewTable(rows)", INDEX_HTML)
         self.assertIn("function safeTokens(review)", INDEX_HTML)
         self.assertIn("function veilAction(review, data)", INDEX_HTML)
+        self.assertIn("prompt_mask_review", INDEX_HTML)
+        self.assertIn("Итоговый prompt", INDEX_HTML)
         self.assertIn("Есть неподтвержденный риск ПД", INDEX_HTML)
         self.assertIn("Нужна ручная проверка", INDEX_HTML)
+        self.assertIn("Ручное подтверждение", INDEX_HTML)
+        self.assertIn("function hasManualConfirmationRisk(data)", INDEX_HTML)
+        self.assertIn("нужен просмотр", INDEX_HTML)
         self.assertIn("Требуется локально", INDEX_HTML)
         self.assertIn("Разрешено", INDEX_HTML)
         self.assertIn("finding.token", INDEX_HTML)

@@ -22,6 +22,7 @@ def review_masking_with_local_llm(label: str, masked_text: str, rule_summary: di
         "- Не восстанавливай и не угадывай исходные ПД.",
         "- Не снижай риск, найденный правилами. Можно только отметить дополнительный риск.",
         "- unresolved_pii=true только если в masked_text видны похожие на ПД остатки.",
+        "- Не ставь unresolved_pii=true только из-за слов о политике ПД, персональных данных, паспортах или договорах без конкретных значений.",
         "- categories выбирай только из разрешенного списка.",
         "",
         'Формат: {"unresolved_pii":false,"reason":"","categories":[]}',
@@ -56,6 +57,10 @@ def classify_scribe_candidates_with_local_llm(package: dict[str, Any], timeout: 
         "- Не добавляй факты за пределами prompt.",
         "- Не включай ПД, телефоны, email, адреса, паспортные данные и длинные цитаты.",
         "- Это черновая классификация, не запись в память.",
+        "- Формулируй кандидаты как будущие memory nodes, а не как имена файлов.",
+        "- Название будущего узла должно быть коротким: максимум 3 смысловых слова.",
+        "- Если несколько материалов говорят об одном контексте, предложи один обобщенный кандидат, а не дубли.",
+        "- Source-summary должен хранить provenance и durable context, но не сырой transcript/OCR/table dump.",
         "",
         'Формат: {"decisions":[],"rules":[],"risks":[],"open_questions":[],"technical_facts":[],"exclude":[]}',
         "",
@@ -63,7 +68,7 @@ def classify_scribe_candidates_with_local_llm(package: dict[str, Any], timeout: 
         str(package.get("project") or "-"),
         "",
         "# Safe analytical package excerpt",
-        str(package.get("prompt") or "")[:12000],
+        scribe_classifier_excerpt(package),
     ])
     result = call_lm_studio_with_deadline(
         prompt,
@@ -151,6 +156,91 @@ def normalize_project_diagnostics(payload: dict[str, Any]) -> list[dict[str, str
         if len(diagnostics) >= 8:
             break
     return diagnostics
+
+
+def scribe_classifier_excerpt(package: dict[str, Any], limit: int = 12000) -> str:
+    parts: list[str] = []
+    instruction = str(package.get("masked_query") or package.get("prompt") or "").strip()
+    if instruction:
+        parts.extend(["## Запрос", compact_text(instruction, 2400)])
+    files = package.get("files") or []
+    if isinstance(files, list):
+        per_file = max(1800, limit // max(1, len(files)))
+        for file_info in files:
+            if not isinstance(file_info, dict):
+                continue
+            name = clean_text(str(file_info.get("name") or "Файл"), 120)
+            note = clean_text(str(file_info.get("extraction_note") or ""), 180)
+            text = str(file_info.get("masked_text") or "").strip()
+            if not text:
+                continue
+            heading = f"## Файл: {name}"
+            if note:
+                heading += f"\nИзвлечение: {note}"
+            parts.extend([heading, focused_scribe_file_excerpt(text, per_file)])
+    excerpt = "\n\n".join(parts).strip()
+    if not excerpt:
+        excerpt = str(package.get("prompt") or "").strip()
+    return compact_text(excerpt, limit)
+
+
+def compact_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    notice = "\n[...]\n"
+    available = max(0, limit - len(notice))
+    head = available // 2
+    tail = available - head
+    return f"{text[:head].rstrip()}{notice}{text[-tail:].lstrip()}"
+
+
+def focused_scribe_file_excerpt(text: str, limit: int) -> str:
+    keywords = (
+        "архитект",
+        "скуд",
+        "face id",
+        "синхронизатор",
+        "telegrambot",
+        "telegram",
+        "телеграм",
+        "телеграмм",
+        "бот",
+        "битрикс",
+        "база данных",
+        "бд",
+        "мастер-систем",
+        "отчет",
+        "отчетность",
+        "superset",
+        "планируем",
+        "текущ",
+    )
+    lowered = text.lower()
+    windows: list[str] = []
+    seen: set[tuple[int, int]] = set()
+    window_size = max(700, min(1400, limit // 4))
+    for keyword in keywords:
+        start = 0
+        matches = 0
+        while True:
+            index = lowered.find(keyword, start)
+            if index < 0:
+                break
+            left = max(0, index - window_size // 2)
+            right = min(len(text), index + window_size // 2)
+            key = (left, right)
+            if key not in seen:
+                windows.append(text[left:right].strip())
+                seen.add(key)
+                matches += 1
+            start = index + len(keyword)
+            if matches >= 1 or len("\n[...]\n".join(windows)) >= limit:
+                break
+        if len("\n[...]\n".join(windows)) >= limit:
+            break
+    if windows:
+        return compact_text("\n[...]\n".join(windows), limit)
+    return compact_text(text, limit)
 
 
 def clean_list(raw: Any, limit: int, max_len: int) -> list[str]:
