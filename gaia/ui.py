@@ -4,7 +4,7 @@ INDEX_HTML = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gaia Local Analytics</title>
+  <title>Gaia Local Analytics System</title>
   <style>
     :root {
       --sun: #f2c84b;
@@ -133,7 +133,7 @@ INDEX_HTML = r"""
       box-shadow: 0 8px 20px rgba(32,29,24,.18);
     }
     .app-status-bar {
-      display: flex;
+      display: none;
       flex-wrap: wrap;
       gap: 8px;
       padding: 0 28px 14px;
@@ -144,9 +144,36 @@ INDEX_HTML = r"""
     .screen.active { display: block; }
     .dialog-workspace {
       display: grid;
-      grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
       gap: 18px;
       align-items: start;
+    }
+    .project-dialogue {
+      align-items: stretch;
+    }
+    .dialogue-sidebar,
+    .dialogue-main {
+      height: calc(100vh - 170px);
+      min-height: 0;
+    }
+    .dialogue-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .dialogue-sidebar .conversation-tools {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+    .dialogue-main {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .technical-only {
+      display: none !important;
     }
     .projects-workspace {
       display: grid;
@@ -248,8 +275,10 @@ INDEX_HTML = r"""
     .conversation-list {
       display: grid;
       gap: 7px;
-      max-height: 360px;
+      max-height: none;
       overflow: auto;
+      min-height: 0;
+      flex: 1 1 auto;
     }
     .conversation-row {
       background: white;
@@ -276,7 +305,36 @@ INDEX_HTML = r"""
     .conversation-row b { font-size: 13px; }
     .conversation-row span { color: rgba(32,29,24,.68); font-size: 12px; margin-top: 3px; }
     .conversation-compose textarea {
-      min-height: 92px;
+      min-height: 72px;
+    }
+    .dialogue-composer {
+      border-top: 1px solid rgba(32,29,24,.10);
+      padding-top: 12px;
+      background: rgba(255,255,255,.62);
+      border-radius: 8px;
+    }
+    .dialogue-composer label {
+      margin-top: 8px;
+    }
+    .dialogue-actions {
+      margin-top: 10px;
+    }
+    .dialogue-actions button {
+      min-height: 42px;
+    }
+    .dialogue-status {
+      display: none;
+    }
+    .dialogue-summary {
+      padding: 10px 12px;
+      margin-bottom: 0;
+    }
+    .dialogue-summary .summary-title {
+      margin-bottom: 0;
+    }
+    .dialogue-summary .summary-grid,
+    .dialogue-summary #summaryReason {
+      display: none;
     }
     .message-card {
       border: 1px solid rgba(32,29,24,.14);
@@ -289,6 +347,9 @@ INDEX_HTML = r"""
     }
     .message-card.user { border-left: 4px solid var(--sun-deep); }
     .message-card.assistant { border-left: 4px solid var(--green); }
+    .message-card > div {
+      white-space: pre-wrap;
+    }
     .inbox-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -375,6 +436,10 @@ INDEX_HTML = r"""
       display: grid;
       gap: 10px;
       margin-top: 12px;
+      min-height: 0;
+      flex: 1 1 auto;
+      overflow: auto;
+      padding-right: 2px;
     }
     .dialog-card {
       border: 1px solid rgba(32,29,24,.14);
@@ -412,6 +477,59 @@ INDEX_HTML = r"""
       margin: 6px 0 0;
       padding-left: 18px;
     }
+    .structured-answer {
+      display: grid;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .structured-section {
+      border-top: 1px solid rgba(32,29,24,.10);
+      padding-top: 8px;
+    }
+    .structured-section:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .structured-section h4 {
+      margin: 0 0 5px;
+      font-size: 13px;
+    }
+    .structured-section p {
+      margin: 0;
+      white-space: normal;
+    }
+    .structured-risk-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .structured-risk {
+      border: 1px solid rgba(32,29,24,.12);
+      border-radius: 8px;
+      background: #fffdf7;
+      padding: 9px;
+    }
+    .structured-risk-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+      font-weight: 800;
+    }
+    .risk-level {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 11px;
+      line-height: 1.2;
+      background: #eee8d8;
+    }
+    .risk-level.high { background: #ffe1d6; color: #8a2418; }
+    .risk-level.medium { background: #fff0b8; color: #765200; }
+    .risk-level.low { background: #daf3df; color: #1d6b3c; }
     .dialog-actions {
       display: flex;
       flex-wrap: wrap;
@@ -784,6 +902,11 @@ INDEX_HTML = r"""
       main { padding: 12px; }
       .dialog-workspace,
       .projects-workspace { grid-template-columns: 1fr; }
+      .dialogue-sidebar,
+      .dialogue-main {
+        height: auto;
+        min-height: 0;
+      }
       .inspector-panel { position: static; max-height: none; }
       body.inspector-collapsed .inspector-panel { min-height: 64px; }
       header { padding: 16px 12px 10px; align-items: flex-start; flex-direction: column; }
@@ -807,115 +930,102 @@ INDEX_HTML = r"""
 <body>
   <header>
     <div>
-      <h1>Gaia Local Analytics</h1>
-      <div class="subtitle">локальная рабочая среда: диалог, память, проверка данных и сбор контекста</div>
+      <h1>Gaia Local Analytics System</h1>
+      <div class="subtitle">рабочий диалог по проекту с проверкой данных и управляемой памятью</div>
     </div>
     <div class="header-actions">
-      <span class="chip status-chip" role="status" title="Статус локального режима">Локально</span>
-      <span class="chip status-chip" id="uiBuildChip" role="status" title="Версия интерфейса Gaia">Gaia UI: 2026-07-04</span>
-      <span class="chip status-chip" id="lmHeaderChip" role="status" title="Статус LM Studio">LM Studio: проверяется</span>
-      <span class="chip status-chip" id="veilHeaderChip" role="status" title="Статус проверки данных Veil">Veil: проверка готова</span>
-      <button class="secondary" onclick="launchModule('lm')">LM Studio</button>
-      <button class="secondary" onclick="launchModule('transcriber')">Transcriber</button>
+      <span class="chip status-chip warn" id="workspaceHeaderChip" role="status" title="Работа идет на этом компьютере. Ответ: проверяется. Данные: проверка готова.">Проверяем готовность</span>
     </div>
   </header>
   <nav class="top-nav" aria-label="Основная навигация">
     <button class="nav-button active" id="nav-dialog" type="button" onclick="showScreen('dialog')">Диалог</button>
     <button class="nav-button" id="nav-scribe" type="button" onclick="showScreen('scribe')">Память</button>
     <button class="nav-button" id="nav-projects" type="button" onclick="showScreen('projects')">Проекты</button>
-    <button class="nav-button" id="nav-inspector" type="button" onclick="showScreen('inspector')">Диагностика</button>
+    <button class="nav-button" id="nav-inspector" type="button" onclick="showScreen('inspector')">Проверка</button>
   </nav>
   <div class="app-status-bar" aria-label="Состояние Gaia">
-    <span class="chip status-chip" role="status" title="Индикатор слоя Lore, не кнопка">Lore: память проекта</span>
-    <span class="chip status-chip" role="status" title="Индикатор слоя Veil, не кнопка">Veil: проверка данных</span>
-    <span class="chip status-chip" role="status" title="Индикатор готовности контекста, не кнопка">Контекст для ответа</span>
-    <span class="chip status-chip" role="status" title="Индикатор слоя Scribe, не кнопка">Scribe: обновление памяти</span>
+    <span class="chip status-chip" role="status" title="Память проекта используется для ответа">Память проекта</span>
+    <span class="chip status-chip" role="status" title="Чувствительные данные проверяются перед маршрутом ответа">Проверка данных</span>
+    <span class="chip status-chip" role="status" title="Ответ строится по выбранному контексту">Контекст ответа</span>
+    <span class="chip status-chip" role="status" title="Запись в память доступна только после проверки">Запись в память</span>
   </div>
   <main>
     <div id="screen-dialog" class="screen active">
-      <div class="dialog-workspace">
-        <section class="context-panel">
+      <div class="dialog-workspace project-dialogue">
+        <section class="context-panel dialogue-sidebar">
           <div class="panel-head">
             <div>
-              <h2>Новая задача</h2>
-              <p>Выбери память, профиль и материалы для следующего хода.</p>
+              <h2>Рабочее пространство</h2>
+              <p>Выбери проект и разговор. Ответы будут строиться по памяти выбранного проекта.</p>
             </div>
           </div>
-          <label for="project">Пространство памяти</label>
+          <label for="project">Проект</label>
           <select id="project"></select>
           <div id="projectMeta" class="field-hint"></div>
 
-          <label for="profile">Профиль задачи</label>
+          <label for="profile">Тип задачи</label>
           <select id="profile"></select>
           <div id="profileDescription" class="field-hint"></div>
 
-          <label for="query">Запрос</label>
-          <textarea id="query" placeholder="Опиши задачу. Если есть персональные данные, Gaia сначала проверит и замаскирует их."></textarea>
-
-          <label for="files">Файлы</label>
-          <input id="files" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
-          <div id="analysisWarning" class="inline-warning" hidden></div>
-
-          <div class="row">
-            <button onclick="analyze()">Собрать контекст</button>
-            <button class="local" id="localBtn" onclick="localAnswer()" disabled>Ответить локально</button>
-            <button class="secondary" id="cancelLocalBtn" onclick="cancelLocalAnswer()" disabled>Остановить ответ</button>
-            <button class="secondary" id="scribeBtn" onclick="createScribePlan()" disabled>Предложить записи в память</button>
-            <button class="secondary" id="copyBtn" onclick="copyPrompt()" disabled>Скопировать запрос</button>
+          <div class="conversation-tools">
+            <div class="row">
+              <button type="button" onclick="createConversation()">Новый разговор</button>
+              <button class="secondary" type="button" onclick="loadConversations()">Обновить</button>
+            </div>
+            <div id="conversationList" class="conversation-list"></div>
           </div>
-          <div id="localStatus" class="local-status">LM Studio: не проверялась.</div>
+
+          <div id="localStatus" class="local-status">Ответ: готовность не проверялась.</div>
           <div id="scribeState" class="action-note danger" hidden></div>
         </section>
-        <section class="dialog-panel">
+        <section class="dialog-panel dialogue-main">
           <div class="panel-head">
             <div>
-              <h2>Диалог</h2>
-              <p>Основной рабочий слой для взаимодействия с локальной моделью.</p>
+              <h2>Проектный диалог</h2>
+              <p>Задавай вопросы, прикладывай материалы и сохраняй устойчивые выводы в память после проверки.</p>
             </div>
           </div>
-          <div class="status">
-            <div class="metric"><b>Путь ответа</b><span id="route">-</span></div>
-            <div class="metric"><b>Профиль</b><span id="profileState">-</span></div>
-            <div class="metric"><b>Память</b><span id="memory">-</span></div>
-            <div class="metric"><b>Проверка данных</b><span id="veil">-</span></div>
-            <div class="metric"><b>Журнал</b><span id="journal">-</span></div>
+          <div class="status dialogue-status" aria-label="Состояние ответа">
+            <div class="metric"><b>Ответ</b><span id="route">-</span></div>
+            <div class="metric"><b>Задача</b><span id="profileState">-</span></div>
+            <div class="metric"><b>Материалы</b><span id="memory">-</span></div>
+            <div class="metric"><b>Данные</b><span id="veil">-</span></div>
+            <div class="metric technical-only"><b>Журнал</b><span id="journal">-</span></div>
           </div>
-          <div id="processingSummary" class="summary-panel">
+          <div id="processingSummary" class="summary-panel dialogue-summary">
             <div class="summary-title">
-              <b>Итог обработки</b>
+              <b>Состояние работы</b>
               <span id="summaryBadge" class="review-state">готов к работе</span>
             </div>
             <div class="summary-grid">
               <div class="summary-item"><b>Состояние</b><span id="summaryState">Готов к работе.</span></div>
-              <div class="summary-item"><b>Проект и профиль</b><span id="summaryContext">-</span></div>
-              <div class="summary-item"><b>Внешний маршрут</b><span id="summaryExternal">-</span></div>
+              <div class="summary-item"><b>Контекст</b><span id="summaryContext">-</span></div>
+              <div class="summary-item"><b>Безопасность</b><span id="summaryExternal">-</span></div>
               <div class="summary-item"><b>Что делать дальше</b><span id="summaryNext">Заполни запрос или приложи файл.</span></div>
             </div>
             <div id="summaryReason" class="readable-alert" hidden></div>
           </div>
-          <div class="conversation-shell">
-            <div>
-              <div class="row">
-                <button class="secondary" type="button" onclick="createConversation()">Новый диалог</button>
-                <button class="secondary" type="button" onclick="loadConversations()">Обновить</button>
-              </div>
-              <div id="conversationList" class="conversation-list"></div>
-            </div>
-            <div class="conversation-compose">
-              <textarea id="dialogMessage" placeholder="Продолжить диалог по выбранному проекту..."></textarea>
-              <div class="row">
-                <button type="button" onclick="sendConversationMessage(false)">Отправить</button>
-                <button class="local" type="button" onclick="sendConversationMessage(true)">Отправить и ответить локально</button>
-                <button class="secondary" type="button" onclick="archiveCurrentConversation()">Архивировать</button>
-              </div>
-              <div id="conversationState" class="action-note"></div>
-            </div>
-          </div>
           <div id="dialogTimeline" class="dialog-timeline">
             <div class="dialog-card gaia">
               <b>Gaia готова</b>
-              <p>Выбери проект, задай вопрос или приложи файл. Технические детали останутся в Диагностике.</p>
+              <p>Выбери проект, задай вопрос или приложи файл. Подробности проверки останутся в разделе Проверка.</p>
             </div>
+          </div>
+          <div class="conversation-compose dialogue-composer">
+            <label for="query">Сообщение</label>
+            <textarea id="query" placeholder="Напиши вопрос или задачу по проекту. Если в тексте есть чувствительные данные, Gaia проверит их перед ответом."></textarea>
+            <label for="files">Материалы</label>
+            <input id="files" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
+            <div id="analysisWarning" class="inline-warning" hidden></div>
+            <div class="row dialogue-actions">
+              <button class="local" type="button" onclick="sendConversationMessage(true)">Получить ответ</button>
+              <button class="secondary" type="button" onclick="analyze()">Подготовить материалы</button>
+              <button class="secondary" id="cancelLocalBtn" onclick="cancelLocalAnswer()" disabled>Остановить</button>
+              <button class="secondary" id="scribeBtn" onclick="createScribePlan()" disabled>Сохранить выводы в память</button>
+              <button class="secondary technical-only" id="localBtn" onclick="localAnswer()" disabled>Ответить по подготовленному запросу</button>
+              <button class="secondary technical-only" id="copyBtn" onclick="copyPrompt()" disabled>Скопировать запрос</button>
+            </div>
+            <div id="conversationState" class="action-note"></div>
           </div>
         </section>
       </div>
@@ -982,7 +1092,7 @@ INDEX_HTML = r"""
       <div class="scribe-screen">
         <div class="panel-head">
           <div>
-            <h2>Scribe: обновление памяти</h2>
+            <h2>Обновление памяти</h2>
             <p>Новые файлы выбранного проекта превращаются в предложения. Память меняется только после твоего подтверждения.</p>
           </div>
           <button class="secondary" type="button" onclick="showScreen('dialog')">Назад в Диалог</button>
@@ -1035,10 +1145,10 @@ INDEX_HTML = r"""
       <div class="inspector-body">
       <div class="tabs" role="tablist" aria-label="Результат анализа">
         <button class="tab-button active" id="tab-summary" type="button" onclick="showTab('summary')" role="tab">Итог</button>
-        <button class="tab-button" id="tab-security" type="button" onclick="showTab('security')" role="tab">Veil: проверка данных</button>
-        <button class="tab-button" id="tab-lore" type="button" onclick="showTab('lore')" role="tab">Lore: найденная память</button>
-        <button class="tab-button" id="tab-scribe" type="button" onclick="showScreen('scribe')" role="tab">Scribe: память</button>
-        <button class="tab-button" id="tab-prompt" type="button" onclick="showTab('prompt')" role="tab">Запрос для модели</button>
+        <button class="tab-button" id="tab-security" type="button" onclick="showTab('security')" role="tab">Проверка данных</button>
+        <button class="tab-button" id="tab-lore" type="button" onclick="showTab('lore')" role="tab">Найденная память</button>
+        <button class="tab-button" id="tab-scribe" type="button" onclick="showScreen('scribe')" role="tab">Запись в память</button>
+        <button class="tab-button" id="tab-prompt" type="button" onclick="showTab('prompt')" role="tab">Подготовленный запрос</button>
         <button class="tab-button" id="tab-json" type="button" onclick="showTab('json')" role="tab">Технические данные</button>
       </div>
       <div id="panel-summary" class="tab-panel">
@@ -1154,6 +1264,8 @@ INDEX_HTML = r"""
           list.appendChild(item);
         }
         card.appendChild(list);
+      } else if (isStructuredAnswer(content)) {
+        renderStructuredAnswer(card, content);
       } else {
         const paragraph = document.createElement('p');
         paragraph.textContent = content || "";
@@ -1175,6 +1287,99 @@ INDEX_HTML = r"""
       root.appendChild(card);
       root.scrollTop = root.scrollHeight;
       return card;
+    }
+
+    function isStructuredAnswer(value) {
+      return !!value && typeof value === 'object' && !Array.isArray(value) && (
+        value.summary ||
+        (value.key_observations || []).length ||
+        (value.risks || []).length ||
+        (value.open_questions || []).length ||
+        (value.next_steps || []).length
+      );
+    }
+
+    function renderStructuredAnswer(parent, answer) {
+      const root = document.createElement('div');
+      root.className = 'structured-answer';
+      if (answer.summary) {
+        addStructuredTextSection(root, 'Краткий вывод', answer.summary);
+      }
+      addStructuredListSection(root, 'Ключевые наблюдения', answer.key_observations);
+      addStructuredRisksSection(root, answer.risks);
+      addStructuredListSection(root, 'Открытые вопросы', answer.open_questions);
+      addStructuredListSection(root, 'Следующие шаги', answer.next_steps);
+      parent.appendChild(root);
+    }
+
+    function addStructuredTextSection(root, title, text) {
+      const section = structuredSection(title);
+      const paragraph = document.createElement('p');
+      paragraph.textContent = text || "";
+      section.appendChild(paragraph);
+      root.appendChild(section);
+    }
+
+    function addStructuredListSection(root, title, items) {
+      if (!items || !items.length) return;
+      const section = structuredSection(title);
+      const list = document.createElement('ul');
+      for (const line of items) {
+        const item = document.createElement('li');
+        item.textContent = line;
+        list.appendChild(item);
+      }
+      section.appendChild(list);
+      root.appendChild(section);
+    }
+
+    function addStructuredRisksSection(root, risks) {
+      if (!risks || !risks.length) return;
+      const section = structuredSection('Риски');
+      const list = document.createElement('ul');
+      list.className = 'structured-risk-list';
+      for (const risk of risks) {
+        const item = document.createElement('li');
+        item.className = 'structured-risk';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'structured-risk-title';
+        const title = document.createElement('span');
+        title.textContent = risk.title || 'Риск';
+        const level = document.createElement('span');
+        level.className = `risk-level ${risk.level || 'medium'}`;
+        level.textContent = riskLevelLabel(risk.level);
+        titleRow.appendChild(title);
+        titleRow.appendChild(level);
+        item.appendChild(titleRow);
+        if (risk.reason) {
+          const reason = document.createElement('p');
+          reason.textContent = risk.reason;
+          item.appendChild(reason);
+        }
+        if (risk.mitigation) {
+          const mitigation = document.createElement('p');
+          mitigation.textContent = `Следующий шаг: ${risk.mitigation}`;
+          item.appendChild(mitigation);
+        }
+        list.appendChild(item);
+      }
+      section.appendChild(list);
+      root.appendChild(section);
+    }
+
+    function structuredSection(title) {
+      const section = document.createElement('section');
+      section.className = 'structured-section';
+      const heading = document.createElement('h4');
+      heading.textContent = title;
+      section.appendChild(heading);
+      return section;
+    }
+
+    function riskLevelLabel(level) {
+      if (level === 'high') return 'высокий';
+      if (level === 'low') return 'низкий';
+      return 'средний';
     }
 
     function showInspectorTab(name) {
@@ -1201,9 +1406,9 @@ INDEX_HTML = r"""
 
     function loreCoverageNextStep(data) {
       if ((data.memory_sources || []).length) {
-        return 'Выбранные разделы доступны во вкладке Lore.';
+        return 'Выбранные разделы доступны во вкладке найденной памяти.';
       }
-      return 'Уточни запрос терминами проекта или открой Lore, чтобы вручную выбрать подходящие разделы.';
+      return 'Уточни запрос терминами проекта или открой проверку, чтобы вручную выбрать подходящие разделы.';
     }
 
     function externalRouteReadyText() {
@@ -1212,7 +1417,7 @@ INDEX_HTML = r"""
 
     function safeTokenExplanation(data) {
       const examples = safeTokenExamples(data).join(', ');
-      return `Безопасные токены вида ${examples} заменяют скрытые персональные данные. Исходные значения остаются локально и не показываются в очищенном пакете.`;
+      return `Защитные метки вида ${examples} заменяют скрытые персональные данные. Исходные значения остаются на этом компьютере и не показываются в очищенных материалах.`;
     }
 
     function safeTokenExamples(data) {
@@ -1250,32 +1455,62 @@ INDEX_HTML = r"""
       return fallback;
     }
 
-    function setHeaderLmState(data) {
-      const chip = document.getElementById('lmHeaderChip');
+    const headerReadiness = {
+      answer: 'checking',
+      data: 'ready'
+    };
+
+    function refreshWorkspaceHeader() {
+      const chip = document.getElementById('workspaceHeaderChip');
       if (!chip) return;
-      if (data.available) {
-        const model = (data.models || [])[0];
-        chip.textContent = model ? `LM Studio: ${model}` : 'LM Studio: доступна';
-        chip.className = 'chip status-chip ok';
-      } else if (data.status === 'timeout') {
-        chip.textContent = 'LM Studio: занята';
+      const answerText = {
+        checking: 'Ответ: проверяется',
+        available: 'Ответ: доступен',
+        busy: 'Ответ: занят',
+        unavailable: 'Ответ: недоступен'
+      }[headerReadiness.answer] || 'Ответ: проверяется';
+      const dataText = {
+        ready: 'Данные: проверка готова',
+        verified: 'Данные: проверены',
+        localOnly: 'Данные: только локально',
+        needsReview: 'Данные: нужна проверка'
+      }[headerReadiness.data] || 'Данные: проверка готова';
+      chip.title = `Работа идет на этом компьютере. ${answerText}. ${dataText}.`;
+      if (headerReadiness.answer === 'unavailable' || headerReadiness.data === 'needsReview') {
+        chip.textContent = 'Нужна проверка';
+        chip.className = 'chip status-chip danger';
+      } else if (
+        headerReadiness.answer === 'checking' ||
+        headerReadiness.answer === 'busy' ||
+        headerReadiness.data === 'localOnly'
+      ) {
+        chip.textContent = 'Проверяем готовность';
         chip.className = 'chip status-chip warn';
       } else {
-        chip.textContent = 'LM Studio: недоступна';
-        chip.className = 'chip status-chip danger';
+        chip.textContent = 'Готово к работе';
+        chip.className = 'chip status-chip ok';
       }
     }
 
-    function setHeaderVeilState(data) {
-      const chip = document.getElementById('veilHeaderChip');
-      if (!chip || !data) return;
-      if (hasUnresolvedPii(data)) {
-        chip.textContent = 'Veil: нужна проверка';
-        chip.className = 'chip status-chip danger';
+    function setHeaderLmState(data) {
+      if (data.available) {
+        headerReadiness.answer = 'available';
+      } else if (data.status === 'timeout') {
+        headerReadiness.answer = 'busy';
       } else {
-        chip.textContent = data.local_fallback_required ? 'Veil: только локально' : 'Veil: проверено';
-        chip.className = data.local_fallback_required ? 'chip status-chip warn' : 'chip status-chip ok';
+        headerReadiness.answer = 'unavailable';
       }
+      refreshWorkspaceHeader();
+    }
+
+    function setHeaderVeilState(data) {
+      if (!data) return;
+      if (hasUnresolvedPii(data)) {
+        headerReadiness.data = 'needsReview';
+      } else {
+        headerReadiness.data = data.local_fallback_required ? 'localOnly' : 'verified';
+      }
+      refreshWorkspaceHeader();
     }
 
     async function loadProjects() {
@@ -1314,7 +1549,7 @@ INDEX_HTML = r"""
       const res = await fetch(`/api/conversations?project=${encodeURIComponent(project)}`);
       const data = await res.json();
       if (!res.ok) {
-        root.appendChild(emptyCard('Диалоги', errorMessage(data.error, 'Не удалось загрузить диалоги.')));
+        root.appendChild(emptyCard('Разговоры', errorMessage(data.error, 'Не удалось загрузить разговоры.')));
         return;
       }
       conversations = data.conversations || [];
@@ -1332,7 +1567,7 @@ INDEX_HTML = r"""
       if (!root) return;
       root.innerHTML = "";
       if (!conversations.length) {
-        root.appendChild(emptyCard('Диалоги', 'Истории для проекта пока нет.'));
+        root.appendChild(emptyCard('Разговоры', 'Истории для проекта пока нет.'));
         return;
       }
       for (const conversation of conversations) {
@@ -1340,7 +1575,7 @@ INDEX_HTML = r"""
         button.type = 'button';
         button.className = `conversation-row ${currentConversation?.id === conversation.id ? 'active' : ''}`.trim();
         const title = document.createElement('b');
-        title.textContent = conversation.title || 'Диалог';
+        title.textContent = conversation.title || 'Разговор';
         const meta = document.createElement('span');
         meta.textContent = `${(conversation.messages || []).length} сообщений; ${conversation.updated_at || '-'}`;
         button.appendChild(title);
@@ -1357,12 +1592,12 @@ INDEX_HTML = r"""
     function renderCurrentConversation() {
       resetDialogTimeline();
       if (!currentConversation) {
-        addDialogCard('gaia', 'Диалог проекта', 'Создай новый диалог или подготовь контекст разовым запросом.');
+        addDialogCard('gaia', 'Разговор проекта', 'Создай новый разговор или подготовь материалы для ответа.');
         return;
       }
       const messages = currentConversation.messages || [];
       if (!messages.length) {
-        addDialogCard('gaia', currentConversation.title || 'Новый диалог', 'История пуста. Напиши первое сообщение ниже.');
+        addDialogCard('gaia', currentConversation.title || 'Новый разговор', 'История пуста. Напиши первое сообщение ниже.');
         return;
       }
       for (const message of messages) {
@@ -1377,7 +1612,11 @@ INDEX_HTML = r"""
       const head = document.createElement('b');
       head.textContent = `${message.role || 'message'} · ${message.created_at || ''}`;
       const body = document.createElement('div');
-      body.textContent = message.masked_text || message.text || "";
+      if (message.role === 'assistant' && isStructuredAnswer(message.structured_answer)) {
+        renderStructuredAnswer(body, message.structured_answer);
+      } else {
+        body.textContent = message.masked_text || message.text || "";
+      }
       card.appendChild(head);
       card.appendChild(body);
       root.appendChild(card);
@@ -1398,34 +1637,34 @@ INDEX_HTML = r"""
       }
       currentConversation = data;
       await loadConversations();
-      conversationMessage('Новый диалог создан.', true);
+        conversationMessage('Новый разговор создан.', true);
     }
 
     async function sendConversationMessage(runLocal) {
       if (!currentConversation) {
-        conversationMessage('Диалог не выбран. Gaia создаёт новый диалог для этого сообщения...', true);
+        conversationMessage('Разговор не выбран. Gaia создаёт новый разговор для этого сообщения...', true);
         await createConversation();
       }
       if (!currentConversation) {
-        conversationMessage('Не удалось создать диалог. Выбери диалог из списка слева или проверь проект.', false);
+        conversationMessage('Не удалось создать разговор. Выбери разговор из списка слева или проверь проект.', false);
         return;
       }
-      const input = document.getElementById('dialogMessage');
+      const input = document.getElementById('query');
+      const filesInput = document.getElementById('files');
       const text = input.value.trim();
-      if (!text) {
-        conversationMessage('Добавь сообщение для диалога.', false);
+      if (!text && !filesInput.files.length) {
+        conversationMessage('Добавь сообщение или материал.', false);
         return;
       }
-      conversationMessage(runLocal ? 'Gaia готовит сообщение и локальный ответ...' : 'Gaia готовит сообщение...', true);
-      const payload = {
-        text,
-        profile: document.getElementById('profile').value,
-        run_local: !!runLocal,
-      };
+      conversationMessage(runLocal ? 'Gaia проверяет данные и готовит ответ...' : 'Gaia проверяет данные и готовит материалы...', true);
+      const form = new FormData();
+      form.append('text', text);
+      form.append('profile', document.getElementById('profile').value);
+      form.append('run_local', runLocal ? 'true' : 'false');
+      for (const file of filesInput.files) form.append('files', file);
       const res = await fetch(`/api/conversations/${currentConversation.id}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: form
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1434,6 +1673,7 @@ INDEX_HTML = r"""
         return;
       }
       input.value = "";
+      filesInput.value = "";
       currentConversation = data.conversation;
       lastPackage = data.package;
       lastPrompt = data.package?.prompt || "";
@@ -1444,14 +1684,14 @@ INDEX_HTML = r"""
       await loadConversations();
       if (runLocal) renderConversationLocalSummary(data);
       if (runLocal && data.local_result && !data.local_result.ok) {
-        conversationMessage(errorMessage(data.local_result.error, 'Turn сохранен, но локальный ответ не получен.'), false);
-        addDialogCard('error', 'Локальный ответ не получен', errorMessage(data.local_result.error, 'LM Studio не вернула ответ.'));
+        conversationMessage(errorMessage(data.local_result.error, 'Сообщение сохранено, но ответ не получен.'), false);
+        addDialogCard('error', 'Ответ не получен', errorMessage(data.local_result.error, 'Локальный ответ не вернулся.'));
       } else if (runLocal && data.local_result && data.local_result.prompt_compacted) {
-        conversationMessage('Turn сохранен. Локальный ответ получен; prompt был сокращен для LM Studio.', true);
-        addDialogCard('gaia', 'Безопасные токены', safeTokenExplanation(data.package));
+        conversationMessage('Ответ получен. Материалы были сокращены под окно локальной модели.', true);
+        addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
       } else {
-        conversationMessage('Turn сохранен в истории проекта.', true);
-        if (runLocal && data.local_result) addDialogCard('gaia', 'Безопасные токены', safeTokenExplanation(data.package));
+        conversationMessage('Сообщение сохранено в истории проекта.', true);
+        if (runLocal && data.local_result) addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
       }
       setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
     }
@@ -1466,7 +1706,7 @@ INDEX_HTML = r"""
       }
       currentConversation = null;
       await loadConversations();
-      conversationMessage('Диалог архивирован.', true);
+      conversationMessage('Разговор архивирован.', true);
     }
 
     function conversationMessage(message, ok) {
@@ -1914,10 +2154,9 @@ INDEX_HTML = r"""
       renderPackageSummary(data);
       setHeaderVeilState(data);
       addDialogCard(data.local_fallback_required ? 'error' : 'gaia', 'Контекст готов', packageDialogLines(data), [
-        { label: 'Ответить локально', className: 'local', onClick: () => localAnswer() },
-        { label: 'Review и копировать', onClick: () => openExternalReview() },
-        { label: 'Показать источники', onClick: () => showInspectorTab('lore') },
-        { label: 'Показать техотчет', onClick: () => showInspectorTab('json') }
+        { label: 'Получить ответ', className: 'local', onClick: () => localAnswer() },
+        { label: 'Подготовить для внешнего анализа', onClick: () => openExternalReview() },
+        { label: 'Проверить источники', onClick: () => showInspectorTab('lore') }
       ]);
       setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
     }
@@ -2488,10 +2727,10 @@ INDEX_HTML = r"""
         addDialogCard('gaia', 'Контекст пересобран', [
           loreCoverageLabel(lastPackage),
           loreCoverageNextStep(lastPackage),
-          'Запрос для модели и технические данные обновлены в Диагностике.'
+          'Материалы для ответа обновлены.'
         ], [
-          { label: 'Показать запрос', onClick: () => showInspectorTab('prompt') },
-          { label: 'Ответить локально', className: 'local', onClick: () => localAnswer() }
+          { label: 'Проверить подготовленные материалы', onClick: () => showInspectorTab('prompt') },
+          { label: 'Получить ответ', className: 'local', onClick: () => localAnswer() }
         ]);
         setSummaryDetails([
           'Контекст пересобран по выбранным разделам памяти.',
@@ -2521,23 +2760,23 @@ INDEX_HTML = r"""
       const packageData = data.package || {};
       const localResult = data.local_result || {};
       const ok = !!localResult.ok;
-      const veilText = `Veil: ${packageData.query_mask_status || '-'}, замен ${packageData.query_mask_replacements || 0}.`;
+      const veilText = `Проверка данных: ${packageData.query_mask_status || '-'}, замен ${packageData.query_mask_replacements || 0}.`;
       const external = ok
         ? 'Внешний маршрут не использовался.'
         : 'Внешний маршрут не использовался; локальный ответ не получен.';
       const reason = !ok
-        ? errorMessage(localResult.error, 'LM Studio не вернула локальный ответ.')
+        ? errorMessage(localResult.error, 'Локальный ответ не вернулся.')
         : (hasUnresolvedPii(packageData) ? blockReason(packageData) : '');
       setProcessingSummary({
         badge: ok ? 'локально' : 'ошибка',
         state: ok ? 'Локальный ответ получен в продолжении диалога.' : 'Локальный ответ не получен.',
         context: packageContextLabel(packageData),
         external,
-        next: ok ? 'Проверь локальный ответ. Проектная память не менялась автоматически.' : 'Проверь LM Studio и повтори локальный ответ.',
+        next: ok ? 'Проверь ответ. Проектная память не менялась автоматически.' : 'Проверь локальный ответ и повтори.',
         reason
       });
       setSummaryDetails([
-        ok ? 'Продолжение диалога обработано локально через LM Studio.' : 'Продолжение диалога сохранено, но локальный ответ не получен.',
+        ok ? 'Продолжение диалога обработано локально.' : 'Продолжение диалога сохранено, но локальный ответ не получен.',
         external,
         veilText,
         loreCoverageLabel(packageData),
@@ -2700,8 +2939,8 @@ INDEX_HTML = r"""
       localAnswerController = new AbortController();
       document.getElementById('localBtn').disabled = true;
       document.getElementById('cancelLocalBtn').disabled = false;
-      setLocalStatus('Проверяется.... LM Studio доступна, локальный запрос выполняется.', 'ok');
-      addDialogCard('gaia', 'Локальный запрос выполняется', 'Hearth обращается к LM Studio. Внешний маршрут не используется.');
+      setLocalStatus('Локальный ответ выполняется.', 'ok');
+      addDialogCard('gaia', 'Ответ выполняется', 'Ответ готовится на этом компьютере. Внешний маршрут не используется.');
       setOutput(JSON.stringify({
         status: 'local_answer_running',
         endpoint: '/api/local-answer',
@@ -2720,38 +2959,38 @@ INDEX_HTML = r"""
         });
         const data = await res.json();
         if (data.ok) {
-          setLocalStatus('LM Studio доступна. Ответ получен.', 'ok');
+          setLocalStatus('Ответ получен.', 'ok');
           setProcessingSummary({
             badge: 'локально',
             state: 'Локальный ответ получен.',
             context: lastPackage ? packageContextLabel(lastPackage) : currentContextLabel(),
             external: lastPackage?.local_fallback_required ? 'Внешний маршрут заблокирован.' : 'Внешний маршрут не использовался.',
-            next: 'Проверь локальный ответ. Проектная память не менялась автоматически.'
+            next: 'Проверь ответ. Проектная память не менялась автоматически.'
           });
           setSummaryDetails([
-            'Hearth получил ответ от LM Studio.',
-            'Следующий шаг: используй локальный ответ или доработай запрос и пересобери контекст.',
+            'Ответ получен локально.',
+            'Следующий шаг: используй ответ или уточни задачу и подготовь материалы заново.',
             'Проектная память не менялась автоматически.'
           ]);
-          addDialogCard('local-answer', 'Локальный ответ', data.answer || 'LM Studio вернула пустой ответ.', [
+          addDialogCard('local-answer', 'Локальный ответ', data.structured_answer || data.answer || 'Локальный ответ пуст.', [
             { label: 'Уточнить запрос', onClick: () => document.getElementById('query').focus() },
-            { label: 'Предложить записи в память', onClick: () => createScribePlan() },
-            { label: 'Показать запрос', onClick: () => showInspectorTab('prompt') }
+            { label: 'Сохранить выводы в память', onClick: () => createScribePlan() },
+            { label: 'Показать подготовленный запрос', onClick: () => showInspectorTab('prompt') }
           ]);
-          addDialogCard('gaia', 'Безопасные токены', safeTokenExplanation(lastPackage));
+          addDialogCard('gaia', 'Защита данных', safeTokenExplanation(lastPackage));
           setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
         } else if (data.status === 'timeout') {
-          showLocalAnswerTimedOut(errorMessage(data.error, 'LM Studio не завершила ответ вовремя.'));
+          showLocalAnswerTimedOut(errorMessage(data.error, 'Локальный ответ не завершился вовремя.'));
         } else {
-          showLocalUnavailable(errorMessage(data.error, 'LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.'));
+          showLocalUnavailable(errorMessage(data.error, 'Локальный ответ недоступен. Используй внешний маршрут только после проверки данных.'));
         }
       } catch (error) {
         if (localAnswerCanceled) {
           showLocalCanceled();
         } else if (localAnswerTimedOut) {
-          showLocalAnswerTimedOut('Локальный ответ не завершился за таймаут интерфейса. LM Studio может быть запущена, но модель еще генерирует или занята.');
+          showLocalAnswerTimedOut('Локальный ответ не завершился за отведенное время. Он может еще выполняться или быть занят.');
         } else {
-          showLocalUnavailable('LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.');
+          showLocalUnavailable('Локальный ответ недоступен. Используй внешний маршрут только после проверки данных.');
         }
       } finally {
         finishLocalAnswer();
@@ -2759,23 +2998,22 @@ INDEX_HTML = r"""
     }
 
     async function checkLocalStatus() {
-      setLocalStatus('Проверяется....', '');
+      setLocalStatus('Проверяется...', '');
       try {
         const res = await fetch('/api/local-status');
         const data = await res.json();
         if (data.available) {
-          const modelText = (data.models || []).length ? ` Модель: ${(data.models || [])[0]}.` : "";
-          setLocalStatus(`LM Studio доступна.${modelText}`, 'ok');
+          setLocalStatus('Локальный ответ доступен.', 'ok');
         } else if (data.status === 'timeout') {
-          setLocalStatus(data.message || 'LM Studio не успела ответить на короткий health-check.', 'warn');
+          setLocalStatus('Локальный ответ сейчас занят. Повтори чуть позже.', 'warn');
         } else {
-          setLocalStatus(data.message || 'LM Studio недоступна.', 'danger');
+          setLocalStatus('Локальный ответ недоступен.', 'danger');
         }
         setHeaderLmState(data);
         return data;
       } catch (error) {
-        const data = { available: false, message: 'LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.' };
-        setLocalStatus(data.message, 'danger');
+        const data = { available: false, message: 'Локальный ответ недоступен.' };
+        setLocalStatus('Локальный ответ недоступен.', 'danger');
         setHeaderLmState(data);
         return data;
       }
@@ -2797,7 +3035,7 @@ INDEX_HTML = r"""
     }
 
     function showLocalCanceled() {
-      const text = 'Локальный запрос отменен. Backend мог продолжить ожидание LM Studio.';
+      const text = 'Локальный ответ остановлен. Обработка на компьютере могла еще продолжаться некоторое время.';
       setLocalStatus(text, 'warn');
       setProcessingSummary({
         badge: 'отменено',
@@ -2813,56 +3051,56 @@ INDEX_HTML = r"""
     }
 
     function showLocalHealthCheckTimedOut(message) {
-      const text = message || 'LM Studio не успела ответить на короткий health-check. Сервер может быть запущен, но модель занята.';
+      const text = message || 'Локальный ответ сейчас занят.';
       setLocalStatus(text, 'warn');
       setProcessingSummary({
         badge: 'проверка долгая',
-        state: 'LM Studio не подтвердила готовность.',
+        state: 'Локальный ответ не подтвердил готовность.',
         context: lastPackage ? packageContextLabel(lastPackage) : currentContextLabel(),
         external: lastPackage?.local_fallback_required ? 'Внешний маршрут заблокирован.' : 'Внешний маршрут не использовался.',
-        next: 'Проверь окно LM Studio. Если модель сейчас генерирует, дождись окончания и повтори локальный ответ.',
+        next: 'Если локальная модель сейчас генерирует, дождись окончания и повтори ответ.',
         reason: text
       });
       setSummaryDetails([
         text,
-        'Это не означает, что LM Studio выключена: короткая проверка могла попасть в занятую модель.'
+        'Это не означает, что локальный ответ выключен: проверка могла попасть в занятую модель.'
       ]);
-      addDialogCard('error', 'LM Studio не подтвердила готовность', text);
+      addDialogCard('error', 'Локальный ответ не готов', text);
       setOutput(text);
     }
 
     function showLocalAnswerTimedOut(message) {
-      const text = message || 'Локальный ответ не завершился за таймаут интерфейса. LM Studio может быть запущена, но модель еще генерирует или занята.';
+      const text = message || 'Локальный ответ не завершился за отведенное время. Он может еще выполняться или быть занят.';
       setLocalStatus(text, 'warn');
       setProcessingSummary({
         badge: 'локально долго',
         state: 'Локальный ответ не успел завершиться.',
         context: lastPackage ? packageContextLabel(lastPackage) : currentContextLabel(),
         external: lastPackage?.local_fallback_required ? 'Внешний маршрут заблокирован.' : 'Внешний маршрут не использовался.',
-        next: 'Проверь окно LM Studio. Если генерация еще идет, дождись окончания или повтори локальный ответ с более коротким запросом.',
+        next: 'Если генерация еще идет, дождись окончания или повтори ответ с более короткой задачей.',
         reason: text
       });
       setSummaryDetails([
         text,
-        'Это не означает, что LM Studio выключена: модель могла быть занята или медленно генерировать ответ.'
+        'Это не означает, что локальный ответ выключен: модель могла быть занята или медленно генерировать ответ.'
       ]);
       addDialogCard('error', 'Локальный ответ не успел завершиться', text);
       setOutput(text);
     }
 
     function showLocalUnavailable(message) {
-      const text = message || 'LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после проверки данных.';
+      const text = message || 'Локальный ответ недоступен. Используй внешний маршрут только после проверки данных.';
       setLocalStatus(text, 'danger');
       setProcessingSummary({
         badge: 'локально недоступно',
-        state: 'LM Studio недоступна.',
+        state: 'Локальный ответ недоступен.',
         context: lastPackage ? packageContextLabel(lastPackage) : currentContextLabel(),
         external: lastPackage?.local_fallback_required ? 'Внешний маршрут заблокирован.' : 'Возможен только после проверки данных.',
-        next: 'Запусти LM Studio, повтори локальный ответ или используй внешний маршрут только после проверки данных.',
+        next: 'Повтори локальный ответ или используй внешний маршрут только после проверки данных.',
         reason: text
       });
-      setSummaryDetails([text, 'Следующий шаг: запусти LM Studio и повтори локальный ответ.']);
-      addDialogCard('error', 'LM Studio недоступна', text);
+      setSummaryDetails([text, 'Следующий шаг: повтори локальный ответ.']);
+      addDialogCard('error', 'Локальный ответ недоступен', text);
       setOutput(text);
     }
 

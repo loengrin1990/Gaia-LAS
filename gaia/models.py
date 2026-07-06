@@ -214,6 +214,7 @@ class ConversationMessage:
     job_id: str = ""
     route: str = ""
     safety_status: str = ""
+    structured_answer: dict[str, Any] | None = None
 
 
 @dataclass

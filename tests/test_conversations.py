@@ -74,6 +74,61 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(conversations[0].messages[0].role, "user")
         self.assertIn("Что дальше?", conversations[0].rolling_summary)
 
+    def test_add_user_turn_saves_structured_local_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = SimpleNamespace(
+                service_docs=Path(tmp) / "service",
+                projects=Path(tmp) / "projects",
+            )
+            fake_package = AnalysisPackage(
+                run_id="run-1",
+                project="Автопретензии",
+                profile_id="default",
+                profile_title="Обычный анализ",
+                route="local",
+                safe_for_codex_after_confirmation=False,
+                local_fallback_required=True,
+                policy_notes=[],
+                memory_chars=0,
+                memory_sources=[],
+                evidence_plan=[],
+                memory_total_sections=0,
+                query_mask_status="выполнено",
+                query_mask_replacements=0,
+                query_mask_review=None,
+                masked_query="Риски?",
+                files=[],
+                prompt="safe prompt",
+                journal_path="",
+                safety_audit_path="",
+            )
+            structured = {
+                "summary": "Есть риск тестирования.",
+                "key_observations": ["нет GPU"],
+                "risks": [{"title": "GPU", "level": "high", "reason": "нет стенда", "mitigation": "уточнить"}],
+                "open_questions": [],
+                "next_steps": ["проверить стенд"],
+            }
+
+            with (
+                patch("gaia.conversations.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+                patch("gaia.conversations.project_names", return_value=["Автопретензии"]),
+                patch("gaia.conversations.create_package", return_value=fake_package),
+                patch("gaia.conversations.run_lm_studio", return_value={
+                    "ok": True,
+                    "answer": "Краткий вывод\n\nЕсть риск тестирования.",
+                    "structured_answer": structured,
+                }),
+            ):
+                conversation = create_conversation("Автопретензии", "Рабочий")
+                add_user_turn(conversation.id, "Риски?", run_local=True)
+                conversations = list_conversations("Автопретензии")
+
+        self.assertEqual(len(conversations[0].messages), 2)
+        self.assertEqual(conversations[0].messages[1].role, "assistant")
+        self.assertEqual(conversations[0].messages[1].structured_answer["summary"], "Есть риск тестирования.")
+
 
 if __name__ == "__main__":
     unittest.main()

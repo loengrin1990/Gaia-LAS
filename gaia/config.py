@@ -31,6 +31,8 @@ class Settings:
     lm_studio_launcher: Path
     transcriber_launcher: Path
     lm_studio_endpoint: str
+    local_llm_prompt_char_limit: int
+    local_llm_max_tokens: int
     host: str
     port: int
     retention_runs_days: int
@@ -131,6 +133,9 @@ def load_settings(validate: bool = True) -> Settings:
     lore = payload.get("lore", {})
     if not isinstance(lore, dict):
         raise ConfigError("Config section `lore` must be an object.")
+    local_llm = payload.get("local_llm", {})
+    if not isinstance(local_llm, dict):
+        raise ConfigError("Config section `local_llm` must be an object.")
 
     base_tokens = {
         "HOME": str(Path.home()),
@@ -170,6 +175,8 @@ def load_settings(validate: bool = True) -> Settings:
         lm_studio_launcher=lm_studio_launcher,
         transcriber_launcher=transcriber_launcher,
         lm_studio_endpoint=lm_studio_endpoint,
+        local_llm_prompt_char_limit=optional_int(local_llm, "prompt_char_limit", 16000),
+        local_llm_max_tokens=optional_int(local_llm, "max_tokens", 1200),
         host=host,
         port=port_value,
         retention_runs_days=optional_int(retention, "runs_days", 7),
@@ -252,6 +259,7 @@ def describe_settings(settings: Settings | None = SETTINGS) -> str:
         f"retention: runs={settings.retention_runs_days}d journals={settings.retention_journals_days}d audit={settings.retention_audit_days}d cleanup_on_startup={settings.retention_cleanup_on_startup}",
         f"lore: semantic_rerank={settings.lore_semantic_rerank} candidates={settings.lore_rerank_candidates} timeout={settings.lore_rerank_timeout_seconds}s query_rewrite={settings.lore_query_rewrite} gap_detector={settings.lore_gap_detector} veil_llm_review={settings.veil_llm_review} scribe_classifier={settings.scribe_candidate_classifier} project_health_llm={settings.project_health_llm}",
         f"lm_studio_endpoint: {settings.lm_studio_endpoint}",
+        f"local_llm: prompt_char_limit={settings.local_llm_prompt_char_limit} max_tokens={settings.local_llm_max_tokens}",
     ])
 
 

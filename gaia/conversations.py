@@ -139,6 +139,7 @@ def add_user_turn(
                 job_id=package.run_id,
                 route="local",
                 safety_status=str(local_result.get("status") or ("ok" if local_result.get("ok") else "failed")),
+                structured_answer=local_result.get("structured_answer") if isinstance(local_result.get("structured_answer"), dict) else None,
             ))
 
     conversation.rolling_summary = update_summary(conversation)
@@ -202,6 +203,7 @@ def read_conversation(path: Path) -> Conversation:
             job_id=str(item.get("job_id") or ""),
             route=str(item.get("route") or ""),
             safety_status=str(item.get("safety_status") or ""),
+            structured_answer=item.get("structured_answer") if isinstance(item.get("structured_answer"), dict) else None,
         )
         for item in payload.get("messages") or []
         if isinstance(item, dict)

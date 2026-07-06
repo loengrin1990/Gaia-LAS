@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import io
+import json
 import unittest
 import urllib.error
 from unittest.mock import patch
 
-from gaia.local_llm import compact_prompt_for_local_model, check_lm_studio, lm_studio_models_endpoint, run_lm_studio
+from gaia.local_llm import compact_prompt_for_local_model, check_lm_studio, lm_studio_models_endpoint, parse_json_object, run_lm_studio
 from gaia.server import Handler
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class LocalStatusTests(unittest.TestCase):
@@ -38,6 +53,44 @@ class LocalStatusTests(unittest.TestCase):
         self.assertFalse(status["ok"])
         self.assertEqual(status["status"], "timeout")
         self.assertIn("генерация продолжается", status["error"])
+
+    def test_local_answer_payload_uses_configured_generation_limit(self) -> None:
+        response = FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+        with patch("gaia.local_llm.urllib.request.urlopen", return_value=response) as urlopen:
+            status = run_lm_studio("test")
+
+        self.assertTrue(status["ok"])
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload["max_tokens"], 1200)
+        self.assertIn("Верни только JSON object", payload["messages"][0]["content"])
+
+    def test_local_answer_normalizes_structured_json(self) -> None:
+        response = FakeResponse({
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "summary": "Главный риск в тестировании.",
+                        "key_observations": ["нет GPU"],
+                        "risks": [{"title": "Тестирование", "level": "high", "reason": "нет стенда", "mitigation": "уточнить дату"}],
+                        "open_questions": ["когда стенд?"],
+                        "next_steps": ["проверить график"],
+                    }, ensure_ascii=False)
+                }
+            }]
+        })
+        with patch("gaia.local_llm.urllib.request.urlopen", return_value=response):
+            status = run_lm_studio("test")
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["structured_answer"]["summary"], "Главный риск в тестировании.")
+        self.assertEqual(status["structured_answer"]["risks"][0]["level"], "high")
+        self.assertIn("Краткий вывод", status["answer"])
+
+    def test_json_object_can_be_extracted_from_fenced_response(self) -> None:
+        payload = parse_json_object('```json\n{"summary": "ok"}\n```')
+
+        self.assertEqual(payload, {"summary": "ok"})
 
     def test_local_prompt_is_compacted_inside_lore_context(self) -> None:
         prompt = (
