@@ -227,6 +227,11 @@ INDEX_HTML = r"""
       color: var(--ink);
       box-shadow: none;
     }
+    button.secondary.primary {
+      border-color: rgba(47,128,92,.8);
+      background: rgba(232,247,239,.95);
+      color: #18563c;
+    }
     button.local { background: linear-gradient(180deg, #3a956b, var(--green)); }
     button:disabled { opacity: .55; cursor: not-allowed; }
     .icon-button {
@@ -395,6 +400,15 @@ INDEX_HTML = r"""
       font-size: 13px;
       line-height: 1.42;
       white-space: pre-wrap;
+    }
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .action-row button {
+      min-height: 38px;
     }
     .scribe-screen {
       display: grid;
@@ -1223,6 +1237,7 @@ INDEX_HTML = r"""
     let currentScribeInboxItem = null;
     let loreAvailableSources = [];
     let currentScribePlan = null;
+    let scribePlanActions = {};
     let localAnswerController = null;
     let localAnswerTimeout = null;
     let localAnswerCanceled = false;
@@ -2625,6 +2640,7 @@ INDEX_HTML = r"""
 
     function clearScribePlanForNewSource() {
       currentScribePlan = null;
+      scribePlanActions = {};
       const list = document.getElementById('scribePlanList');
       const details = document.getElementById('scribeDetails');
       const state = document.getElementById('scribePlanState');
@@ -2661,6 +2677,7 @@ INDEX_HTML = r"""
 
     function renderScribePlan(plan) {
       currentScribePlan = plan;
+      scribePlanActions = {};
       const details = document.getElementById('scribeDetails');
       const list = document.getElementById('scribePlanList');
       const applyBtn = document.getElementById('scribeApplyBtn');
@@ -2686,7 +2703,11 @@ INDEX_HTML = r"""
         checkbox.className = 'scribe-plan-checkbox';
         checkbox.value = item.id || "";
         checkbox.checked = !!item.selected;
-        checkbox.disabled = !item.selected || item.destination === 'exclude';
+        checkbox.disabled = (!item.selected || item.destination === 'exclude') && item.operation !== 'existing_target';
+        if (item.operation === 'existing_target') {
+          checkbox.checked = false;
+          checkbox.disabled = true;
+        }
         checkbox.onchange = updateScribeApplyState;
         const body = document.createElement('div');
         const title = document.createElement('b');
@@ -2708,11 +2729,57 @@ INDEX_HTML = r"""
           safety.textContent = `проверка: ${(item.safety_notes || []).join('; ')}`;
           body.appendChild(safety);
         }
+        if (item.operation === 'existing_target') {
+          body.appendChild(existingTargetActions(item));
+        }
         row.appendChild(checkbox);
         row.appendChild(body);
         list.appendChild(row);
       }
       updateScribeApplyState();
+    }
+
+    function existingTargetActions(item) {
+      const box = document.createElement('div');
+      box.className = 'action-row';
+      const actions = [
+        ['update_existing', 'Обновить узел'],
+        ['skip_duplicate', 'Пропустить как дубль'],
+        ['create_linked', 'Создать связанный узел'],
+      ];
+      for (const [action, label] of actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = label;
+        button.onclick = () => chooseExistingTargetAction(item.id, action, box);
+        box.appendChild(button);
+      }
+      return box;
+    }
+
+    function chooseExistingTargetAction(itemId, action, box) {
+      scribePlanActions[itemId] = action;
+      const checkbox = Array.from(document.querySelectorAll('.scribe-plan-checkbox'))
+        .find((item) => item.value === itemId);
+      if (checkbox) {
+        checkbox.disabled = false;
+        checkbox.checked = true;
+      }
+      if (box) {
+        for (const button of box.querySelectorAll('button')) {
+          button.classList.toggle('primary', button.textContent === existingTargetActionLabel(action));
+        }
+      }
+      updateScribeApplyState();
+    }
+
+    function existingTargetActionLabel(action) {
+      return {
+        update_existing: 'Обновить узел',
+        skip_duplicate: 'Пропустить как дубль',
+        create_linked: 'Создать связанный узел',
+      }[action] || '';
     }
 
     function updateScribeApplyState() {
@@ -3207,7 +3274,12 @@ INDEX_HTML = r"""
       const res = await fetch('/api/scribe-apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: currentJobId, package: lastPackage, selected_item_ids: selected })
+        body: JSON.stringify({
+          job_id: currentJobId,
+          package: lastPackage,
+          selected_item_ids: selected,
+          selected_item_actions: scribePlanActions,
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -3216,7 +3288,12 @@ INDEX_HTML = r"""
         setOutput(JSON.stringify(data, null, 2));
         return;
       }
-      state.textContent = `Gaia записала ${data.applied.length} карточек; backup: ${data.backup_path}`;
+      const duplicateOnly = selected.length > 0
+        && selected.every((id) => scribePlanActions[id] === 'skip_duplicate')
+        && (data.applied || []).length === 0;
+      state.textContent = duplicateOnly
+        ? `Файл скрыт как дубль; backup: ${data.backup_path}`
+        : `Gaia записала ${data.applied.length} карточек; backup: ${data.backup_path}`;
       state.className = 'action-note ok';
       currentScribePlan = null;
       const applyBtn = document.getElementById('scribeApplyBtn');
@@ -3226,30 +3303,35 @@ INDEX_HTML = r"""
       if (details && list) {
         details.innerHTML = "";
         list.innerHTML = "";
-        details.appendChild(maskCard('Запись в память', `Готово: записано ${data.applied.length}; backup создан.`, 'ok'));
+        details.appendChild(maskCard(
+          duplicateOnly ? 'Пропуск дубля' : 'Запись в память',
+          duplicateOnly ? 'Файл скрыт из Inbox как повторная загрузка; память не менялась.' : `Готово: записано ${data.applied.length}; backup создан.`,
+          'ok'
+        ));
         details.appendChild(maskCard('Следующий шаг', 'Выбери другой файл, разбери его и предложи новые записи в память.', ''));
       }
       setProcessingSummary({
         badge: 'память',
-        state: 'Память обновлена.',
+        state: duplicateOnly ? 'Файл пропущен как дубль.' : 'Память обновлена.',
         context: lastPackage ? packageContextLabel(lastPackage) : currentContextLabel(),
         external: 'Не требуется.',
-        next: 'Проверь журнал памяти и при необходимости задай контрольный вопрос по проекту.',
+        next: duplicateOnly ? 'Выбери следующий файл-кандидат.' : 'Проверь журнал памяти и при необходимости задай контрольный вопрос по проекту.',
       });
       setSummaryDetails([
-        `Применено карточек: ${data.applied.length}.`,
+        duplicateOnly ? 'Файл скрыт как дубль; память не менялась.' : `Применено карточек: ${data.applied.length}.`,
         `Backup: ${data.backup_path}`,
         `Измененные файлы: ${(data.changed_files || []).join(', ') || '-'}`,
         data.retrieval_check || 'Проверь retrieval после обновления.'
       ]);
-      addDialogCard('gaia', 'Память обновлена', [
-        `Применено: ${data.applied.length}`,
+      addDialogCard('gaia', duplicateOnly ? 'Файл пропущен как дубль' : 'Память обновлена', [
+        duplicateOnly ? 'Память не менялась.' : `Применено: ${data.applied.length}`,
         `Backup: ${data.backup_path}`,
-        'Память обновлена только после подтверждения выбранных карточек.'
+        duplicateOnly ? 'Источник скрыт из Inbox.' : 'Память обновлена только после подтверждения выбранных карточек.'
       ], [
         { label: 'Показать технические данные', onClick: () => showInspectorTab('json') }
       ]);
       setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
+      await loadScribeInbox();
     }
 
     async function createScribeDraft() {

@@ -19,7 +19,31 @@
   },
   "local_llm": {
     "prompt_char_limit": 16000,
-    "max_tokens": 1200
+    "max_tokens": 1200,
+    "default_provider": "lm_studio",
+    "providers": {
+      "lm_studio": {
+        "type": "openai_compatible",
+        "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
+        "model": "local-model",
+        "enabled": true
+      },
+      "ollama_local": {
+        "type": "openai_compatible",
+        "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+        "model": "qwen3:8b",
+        "enabled": false
+      }
+    },
+    "routes": {
+      "hearth": {"provider": "lm_studio"},
+      "lore_query_rewrite": {"provider": "lm_studio"},
+      "lore_rerank": {"provider": "lm_studio"},
+      "lore_gap_detector": {"provider": "lm_studio"},
+      "veil_review": {"provider": "lm_studio"},
+      "scribe_classifier": {"provider": "lm_studio"},
+      "project_health": {"provider": "lm_studio"}
+    }
   },
   "retention": {
     "runs_days": 7,

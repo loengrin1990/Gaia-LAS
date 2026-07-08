@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .lore_rerank import call_lm_studio_with_deadline, parse_json_object
+from .local_llm import TASK_LORE_GAP_DETECTOR, TASK_LORE_QUERY_REWRITE
+from .lore_rerank import call_local_llm_with_deadline, parse_json_object
 
 
 ALLOWED_GAP_STATUSES = {"ok", "partial", "weak", "none"}
 MAX_REWRITE_TERMS = 16
 MAX_GAP_NOTES = 4
+
+
+def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_LORE_QUERY_REWRITE) -> dict[str, Any]:
+    return call_local_llm_with_deadline(prompt, timeout, system, task=task)
 
 
 def rewrite_query_terms_with_local_llm(
@@ -28,6 +33,7 @@ def rewrite_query_terms_with_local_llm(
             "Ты локальный помощник Gaia Lore для расширения поисковых терминов. "
             "Ты не отвечаешь пользователю и не создаешь факты."
         ),
+        task=TASK_LORE_QUERY_REWRITE,
     )
     if not result.get("ok"):
         return []
@@ -53,6 +59,7 @@ def detect_gap_with_local_llm(
             "Ты локальный помощник Gaia Lore для диагностики покрытия retrieval. "
             "Ты не отвечаешь пользователю и не добавляешь факты."
         ),
+        task=TASK_LORE_GAP_DETECTOR,
     )
     if not result.get("ok"):
         return None

@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .lore_rerank import call_lm_studio_with_deadline, parse_json_object
+from .local_llm import TASK_PROJECT_HEALTH, TASK_SCRIBE_CLASSIFIER, TASK_VEIL_REVIEW
+from .lore_rerank import call_local_llm_with_deadline, parse_json_object
 
 
 ALLOWED_PII_CATEGORIES = {"PERSON", "PHONE", "EMAIL", "ADDRESS", "PASSPORT", "INN", "ID", "CONTRACT", "BANK", "OTHER"}
 ALLOWED_PROJECT_SEVERITY = {"info", "warning", "critical"}
 SCRIBE_CATEGORIES = ("decisions", "rules", "risks", "open_questions", "technical_facts", "exclude")
+
+
+def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_SCRIBE_CLASSIFIER) -> dict[str, Any]:
+    return call_local_llm_with_deadline(prompt, timeout, system, task=task)
 
 
 def review_masking_with_local_llm(label: str, masked_text: str, rule_summary: dict[str, Any], timeout: int) -> dict[str, Any] | None:
@@ -39,6 +44,7 @@ def review_masking_with_local_llm(label: str, masked_text: str, rule_summary: di
         prompt,
         timeout,
         "Ты локальный safety reviewer Gaia Veil. Ты не отвечаешь пользователю и не раскрываешь ПД.",
+        task=TASK_VEIL_REVIEW,
     )
     if not result.get("ok"):
         return None
@@ -74,6 +80,7 @@ def classify_scribe_candidates_with_local_llm(package: dict[str, Any], timeout: 
         prompt,
         timeout,
         "Ты локальный Scribe classifier Gaia. Ты структурируешь только безопасные кандидаты в память.",
+        task=TASK_SCRIBE_CLASSIFIER,
     )
     if not result.get("ok"):
         return None
@@ -103,6 +110,7 @@ def diagnose_project_health_with_local_llm(summary: dict[str, Any], timeout: int
         prompt,
         timeout,
         "Ты локальный диагност Gaia Project Registry. Ты анализируешь только переданную структурную сводку.",
+        task=TASK_PROJECT_HEALTH,
     )
     if not result.get("ok"):
         return []

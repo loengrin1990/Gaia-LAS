@@ -6,7 +6,7 @@ import re
 import threading
 from typing import Any
 
-from .local_llm import run_lm_studio_prompt
+from .local_llm import TASK_LORE_RERANK, run_lm_studio_prompt
 
 
 MAX_EXCERPT_CHARS = 1800
@@ -54,6 +54,10 @@ def rerank_with_local_llm(
 
 
 def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str) -> dict[str, Any]:
+    return call_local_llm_with_deadline(prompt, timeout, system, task=TASK_LORE_RERANK)
+
+
+def call_local_llm_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_LORE_RERANK) -> dict[str, Any]:
     deadline = max(1, int(timeout or 1))
     result_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
 
@@ -63,6 +67,7 @@ def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str) -> dict
             system,
             timeout=deadline,
             temperature=0.0,
+            task=task,
         )
         try:
             result_queue.put_nowait(result)

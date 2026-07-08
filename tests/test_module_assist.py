@@ -60,8 +60,9 @@ class ModuleAssistTests(unittest.TestCase):
 
         captured = {}
 
-        def fake_call(prompt: str, timeout: int, system: str) -> dict:
+        def fake_call(prompt: str, timeout: int, system: str, **kwargs: object) -> dict:
             captured["prompt"] = prompt
+            captured["task"] = kwargs.get("task")
             return {"ok": True, "answer": '{"decisions":[],"rules":[],"risks":[],"open_questions":[],"technical_facts":[],"exclude":[]}'}
 
         with patch("gaia.module_assist.call_lm_studio_with_deadline", side_effect=fake_call):
@@ -69,6 +70,7 @@ class ModuleAssistTests(unittest.TestCase):
 
         self.assertIn("meeting.mp3", captured["prompt"])
         self.assertIn("СКУД -> синхронизатор -> БД -> Face ID", captured["prompt"])
+        self.assertEqual(captured["task"], "scribe_classifier")
 
 
 if __name__ == "__main__":

@@ -235,9 +235,11 @@ JSON-вариант:
 Возвращает файлы-кандидаты внутри выбранного проекта, которые еще требуют
 обработки. Gaia исключает служебные файлы памяти, `Память_Graph`, скрытые
 файлы, неподдерживаемые расширения, `ignored`/`indexed` items, служебный
-`Автоизвлеченный текст` и исходники, которые уже упомянуты в
-source/journal/graph memory. Поддерживаемые документы берутся из
-`DOCUMENT_EXTENSIONS`.
+`Автоизвлеченный текст` и исходники, которые уже покрыты journal/graph memory
+или строкой source registry с явным покрытием. Простая строка в
+`<код> - Источники.md` со статусом `не упомянут явно` не скрывает файл из
+Inbox; `type: source_map` тоже не считается покрытием сам по себе.
+Поддерживаемые документы берутся из `DOCUMENT_EXTENSIONS`.
 
 Важно: список кандидатов не означает автоматическое чтение всех файлов в память.
 Пользователь выбирает один файл и запускает действие UI `Разобрать выбранный
@@ -330,12 +332,25 @@ append-only записи в source registry, journal и graph index.
 {
   "job_id": "20260703-...",
   "package": {},
-  "selected_item_ids": ["abc123"]
+  "selected_item_ids": ["abc123"],
+  "selected_item_actions": {
+    "abc123": "update_existing"
+  }
 }
 ```
 
-Scribe apply не выполняет автоматический merge существующих decisions и не
-снимает safety-блокировки.
+Если целевой graph node уже существует, Scribe не применяет карточку
+автоматически. UI должен передать одно из действий:
+
+- `update_existing` - append-only дополнение в существующий узел с новым
+  provenance-разделом и обновлением `last_verified_at`;
+- `skip_duplicate` - файл считается повторной загрузкой и скрывается из Inbox
+  со статусом `duplicate`, live-память не меняется;
+- `create_linked` - создается отдельный связанный узел с суффиксом
+  `дополнение`.
+
+Scribe apply не выполняет неявный merge существующих decisions и не снимает
+safety-блокировки.
 
 ## Остальные endpoints
 
@@ -354,6 +369,12 @@ Scribe apply не выполняет автоматический merge суще
 - `POST /api/local-answer`;
 - `GET /api/local-status`;
 - `POST /api/launch`.
+
+`GET /api/local-status` выполняет health-check настроенных
+`local_llm.providers` и возвращает верхнеуровневый статус default provider,
+словарь `providers` с endpoint/model/models для каждого backend и словарь
+`routes`, показывающий фактическую маршрутизацию Hearth/Lore/Veil/Scribe/Project
+Health.
 
 ## Проверка
 

@@ -23,7 +23,7 @@ from .conversations import (
 )
 from .jobs import get_job, job_to_dict, submit_analyze_job
 from .launchers import launch_module
-from .local_llm import check_lm_studio, run_lm_studio
+from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
 from .profiles import profile_payloads
 from .projects import (
@@ -40,7 +40,14 @@ from .projects import (
 )
 from .rebuild import rebuild_prompt
 from .scribe import apply_scribe_plan, create_scribe_draft, create_scribe_plan
-from .scribe_inbox import ignore_inbox_item, index_inbox_item, list_scribe_inbox, package_inbox_item, preview_inbox_item
+from .scribe_inbox import (
+    duplicate_inbox_item,
+    ignore_inbox_item,
+    index_inbox_item,
+    list_scribe_inbox,
+    package_inbox_item,
+    preview_inbox_item,
+)
 from .ui import INDEX_HTML
 
 
@@ -123,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_get_scribe_inbox()
             return
         if self.path == "/api/local-status":
-            json_response(self, check_lm_studio())
+            json_response(self, check_local_llm())
             return
         if self.path.startswith("/api/jobs/"):
             job_id = self.path.rsplit("/", 1)[-1]
@@ -480,15 +487,26 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(selected_ids, list):
             error_response(self, "invalid_request", "selected_item_ids must be a list", 400)
             return
+        selected_actions = payload.get("selected_item_actions", {})
+        if not isinstance(selected_actions, dict):
+            error_response(self, "invalid_request", "selected_item_actions must be an object", 400)
+            return
         package = self.package_from_payload_or_job(payload)
         if package is None:
             error_response(self, "job_not_ready", "job is not ready", 409)
             return
         try:
-            result = apply_scribe_plan(package, [str(item) for item in selected_ids])
+            item_actions = {str(key): str(value) for key, value in selected_actions.items()}
+            result = apply_scribe_plan(package, [str(item) for item in selected_ids], item_actions)
             origin = package.get("scribe_origin") if isinstance(package, dict) else {}
-            if isinstance(origin, dict) and origin.get("type") == "inbox" and origin.get("relative_path") and result.applied:
-                index_inbox_item(str(package.get("project") or ""), str(origin.get("relative_path") or ""))
+            duplicate_skip = any(action == "skip_duplicate" for action in item_actions.values())
+            if isinstance(origin, dict) and origin.get("type") == "inbox" and origin.get("relative_path"):
+                project = str(package.get("project") or "")
+                relative_path = str(origin.get("relative_path") or "")
+                if duplicate_skip:
+                    duplicate_inbox_item(project, relative_path)
+                elif result.applied:
+                    index_inbox_item(project, relative_path)
         except ValueError as exc:
             error_response(self, "scribe_blocked", str(exc), 409)
             return

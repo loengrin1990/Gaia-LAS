@@ -6,7 +6,16 @@ import unittest
 import urllib.error
 from unittest.mock import patch
 
-from gaia.local_llm import compact_prompt_for_local_model, check_lm_studio, lm_studio_models_endpoint, parse_json_object, run_lm_studio
+from gaia.local_llm import (
+    TASK_PROJECT_HEALTH,
+    check_local_llm,
+    compact_prompt_for_local_model,
+    check_lm_studio,
+    lm_studio_models_endpoint,
+    parse_json_object,
+    run_lm_studio,
+    run_lm_studio_prompt,
+)
 from gaia.server import Handler
 
 
@@ -60,10 +69,35 @@ class LocalStatusTests(unittest.TestCase):
             status = run_lm_studio("test")
 
         self.assertTrue(status["ok"])
+        self.assertEqual(status["route"], "hearth")
+        self.assertEqual(status["provider"], "lm_studio")
         request = urlopen.call_args.args[0]
         payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(payload["max_tokens"], 1200)
+        self.assertEqual(payload["model"], "google/gemma-4-26b-a4b-qat")
         self.assertIn("Верни только JSON object", payload["messages"][0]["content"])
+
+    def test_task_route_can_select_non_default_provider(self) -> None:
+        response = FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+        with patch("gaia.local_llm.urllib.request.urlopen", return_value=response) as urlopen:
+            status = run_lm_studio_prompt("test", "system", task=TASK_PROJECT_HEALTH)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["route"], "project_health")
+        self.assertEqual(status["provider"], "ollama_qwen3_8b")
+        self.assertEqual(status["model"], "qwen3:8b")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/v1/chat/completions")
+
+    def test_local_status_exposes_providers_and_routes(self) -> None:
+        response = FakeResponse({"data": [{"id": "model-a"}, {"id": "model-b"}]})
+        with patch("gaia.local_llm.urllib.request.urlopen", return_value=response):
+            status = check_local_llm(timeout=1.5)
+
+        self.assertTrue(status["available"])
+        self.assertIn("lm_studio", status["providers"])
+        self.assertIn("ollama_qwen3_8b", status["providers"])
+        self.assertEqual(status["routes"]["project_health"]["provider"], "ollama_qwen3_8b")
 
     def test_local_answer_normalizes_structured_json(self) -> None:
         response = FakeResponse({

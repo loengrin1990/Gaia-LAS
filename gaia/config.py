@@ -33,6 +33,9 @@ class Settings:
     lm_studio_endpoint: str
     local_llm_prompt_char_limit: int
     local_llm_max_tokens: int
+    local_llm_default_provider: str
+    local_llm_providers: dict[str, dict[str, Any]]
+    local_llm_routes: dict[str, dict[str, Any]]
     host: str
     port: int
     retention_runs_days: int
@@ -96,6 +99,15 @@ def optional_bool(payload: dict[str, Any], key: str, default: bool) -> bool:
     return value
 
 
+def optional_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"Config value `{key}` must be an object.")
+    return value
+
+
 def config_version(payload: dict[str, Any]) -> int:
     value = payload.get("config_version", SUPPORTED_CONFIG_VERSION)
     if not isinstance(value, int):
@@ -116,6 +128,67 @@ def expand_value(value: str, tokens: dict[str, str]) -> str:
 
 def expand_path(value: str, tokens: dict[str, str]) -> Path:
     return Path(expand_value(value, tokens)).expanduser()
+
+
+def load_local_llm_providers(local_llm: dict[str, Any], lm_studio_endpoint: str, tokens: dict[str, str]) -> dict[str, dict[str, Any]]:
+    raw = optional_mapping(local_llm, "providers")
+    if not raw:
+        raw = {
+            "lm_studio": {
+                "type": "openai_compatible",
+                "endpoint": lm_studio_endpoint,
+                "model": "local-model",
+                "enabled": True,
+            }
+        }
+    providers: dict[str, dict[str, Any]] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError("Config value `local_llm.providers` must use non-empty provider names.")
+        if not isinstance(value, dict):
+            raise ConfigError(f"Config value `local_llm.providers.{name}` must be an object.")
+        provider_type = str(value.get("type") or "openai_compatible").strip()
+        if provider_type != "openai_compatible":
+            raise ConfigError(f"Config value `local_llm.providers.{name}.type` must be `openai_compatible`.")
+        endpoint = value.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise ConfigError(f"Config value `local_llm.providers.{name}.endpoint` must be a non-empty string.")
+        model = value.get("model")
+        if not isinstance(model, str) or not model.strip():
+            raise ConfigError(f"Config value `local_llm.providers.{name}.model` must be a non-empty string.")
+        enabled = value.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConfigError(f"Config value `local_llm.providers.{name}.enabled` must be true or false.")
+        providers[name.strip()] = {
+            "type": provider_type,
+            "endpoint": expand_value(endpoint, tokens),
+            "model": model.strip(),
+            "enabled": enabled,
+        }
+    return providers
+
+
+def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[str, Any]], default_provider: str) -> dict[str, dict[str, Any]]:
+    raw = optional_mapping(local_llm, "routes")
+    routes: dict[str, dict[str, Any]] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError("Config value `local_llm.routes` must use non-empty route names.")
+        if isinstance(value, str):
+            value = {"provider": value}
+        if not isinstance(value, dict):
+            raise ConfigError(f"Config value `local_llm.routes.{name}` must be an object or provider name.")
+        provider = value.get("provider", default_provider)
+        if not isinstance(provider, str) or provider not in providers:
+            raise ConfigError(f"Config value `local_llm.routes.{name}.provider` must reference a configured provider.")
+        route: dict[str, Any] = {"provider": provider}
+        model = value.get("model")
+        if model is not None:
+            if not isinstance(model, str) or not model.strip():
+                raise ConfigError(f"Config value `local_llm.routes.{name}.model` must be a non-empty string.")
+            route["model"] = model.strip()
+        routes[name.strip()] = route
+    return routes
 
 
 def load_settings(validate: bool = True) -> Settings:
@@ -158,6 +231,11 @@ def load_settings(validate: bool = True) -> Settings:
     if not isinstance(port_value, int) or not 1 <= port_value <= 65535:
         raise ConfigError("Config value `server.port` must be an integer from 1 to 65535.")
     lm_studio_endpoint = require_str(endpoints, "lm_studio")
+    local_llm_providers = load_local_llm_providers(local_llm, lm_studio_endpoint, tokens)
+    default_provider = local_llm.get("default_provider", "lm_studio" if "lm_studio" in local_llm_providers else next(iter(local_llm_providers)))
+    if not isinstance(default_provider, str) or default_provider not in local_llm_providers:
+        raise ConfigError("Config value `local_llm.default_provider` must reference a configured provider.")
+    local_llm_routes = load_local_llm_routes(local_llm, local_llm_providers, default_provider)
 
     settings = Settings(
         config_version=version,
@@ -177,6 +255,9 @@ def load_settings(validate: bool = True) -> Settings:
         lm_studio_endpoint=lm_studio_endpoint,
         local_llm_prompt_char_limit=optional_int(local_llm, "prompt_char_limit", 16000),
         local_llm_max_tokens=optional_int(local_llm, "max_tokens", 1200),
+        local_llm_default_provider=default_provider,
+        local_llm_providers=local_llm_providers,
+        local_llm_routes=local_llm_routes,
         host=host,
         port=port_value,
         retention_runs_days=optional_int(retention, "runs_days", 7),
@@ -259,7 +340,7 @@ def describe_settings(settings: Settings | None = SETTINGS) -> str:
         f"retention: runs={settings.retention_runs_days}d journals={settings.retention_journals_days}d audit={settings.retention_audit_days}d cleanup_on_startup={settings.retention_cleanup_on_startup}",
         f"lore: semantic_rerank={settings.lore_semantic_rerank} candidates={settings.lore_rerank_candidates} timeout={settings.lore_rerank_timeout_seconds}s query_rewrite={settings.lore_query_rewrite} gap_detector={settings.lore_gap_detector} veil_llm_review={settings.veil_llm_review} scribe_classifier={settings.scribe_candidate_classifier} project_health_llm={settings.project_health_llm}",
         f"lm_studio_endpoint: {settings.lm_studio_endpoint}",
-        f"local_llm: prompt_char_limit={settings.local_llm_prompt_char_limit} max_tokens={settings.local_llm_max_tokens}",
+        f"local_llm: prompt_char_limit={settings.local_llm_prompt_char_limit} max_tokens={settings.local_llm_max_tokens} default_provider={settings.local_llm_default_provider} providers={','.join(settings.local_llm_providers)} routes={','.join(settings.local_llm_routes)}",
     ])
 
 

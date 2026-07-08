@@ -17,6 +17,7 @@ from .projects import existing_project_dir, project_record
 BLOCK_REASON = "Scribe заблокирован: в пакете есть неподтвержденный риск ПД."
 LOCAL_FALLBACK_BLOCK_REASON = "Scribe заблокирован: пакет требует локальной обработки или ручной проверки."
 APPLY_REQUIRES_SELECTION = "Scribe apply requires at least one selected plan item."
+EXISTING_TARGET_ACTIONS = {"update_existing", "skip_duplicate", "create_linked"}
 DESTINATIONS = {
     "decisions": ("20_Decisions", "decision", "high"),
     "rules": ("20_Decisions", "decision", "high"),
@@ -97,11 +98,12 @@ def create_scribe_plan(package: dict[str, Any]) -> ScribePlan:
     if not items:
         items.append(no_candidate_item(package))
     preview = build_plan_preview(project, items)
+    has_apply_path = any(item.selected or item.operation == "existing_target" for item in items)
     return ScribePlan(
         id=plan_id,
         project=project,
         created_at=created_at,
-        status="ready" if any(item.selected for item in items) else "empty",
+        status="ready" if has_apply_path else "empty",
         blocked_reason="",
         items=items,
         preview=preview,
@@ -109,11 +111,20 @@ def create_scribe_plan(package: dict[str, Any]) -> ScribePlan:
     )
 
 
-def apply_scribe_plan(package: dict[str, Any], selected_item_ids: list[str]) -> ScribeApplyResult:
+def apply_scribe_plan(
+    package: dict[str, Any],
+    selected_item_ids: list[str],
+    item_actions: dict[str, str] | None = None,
+) -> ScribeApplyResult:
     plan = create_scribe_plan(package)
     if plan.status == "blocked":
         raise ValueError(plan.blocked_reason or BLOCK_REASON)
-    selected = [item for item in plan.items if item.id in set(selected_item_ids) and item.selected]
+    actions = item_actions or {}
+    selected_ids = set(selected_item_ids)
+    selected = [
+        item for item in plan.items
+        if item.id in selected_ids and (item.selected or actions.get(item.id) in EXISTING_TARGET_ACTIONS)
+    ]
     if not selected:
         raise ValueError(APPLY_REQUIRES_SELECTION)
 
@@ -125,14 +136,27 @@ def apply_scribe_plan(package: dict[str, Any], selected_item_ids: list[str]) -> 
     skipped: list[str] = []
 
     for item in selected:
-        if item.destination == "exclude" or item.operation == "skip":
+        action = actions.get(item.id, item.operation)
+        if item.destination == "exclude" or action in {"skip", "skip_duplicate"}:
             skipped.append(item.id)
             continue
         target = project_dir / item.target_path
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
-            skipped.append(item.id)
-            continue
+            if action == "update_existing":
+                changed.append(str(append_existing_node_update(target, item, package)))
+                applied.append(item.id)
+                continue
+            if action == "create_linked":
+                item = linked_plan_item(project_dir, record.code, item)
+                target = project_dir / item.target_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    skipped.append(item.id)
+                    continue
+            else:
+                skipped.append(item.id)
+                continue
         target.write_text(render_plan_item_node(record.code, item, package), encoding="utf-8")
         changed.append(str(target))
         changed.extend(apply_related_archives(project_dir, plan.id, item))
@@ -940,10 +964,11 @@ def mark_existing_targets(project: str, items: list[ScribePlanItem]) -> None:
             continue
         if (project_dir / item.target_path).exists():
             item.selected = False
-            item.operation = "skip"
+            item.operation = "existing_target"
             item.status = "existing"
-            if "Целевой узел уже существует; карточка не будет записана повторно." not in item.safety_notes:
-                item.safety_notes.append("Целевой узел уже существует; карточка не будет записана повторно.")
+            note = "Целевой узел уже существует; выбери: обновить узел, пропустить файл как дубль или создать связанный узел."
+            if note not in item.safety_notes:
+                item.safety_notes.append(note)
 
 
 def package_is_inbox(package: dict[str, Any]) -> bool:
@@ -1070,6 +1095,68 @@ def render_plan_item_node(code: str, item: ScribePlanItem, package: dict[str, An
     else:
         lines.append("- ПД и длинные цитаты не обнаружены в staged item.")
     return "\n".join(lines) + "\n"
+
+
+def append_existing_node_update(target: Path, item: ScribePlanItem, package: dict[str, Any]) -> Path:
+    today = datetime.now().strftime("%Y-%m-%d")
+    marker = f"<!-- scribe-update:{item.id}:{package.get('run_id', '-')} -->"
+    text = target.read_text(encoding="utf-8", errors="ignore")
+    if marker in text:
+        return target
+    text = re.sub(r"^last_verified_at: .*$", f"last_verified_at: {today}", text, count=1, flags=re.MULTILINE)
+    addition = "\n".join([
+        "",
+        f"## Дополнение Scribe {today}",
+        "",
+        marker,
+        "",
+        item.body,
+        "",
+        "### Provenance",
+        "",
+        f"- Scribe plan item: `{item.id}`",
+        f"- Run: `{package.get('run_id', '-')}`",
+        f"- Evidence: {item.evidence or '-'}",
+        "",
+        "### Safety",
+        "",
+    ])
+    if item.safety_notes:
+        addition += "\n".join(f"- {note}" for note in item.safety_notes) + "\n"
+    else:
+        addition += "- ПД и длинные цитаты не обнаружены в staged item.\n"
+    target.write_text(text.rstrip() + "\n" + addition, encoding="utf-8")
+    return target
+
+
+def linked_plan_item(project_dir: Path, code: str, item: ScribePlanItem) -> ScribePlanItem:
+    original = Path(item.target_path).stem
+    item.title = f"{item.title} дополнение"
+    item.operation = "create"
+    item.status = "staged"
+    item.selected = True
+    item.target_path = str(unique_memory_path(project_dir, item.destination, memory_filename(code, item.title)))
+    item.body = "\n".join([
+        item.body.rstrip(),
+        "",
+        "## Связь с существующим узлом",
+        "",
+        f"- Дополняет [[{original}]], но сохранен отдельным узлом после ручного выбора в Scribe.",
+    ])
+    return item
+
+
+def unique_memory_path(project_dir: Path, folder: str, filename: str) -> Path:
+    base = Path("Память_Graph") / folder / filename
+    if not (project_dir / base).exists():
+        return base
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    for index in range(2, 100):
+        candidate = Path("Память_Graph") / folder / f"{stem}-{index}{suffix}"
+        if not (project_dir / candidate).exists():
+            return candidate
+    return Path("Память_Graph") / folder / f"{stem}-{datetime.now().strftime('%H%M%S')}{suffix}"
 
 
 def apply_related_archives(project_dir: Path, plan_id: str, item: ScribePlanItem) -> list[str]:

@@ -547,7 +547,123 @@ class ScribeTests(unittest.TestCase):
         source = next(item for item in second.items if item.destination == "50_Sources")
         self.assertFalse(source.selected)
         self.assertEqual(source.status, "existing")
-        self.assertEqual(source.operation, "skip")
+        self.assertEqual(source.operation, "existing_target")
+
+    def test_scribe_apply_can_append_existing_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "Проекты"
+            project_dir = projects / "Автопретензии"
+            for folder in ("00_Core", "10_Branches", "20_Decisions", "30_Open_Questions", "40_Risks", "50_Sources", "90_Archive"):
+                (project_dir / "Память_Graph" / folder).mkdir(parents=True, exist_ok=True)
+            (project_dir / "АПР - Память.md").write_text("# Автопретензии\n", encoding="utf-8")
+            (project_dir / "Память_Graph" / "АПР - Индекс памяти.md").write_text("# АПР - Индекс памяти\n\n## Вовлеченные узлы\n\n", encoding="utf-8")
+            settings = SimpleNamespace(
+                projects=projects,
+                service_docs=root / "Сервис",
+                scribe_candidate_classifier=False,
+                scribe_classifier_timeout_seconds=1,
+            )
+            package = package_fixture()
+            package["files"] = [{
+                "name": "status.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/status.docx",
+                "extraction_note": "текст извлечен из Word",
+                "masked_text": "Документ описывает статусы дефектов и новые правила переходов.",
+                "mask_review": {"unresolved_pii": False},
+            }]
+            with patch("gaia.scribe.SETTINGS", settings), patch("gaia.projects.SETTINGS", settings):
+                plan = create_scribe_plan(package)
+                source = next(item for item in plan.items if item.destination == "50_Sources")
+                target = project_dir / source.target_path
+                target.write_text(
+                    "---\ntype: source_summary\nlast_verified_at: 2026-01-01\n---\n\n# Existing\n",
+                    encoding="utf-8",
+                )
+                existing = create_scribe_plan(package)
+                item = next(item for item in existing.items if item.destination == "50_Sources")
+                result = apply_scribe_plan(package, [item.id], {item.id: "update_existing"})
+
+            updated = target.read_text(encoding="utf-8")
+            self.assertEqual(result.applied, [item.id])
+            self.assertIn("last_verified_at:", updated)
+            self.assertIn("## Дополнение Scribe", updated)
+            self.assertIn("Статусы дефектов: source-summary", updated)
+            self.assertIn("Scribe plan item", updated)
+
+    def test_scribe_apply_can_create_linked_node_for_existing_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "Проекты"
+            project_dir = projects / "Автопретензии"
+            for folder in ("00_Core", "10_Branches", "20_Decisions", "30_Open_Questions", "40_Risks", "50_Sources", "90_Archive"):
+                (project_dir / "Память_Graph" / folder).mkdir(parents=True, exist_ok=True)
+            (project_dir / "АПР - Память.md").write_text("# Автопретензии\n", encoding="utf-8")
+            (project_dir / "Память_Graph" / "АПР - Индекс памяти.md").write_text("# АПР - Индекс памяти\n\n## Вовлеченные узлы\n\n", encoding="utf-8")
+            settings = SimpleNamespace(
+                projects=projects,
+                service_docs=root / "Сервис",
+                scribe_candidate_classifier=False,
+                scribe_classifier_timeout_seconds=1,
+            )
+            package = package_fixture()
+            package["files"] = [{
+                "name": "status.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/status.docx",
+                "extraction_note": "текст извлечен из Word",
+                "masked_text": "Документ описывает статусы дефектов и отдельный контекст процесса.",
+                "mask_review": {"unresolved_pii": False},
+            }]
+            with patch("gaia.scribe.SETTINGS", settings), patch("gaia.projects.SETTINGS", settings):
+                plan = create_scribe_plan(package)
+                source = next(item for item in plan.items if item.destination == "50_Sources")
+                (project_dir / source.target_path).write_text("already exists", encoding="utf-8")
+                existing = create_scribe_plan(package)
+                item = next(item for item in existing.items if item.destination == "50_Sources")
+                result = apply_scribe_plan(package, [item.id], {item.id: "create_linked"})
+
+            self.assertEqual(result.applied, [item.id])
+            linked = [Path(path) for path in result.changed_files if "50_Sources" in path and path.endswith(".md")]
+            self.assertTrue(any("дополнение" in path.name for path in linked))
+            self.assertTrue(any("Дополняет [[" in path.read_text(encoding="utf-8") for path in linked))
+
+    def test_scribe_apply_can_skip_existing_target_as_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = root / "Проекты"
+            project_dir = projects / "Автопретензии"
+            for folder in ("00_Core", "10_Branches", "20_Decisions", "30_Open_Questions", "40_Risks", "50_Sources", "90_Archive"):
+                (project_dir / "Память_Graph" / folder).mkdir(parents=True, exist_ok=True)
+            (project_dir / "АПР - Память.md").write_text("# Автопретензии\n", encoding="utf-8")
+            settings = SimpleNamespace(
+                projects=projects,
+                service_docs=root / "Сервис",
+                scribe_candidate_classifier=False,
+                scribe_classifier_timeout_seconds=1,
+            )
+            package = package_fixture()
+            package["files"] = [{
+                "name": "status.docx",
+                "kind": "docx",
+                "stored_path": "/tmp/status.docx",
+                "extraction_note": "текст извлечен из Word",
+                "masked_text": "Документ описывает статусы дефектов.",
+                "mask_review": {"unresolved_pii": False},
+            }]
+            with patch("gaia.scribe.SETTINGS", settings), patch("gaia.projects.SETTINGS", settings):
+                plan = create_scribe_plan(package)
+                source = next(item for item in plan.items if item.destination == "50_Sources")
+                target = project_dir / source.target_path
+                target.write_text("already exists", encoding="utf-8")
+                existing = create_scribe_plan(package)
+                item = next(item for item in existing.items if item.destination == "50_Sources")
+                result = apply_scribe_plan(package, [item.id], {item.id: "skip_duplicate"})
+
+            self.assertEqual(result.applied, [])
+            self.assertEqual(result.skipped, [item.id])
+            self.assertEqual(target.read_text(encoding="utf-8"), "already exists")
 
     def test_scribe_apply_writes_selected_graph_node_with_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

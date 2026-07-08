@@ -11,6 +11,15 @@ from .config import SETTINGS
 
 DEFAULT_LOCAL_PROMPT_CHAR_LIMIT = 16000
 DEFAULT_LOCAL_MAX_TOKENS = 1200
+DEFAULT_PROVIDER_NAME = "lm_studio"
+DEFAULT_PROVIDER_MODEL = "local-model"
+TASK_HEARTH = "hearth"
+TASK_LORE_QUERY_REWRITE = "lore_query_rewrite"
+TASK_LORE_RERANK = "lore_rerank"
+TASK_LORE_GAP_DETECTOR = "lore_gap_detector"
+TASK_VEIL_REVIEW = "veil_review"
+TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
+TASK_PROJECT_HEALTH = "project_health"
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -29,7 +38,11 @@ STRUCTURED_LOCAL_SYSTEM = (
 
 
 def lm_studio_models_endpoint() -> str:
-    endpoint = SETTINGS.lm_studio_endpoint
+    endpoint = provider_endpoint(DEFAULT_PROVIDER_NAME)
+    return models_endpoint_for_chat_endpoint(endpoint)
+
+
+def models_endpoint_for_chat_endpoint(endpoint: str) -> str:
     parts = urlsplit(endpoint)
     path = parts.path
     if "/chat/completions" in path:
@@ -48,42 +61,208 @@ def is_timeout_error(exc: BaseException) -> bool:
     return False
 
 
+def provider_configs() -> dict[str, dict[str, Any]]:
+    if SETTINGS is None:
+        return {
+            DEFAULT_PROVIDER_NAME: {
+                "type": "openai_compatible",
+                "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
+                "model": DEFAULT_PROVIDER_MODEL,
+                "enabled": True,
+            }
+        }
+    providers = getattr(SETTINGS, "local_llm_providers", None)
+    if isinstance(providers, dict) and providers:
+        return providers
+    return {
+        DEFAULT_PROVIDER_NAME: {
+            "type": "openai_compatible",
+            "endpoint": SETTINGS.lm_studio_endpoint,
+            "model": DEFAULT_PROVIDER_MODEL,
+            "enabled": True,
+        }
+    }
+
+
+def default_provider_name() -> str:
+    providers = provider_configs()
+    if SETTINGS is not None:
+        configured = getattr(SETTINGS, "local_llm_default_provider", "")
+        if configured in providers:
+            return configured
+    if DEFAULT_PROVIDER_NAME in providers:
+        return DEFAULT_PROVIDER_NAME
+    return next(iter(providers))
+
+
+def route_configs() -> dict[str, dict[str, Any]]:
+    if SETTINGS is None:
+        return {}
+    routes = getattr(SETTINGS, "local_llm_routes", None)
+    return routes if isinstance(routes, dict) else {}
+
+
+def provider_config(name: str) -> dict[str, Any]:
+    providers = provider_configs()
+    if name in providers:
+        return providers[name]
+    return providers[default_provider_name()]
+
+
+def provider_endpoint(name: str) -> str:
+    value = provider_config(name).get("endpoint")
+    if isinstance(value, str) and value.strip():
+        return value
+    if SETTINGS is not None:
+        return SETTINGS.lm_studio_endpoint
+    return "http://127.0.0.1:1234/v1/chat/completions"
+
+
+def resolve_route(task: str) -> dict[str, str]:
+    routes = route_configs()
+    route = routes.get(task, {})
+    provider = str(route.get("provider") or default_provider_name())
+    provider_data = provider_config(provider)
+    model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)
+    return {"task": task, "provider": provider, "model": model}
+
+
+def provider_label(name: str) -> str:
+    if name == DEFAULT_PROVIDER_NAME:
+        return "LM Studio"
+    return name
+
+
 def check_lm_studio(timeout: float = 1.5) -> dict[str, Any]:
-    request = urllib.request.Request(lm_studio_models_endpoint(), method="GET")
+    return check_local_provider(DEFAULT_PROVIDER_NAME, timeout=timeout)
+
+
+def check_local_provider(name: str, timeout: float = 1.5) -> dict[str, Any]:
+    provider = provider_config(name)
+    endpoint = str(provider.get("endpoint") or "")
+    models_endpoint = models_endpoint_for_chat_endpoint(endpoint)
+    request = urllib.request.Request(models_endpoint, method="GET")
+    label = provider_label(name)
+    enabled = provider.get("enabled", True) is True
+    if not enabled:
+        return {
+            "provider": name,
+            "available": False,
+            "status": "disabled",
+            "message": f"{label} отключен в config.json.",
+            "endpoint": endpoint,
+            "models_endpoint": models_endpoint,
+            "configured_model": str(provider.get("model") or ""),
+            "models": [],
+        }
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
         models = data.get("data", [])
         model_names = [str(item.get("id", "")) for item in models if isinstance(item, dict) and item.get("id")]
         return {
+            "provider": name,
             "available": True,
             "status": "available",
-            "message": "LM Studio доступна.",
-            "endpoint": SETTINGS.lm_studio_endpoint,
+            "message": f"{label} доступен.",
+            "endpoint": endpoint,
+            "models_endpoint": models_endpoint,
+            "configured_model": str(provider.get("model") or ""),
             "models": model_names,
         }
     except Exception as exc:
         if is_timeout_error(exc):
             return {
+                "provider": name,
                 "available": False,
                 "status": "timeout",
-                "message": "LM Studio не подтвердила готовность за короткий health-check. Сервер может быть запущен, но занят моделью.",
-                "endpoint": SETTINGS.lm_studio_endpoint,
+                "message": f"{label} не подтвердил готовность за короткий health-check. Сервер может быть запущен, но занят моделью.",
+                "endpoint": endpoint,
+                "models_endpoint": models_endpoint,
+                "configured_model": str(provider.get("model") or ""),
                 "error": str(exc),
             }
         return {
+            "provider": name,
             "available": False,
             "status": "unavailable",
-            "message": "LM Studio не отвечает. Запусти LM Studio или используй внешний маршрут после безопасного review.",
-            "endpoint": SETTINGS.lm_studio_endpoint,
+            "message": f"{label} не отвечает. Запусти локальный provider или используй внешний маршрут после безопасного review.",
+            "endpoint": endpoint,
+            "models_endpoint": models_endpoint,
+            "configured_model": str(provider.get("model") or ""),
             "error": str(exc),
         }
 
 
-def run_lm_studio_prompt(prompt: str, system: str, timeout: float = 180, temperature: float = 0.2) -> dict[str, Any]:
+def check_local_llm(timeout: float = 1.5) -> dict[str, Any]:
+    providers = {name: check_local_provider(name, timeout=timeout) for name in provider_configs()}
+    routes = {name: resolve_route(name) for name in route_names_for_status()}
+    default_provider = default_provider_name()
+    default_status = providers.get(default_provider) or next(iter(providers.values()))
+    return {
+        "available": bool(default_status.get("available")),
+        "status": str(default_status.get("status") or "unavailable"),
+        "message": str(default_status.get("message") or ""),
+        "endpoint": str(default_status.get("endpoint") or ""),
+        "models": default_status.get("models", []),
+        "default_provider": default_provider,
+        "providers": providers,
+        "routes": routes,
+    }
+
+
+def route_names_for_status() -> list[str]:
+    configured = list(route_configs())
+    defaults = [
+        TASK_HEARTH,
+        TASK_LORE_QUERY_REWRITE,
+        TASK_LORE_RERANK,
+        TASK_LORE_GAP_DETECTOR,
+        TASK_VEIL_REVIEW,
+        TASK_SCRIBE_CLASSIFIER,
+        TASK_PROJECT_HEALTH,
+    ]
+    names: list[str] = []
+    for name in [*defaults, *configured]:
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def run_lm_studio_prompt(
+    prompt: str,
+    system: str,
+    timeout: float = 180,
+    temperature: float = 0.2,
+    task: str = TASK_HEARTH,
+) -> dict[str, Any]:
+    return run_local_llm_prompt(prompt, system, timeout=timeout, temperature=temperature, task=task)
+
+
+def run_local_llm_prompt(
+    prompt: str,
+    system: str,
+    timeout: float = 180,
+    temperature: float = 0.2,
+    task: str = TASK_HEARTH,
+) -> dict[str, Any]:
     local_prompt, prompt_compacted = compact_prompt_for_local_model(prompt)
+    route = resolve_route(task)
+    provider = provider_config(route["provider"])
+    label = provider_label(route["provider"])
+    if provider.get("enabled", True) is not True:
+        return {
+            "ok": False,
+            "status": "disabled",
+            "error": f"{label} отключен в config.json.",
+            "provider": route["provider"],
+            "model": route["model"],
+            "route": task,
+            "prompt_chars_sent": len(local_prompt),
+            "prompt_compacted": prompt_compacted,
+        }
     payload = {
-        "model": "local-model",
+        "model": route["model"],
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": local_prompt},
@@ -95,7 +274,7 @@ def run_lm_studio_prompt(prompt: str, system: str, timeout: float = 180, tempera
     if max_tokens > 0:
         payload["max_tokens"] = max_tokens
     request = urllib.request.Request(
-        SETTINGS.lm_studio_endpoint,
+        str(provider.get("endpoint") or ""),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -108,6 +287,9 @@ def run_lm_studio_prompt(prompt: str, system: str, timeout: float = 180, tempera
             "ok": True,
             "answer": content,
             "raw": data,
+            "provider": route["provider"],
+            "model": route["model"],
+            "route": task,
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
         }
@@ -117,7 +299,10 @@ def run_lm_studio_prompt(prompt: str, system: str, timeout: float = 180, tempera
         return {
             "ok": False,
             "status": "bad_request" if exc.code == 400 else "http_error",
-            "error": f"LM Studio вернула HTTP {exc.code}: {details or exc.reason}.{hint}",
+            "error": f"{label} вернул HTTP {exc.code}: {details or exc.reason}.{hint}",
+            "provider": route["provider"],
+            "model": route["model"],
+            "route": task,
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
         }
@@ -126,14 +311,20 @@ def run_lm_studio_prompt(prompt: str, system: str, timeout: float = 180, tempera
             return {
                 "ok": False,
                 "status": "timeout",
-                "error": f"LM Studio не успела завершить локальный ответ за {int(timeout)} секунд. Сервер может быть запущен, генерация продолжается или модель занята.",
+                "error": f"{label} не успел завершить локальный ответ за {int(timeout)} секунд. Сервер может быть запущен, генерация продолжается или модель занята.",
+                "provider": route["provider"],
+                "model": route["model"],
+                "route": task,
                 "prompt_chars_sent": len(local_prompt),
                 "prompt_compacted": prompt_compacted,
             }
         return {
             "ok": False,
             "status": "unavailable",
-            "error": f"LM Studio недоступен: {exc}" if isinstance(exc, urllib.error.URLError) else str(exc),
+            "error": f"{label} недоступен: {exc}" if isinstance(exc, urllib.error.URLError) else str(exc),
+            "provider": route["provider"],
+            "model": route["model"],
+            "route": task,
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
         }
@@ -145,6 +336,7 @@ def run_lm_studio(prompt: str) -> dict[str, Any]:
         STRUCTURED_LOCAL_SYSTEM,
         timeout=180,
         temperature=0.2,
+        task=TASK_HEARTH,
     )
     if not result.get("ok"):
         return result

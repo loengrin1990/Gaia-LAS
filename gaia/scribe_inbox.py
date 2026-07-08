@@ -9,14 +9,16 @@ from typing import Any
 
 from .config import DOCUMENT_EXTENSIONS, SETTINGS
 from .excel_preview import preview_xlsx
+from .extraction import extract_text
 from .orchestrator import create_package
-from .projects import existing_project_dir
+from .projects import existing_project_dir, project_record
+from .scribe import content_based_title, source_name_is_low_signal
 
 
 EXCLUDED_DIRS = {"Память_Graph", ".git", "__pycache__", "Транскрипции"}
 EXCLUDED_SUFFIXES = {".tmp", ".bak"}
 MAX_INBOX_ITEMS = 200
-HIDDEN_STATUSES = {"ignored", "indexed"}
+HIDDEN_STATUSES = {"ignored", "indexed", "duplicate"}
 
 
 @dataclass
@@ -115,6 +117,11 @@ def index_inbox_item(project: str, relative_path: str) -> None:
     mark_item(project, relative_path, "indexed")
 
 
+def duplicate_inbox_item(project: str, relative_path: str) -> None:
+    path = resolve_project_file(project, relative_path)
+    mark_item(project, relative_path, "duplicate")
+
+
 def default_instruction(path: Path) -> str:
     if path.suffix.lower() == ".xlsx":
         return (
@@ -171,19 +178,26 @@ def item_from_path(project: str, path: Path) -> ScribeInboxItem:
 
 def indexed_source_haystack(project_dir: Path) -> str:
     candidates = []
-    for path in [
-        *project_dir.glob("* - Источники.md"),
-        *project_dir.glob("* - Журнал памяти.md"),
-    ]:
+    source_registries = [*project_dir.glob("* - Источники.md")]
+    journal_files = [*project_dir.glob("* - Журнал памяти.md")]
+    for path in journal_files:
         if path.is_file():
             candidates.append(path)
     graph_root = project_dir / "Память_Graph"
     if graph_root.exists():
         candidates.extend(
             path for path in graph_root.rglob("*.md")
-            if path.is_file() and "90_Archive" not in path.relative_to(graph_root).parts
+            if path.is_file()
+            and "90_Archive" not in path.relative_to(graph_root).parts
+            and not is_source_map_node(path)
         )
     parts = []
+    for path in source_registries:
+        if path.is_file():
+            try:
+                parts.append(indexed_source_registry_text(path))
+            except Exception:
+                continue
     for path in candidates:
         try:
             parts.append(path.read_text(encoding="utf-8", errors="ignore"))
@@ -192,11 +206,105 @@ def indexed_source_haystack(project_dir: Path) -> str:
     return "\n".join(parts)
 
 
+def indexed_source_registry_text(path: Path) -> str:
+    lines = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.startswith("| `"):
+            lines.append(line)
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 6:
+            lines.append(line)
+            continue
+        mode = cells[2].lower()
+        masking = cells[3].lower()
+        memory_status = cells[4].lower()
+        comment = cells[5].lower()
+        if source_registry_row_is_indexed(mode, masking, memory_status, comment):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def source_registry_row_is_indexed(mode: str, masking: str, memory_status: str, comment: str) -> bool:
+    if mode == "только источник":
+        return True
+    if memory_status and memory_status != "не упомянут явно":
+        return True
+    if masking == "выполнено":
+        return True
+    indexed_markers = (
+        "учтен в [[",
+        "учтён в [[",
+        "покрыт в памяти",
+        "упомянут в памяти",
+    )
+    return any(marker in comment for marker in indexed_markers)
+
+
+def is_source_map_node(path: Path) -> bool:
+    try:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:300]
+    except Exception:
+        return False
+    return "type: source_map" in head
+
+
 def source_is_indexed(path: Path, project_dir: Path, haystack: str) -> bool:
     if not haystack:
         return False
     relative = path.relative_to(project_dir).as_posix()
-    return relative in haystack or str(path) in haystack or path.name in haystack
+    if any(needle in haystack for needle in source_index_needles(path, project_dir, relative)):
+        return True
+    return low_signal_source_is_covered(path, project_dir, haystack)
+
+
+def source_index_needles(path: Path, project_dir: Path, relative: str) -> tuple[str, ...]:
+    needles = {relative, str(path), path.name}
+    try:
+        code = project_record(project_dir).code
+    except Exception:
+        code = ""
+    code_prefixes = tuple(prefix for prefix in (f"{code} - ", f"{code}_") if code)
+    for folder in ("Исходники", "Транскрипции"):
+        prefix = f"{folder}/"
+        if not relative.startswith(prefix):
+            continue
+        name = relative[len(prefix):]
+        for code_prefix in code_prefixes:
+            if name.startswith(code_prefix):
+                needles.add(prefix + name[len(code_prefix):])
+    try:
+        absolute_suffix = str(path.relative_to(project_dir))
+    except ValueError:
+        absolute_suffix = ""
+    if absolute_suffix:
+        needles.add(absolute_suffix)
+    return tuple(needle for needle in needles if needle)
+
+
+def low_signal_source_is_covered(path: Path, project_dir: Path, haystack: str) -> bool:
+    if not source_name_is_low_signal(path.name):
+        return False
+    try:
+        if path.suffix.lower() in {".txt", ".md"}:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        else:
+            extracted = extract_text(path)
+            if extracted is None:
+                return False
+            text, _note = extracted
+    except Exception:
+        return False
+    title = content_based_title(text)
+    if not title or title == "Контекст источника":
+        return False
+    code = project_record(project_dir).code
+    needles = (
+        f"[[{code} - {title}]]",
+        f"# {code} - {title}",
+        f"{title}: source-summary",
+    )
+    return any(needle in haystack for needle in needles)
 
 
 def file_kind(path: Path) -> str:

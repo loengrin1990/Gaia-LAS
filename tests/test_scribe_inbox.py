@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from gaia.models import AnalysisPackage
-from gaia.scribe_inbox import index_inbox_item, list_scribe_inbox, package_inbox_item
+from gaia.scribe_inbox import duplicate_inbox_item, index_inbox_item, list_scribe_inbox, package_inbox_item
 
 
 def fake_package(project: str) -> AnalysisPackage:
@@ -93,6 +93,23 @@ class ScribeInboxTests(unittest.TestCase):
 
         self.assertEqual(items, [])
 
+    def test_duplicate_inbox_item_is_hidden_from_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            (project_dir / "Исходники").mkdir(parents=True)
+            (project_dir / "Исходники" / "source.md").write_text("новый источник", encoding="utf-8")
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                duplicate_inbox_item("Автопретензии", "Исходники/source.md")
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual(items, [])
+
     def test_source_with_existing_graph_reference_is_hidden_from_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -108,6 +125,143 @@ class ScribeInboxTests(unittest.TestCase):
             with (
                 patch("gaia.scribe_inbox.SETTINGS", settings),
                 patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual(items, [])
+
+    def test_source_registry_not_mentioned_row_does_not_hide_inbox_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "source.md"
+            source.parent.mkdir(parents=True)
+            source.write_text("новый источник", encoding="utf-8")
+            (project_dir / "АПР - Источники.md").write_text(
+                "| Файл | Тип | Режим | Маскирование | Учтен в памяти | Комментарий |\n"
+                "|---|---|---|---|---|---|\n"
+                "| `Исходники/source.md` | файл | контекст |  | не упомянут явно |  |\n",
+                encoding="utf-8",
+            )
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual([item.relative_path for item in items], ["Исходники/source.md"])
+
+    def test_source_registry_covered_row_hides_inbox_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "source.md"
+            source.parent.mkdir(parents=True)
+            source.write_text("новый источник", encoding="utf-8")
+            (project_dir / "АПР - Источники.md").write_text(
+                "| Файл | Тип | Режим | Маскирование | Учтен в памяти | Комментарий |\n"
+                "|---|---|---|---|---|---|\n"
+                "| `Исходники/source.md` | файл | контекст | выполнено | покрыт в памяти: [[АПР - Source]] |  |\n",
+                encoding="utf-8",
+            )
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual(items, [])
+
+    def test_source_registry_reference_only_row_hides_inbox_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "source.md"
+            source.parent.mkdir(parents=True)
+            source.write_text("новый источник", encoding="utf-8")
+            (project_dir / "АПР - Источники.md").write_text(
+                "| Файл | Тип | Режим | Маскирование | Учтен в памяти | Комментарий |\n"
+                "|---|---|---|---|---|---|\n"
+                "| `Исходники/source.md` | файл | только источник |  | не упомянут явно |  |\n",
+                encoding="utf-8",
+            )
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual(items, [])
+
+    def test_legacy_unprefixed_source_summary_path_hides_prefixed_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "АПР - source.md"
+            graph = project_dir / "Память_Graph" / "50_Sources" / "АПР - Source.md"
+            source.parent.mkdir(parents=True)
+            graph.parent.mkdir(parents=True)
+            (project_dir / ".gaia-project.json").write_text('{"code":"АПР","title":"Автопретензии"}', encoding="utf-8")
+            source.write_text("новый источник", encoding="utf-8")
+            graph.write_text('---\ntype: source_summary\nsource: "Исходники/source.md"\n---\n', encoding="utf-8")
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual(items, [])
+
+    def test_source_map_legacy_path_does_not_hide_prefixed_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "АПР - source.md"
+            graph = project_dir / "Память_Graph" / "50_Sources" / "АПР - Карта источников.md"
+            source.parent.mkdir(parents=True)
+            graph.parent.mkdir(parents=True)
+            (project_dir / ".gaia-project.json").write_text('{"code":"АПР","title":"Автопретензии"}', encoding="utf-8")
+            source.write_text("новый источник", encoding="utf-8")
+            graph.write_text("---\ntype: source_map\n---\n- `Исходники/source.md`\n", encoding="utf-8")
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service")
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+            ):
+                items = list_scribe_inbox("Автопретензии")
+
+        self.assertEqual([item.relative_path for item in items], ["Исходники/АПР - source.md"])
+
+    def test_low_signal_source_with_covered_content_title_is_hidden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "Проекты" / "Автопретензии"
+            source = project_dir / "Исходники" / "999999999_deadbeefdeadbeefdeadbeef.md"
+            graph = project_dir / "Память_Graph" / "50_Sources" / "АПР - Интеграционный контур.md"
+            source.parent.mkdir(parents=True)
+            graph.parent.mkdir(parents=True)
+            (project_dir / ".gaia-project.json").write_text('{"code":"АПР","title":"Автопретензии"}', encoding="utf-8")
+            source.write_text(
+                "5. Интеграционный контур\n"
+                "Документ описывает обмен данными между системами.",
+                encoding="utf-8",
+            )
+            graph.write_text("# АПР - Интеграционный контур\n\nИнтеграционный контур: source-summary.\n", encoding="utf-8")
+            settings = SimpleNamespace(projects=root / "Проекты", service_docs=root / "Service", obsidian_work=root)
+
+            with (
+                patch("gaia.scribe_inbox.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+                patch("gaia.extraction.SETTINGS", settings),
             ):
                 items = list_scribe_inbox("Автопретензии")
 
