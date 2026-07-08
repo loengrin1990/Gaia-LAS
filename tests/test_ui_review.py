@@ -262,7 +262,9 @@ class UiReviewContractTests(unittest.TestCase):
 
     def test_conversation_local_answer_updates_safety_summary(self) -> None:
         self.assertIn("function renderConversationLocalSummary(data)", INDEX_HTML)
+        self.assertIn("function renderConversationLocalAnswer(data)", INDEX_HTML)
         self.assertIn("if (runLocal) renderConversationLocalSummary(data);", INDEX_HTML)
+        self.assertIn("renderConversationLocalAnswer(data);", INDEX_HTML)
         self.assertIn("Локальный ответ получен в продолжении диалога.", INDEX_HTML)
         self.assertIn("Внешний маршрут не использовался.", INDEX_HTML)
         self.assertIn("Проверка данных: ${packageData.query_mask_status || '-'}, замен ${packageData.query_mask_replacements || 0}.", INDEX_HTML)

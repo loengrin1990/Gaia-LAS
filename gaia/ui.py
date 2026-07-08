@@ -1702,10 +1702,14 @@ INDEX_HTML = r"""
         addDialogCard('error', 'Ответ не получен', errorMessage(data.local_result.error, 'Локальный ответ не вернулся.'));
       } else if (runLocal && data.local_result && data.local_result.prompt_compacted) {
         conversationMessage('Ответ получен. Материалы были сокращены под окно локальной модели.', true);
+        renderConversationLocalAnswer(data);
         addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
       } else {
         conversationMessage('Сообщение сохранено в истории проекта.', true);
-        if (runLocal && data.local_result) addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
+        if (runLocal && data.local_result) {
+          renderConversationLocalAnswer(data);
+          addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
+        }
       }
       setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
     }
@@ -2820,6 +2824,16 @@ INDEX_HTML = r"""
         loreCoverageLabel(packageData),
         loreCoverageNextStep(packageData),
         'Проектная память не менялась автоматически.'
+      ]);
+    }
+
+    function renderConversationLocalAnswer(data) {
+      const localResult = data.local_result || {};
+      if (!localResult.ok) return;
+      addDialogCard('local-answer', 'Локальный ответ', localResult.structured_answer || localResult.answer || 'Локальный ответ пуст.', [
+        { label: 'Уточнить запрос', onClick: () => document.getElementById('query').focus() },
+        { label: 'Сохранить выводы в память', onClick: () => createScribePlan() },
+        { label: 'Показать подготовленный запрос', onClick: () => showInspectorTab('prompt') }
       ]);
     }
 
