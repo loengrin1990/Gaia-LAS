@@ -372,9 +372,23 @@ safety-блокировки.
 
 `GET /api/local-status` выполняет health-check настроенных
 `local_llm.providers` и возвращает верхнеуровневый статус default provider,
-словарь `providers` с endpoint/model/models для каждого backend и словарь
-`routes`, показывающий фактическую маршрутизацию Hearth/Lore/Veil/Scribe/Project
-Health.
+словарь `providers` с endpoint/model/models и признаком наличия назначенной
+модели для каждого backend, а также словарь `routes`. У каждого route есть
+`provider_available`, `model_available` и `ready`, поэтому UI и диагностика
+не считают маршрут готовым, если движок запущен, но нужная модель отсутствует.
+
+`POST /api/local-answer` принимает JSON с полем `prompt` и всегда использует
+маршрут `hearth`; выбор provider не передается из браузера. В ответе Gaia
+возвращает `provider`, `model`, `route`, `prompt_chars_sent` и
+`prompt_compacted` вместе с текстом ответа. При структурированном ответе
+добавляется `structured_answer`. Для Ollama запрос формируется через
+`/api/chat` с настройками provider: `thinking`, `json_mode`,
+`context_length` и route-level `max_tokens`.
+
+Для диагностики route готов только при двух условиях: provider доступен и
+назначенная этому route модель есть в его списке моделей. Значения
+`prompt_char_limit` и `max_tokens`, если они заданы в route, также возвращаются
+в `routes` и имеют приоритет над общими настройками `local_llm`.
 
 ## Проверка
 

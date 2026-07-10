@@ -52,6 +52,14 @@ def models_endpoint_for_chat_endpoint(endpoint: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+def models_endpoint_for_provider(provider: dict[str, Any]) -> str:
+    endpoint = str(provider.get("endpoint") or "")
+    if provider.get("type") != "ollama":
+        return models_endpoint_for_chat_endpoint(endpoint)
+    parts = urlsplit(endpoint)
+    return urlunsplit((parts.scheme, parts.netloc, "/api/tags", "", ""))
+
+
 def is_timeout_error(exc: BaseException) -> bool:
     if isinstance(exc, (TimeoutError, socket.timeout)):
         return True
@@ -118,19 +126,28 @@ def provider_endpoint(name: str) -> str:
     return "http://127.0.0.1:1234/v1/chat/completions"
 
 
-def resolve_route(task: str) -> dict[str, str]:
+def resolve_route(task: str) -> dict[str, Any]:
     routes = route_configs()
     route = routes.get(task, {})
     provider = str(route.get("provider") or default_provider_name())
     provider_data = provider_config(provider)
     model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)
-    return {"task": task, "provider": provider, "model": model}
+    resolved: dict[str, Any] = {"task": task, "provider": provider, "model": model}
+    for key in ("prompt_char_limit", "max_tokens"):
+        value = route.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            resolved[key] = value
+    return resolved
 
 
 def provider_label(name: str) -> str:
     if name == DEFAULT_PROVIDER_NAME:
         return "LM Studio"
     return name
+
+
+def is_ollama_provider(provider: dict[str, Any]) -> bool:
+    return provider.get("type") == "ollama"
 
 
 def check_lm_studio(timeout: float = 1.5) -> dict[str, Any]:
@@ -140,7 +157,7 @@ def check_lm_studio(timeout: float = 1.5) -> dict[str, Any]:
 def check_local_provider(name: str, timeout: float = 1.5) -> dict[str, Any]:
     provider = provider_config(name)
     endpoint = str(provider.get("endpoint") or "")
-    models_endpoint = models_endpoint_for_chat_endpoint(endpoint)
+    models_endpoint = models_endpoint_for_provider(provider)
     request = urllib.request.Request(models_endpoint, method="GET")
     label = provider_label(name)
     enabled = provider.get("enabled", True) is True
@@ -153,21 +170,35 @@ def check_local_provider(name: str, timeout: float = 1.5) -> dict[str, Any]:
             "endpoint": endpoint,
             "models_endpoint": models_endpoint,
             "configured_model": str(provider.get("model") or ""),
+            "configured_model_available": False,
+            "type": str(provider.get("type") or "openai_compatible"),
             "models": [],
         }
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
-        models = data.get("data", [])
-        model_names = [str(item.get("id", "")) for item in models if isinstance(item, dict) and item.get("id")]
+        models = data.get("models") if is_ollama_provider(provider) else data.get("data")
+        models = models if isinstance(models, list) else []
+        model_names = [
+            str(item.get("name") or item.get("id") or "")
+            for item in models
+            if isinstance(item, dict) and (item.get("name") or item.get("id"))
+        ]
+        configured_model = str(provider.get("model") or "")
+        configured_model_available = configured_model in model_names
+        message = f"{label} доступен."
+        if not configured_model_available:
+            message = f"{label} доступен, но назначенная модель `{configured_model}` не найдена."
         return {
             "provider": name,
             "available": True,
             "status": "available",
-            "message": f"{label} доступен.",
+            "message": message,
             "endpoint": endpoint,
             "models_endpoint": models_endpoint,
-            "configured_model": str(provider.get("model") or ""),
+            "configured_model": configured_model,
+            "configured_model_available": configured_model_available,
+            "type": str(provider.get("type") or "openai_compatible"),
             "models": model_names,
         }
     except Exception as exc:
@@ -180,6 +211,8 @@ def check_local_provider(name: str, timeout: float = 1.5) -> dict[str, Any]:
                 "endpoint": endpoint,
                 "models_endpoint": models_endpoint,
                 "configured_model": str(provider.get("model") or ""),
+                "configured_model_available": False,
+                "type": str(provider.get("type") or "openai_compatible"),
                 "error": str(exc),
             }
         return {
@@ -190,21 +223,35 @@ def check_local_provider(name: str, timeout: float = 1.5) -> dict[str, Any]:
             "endpoint": endpoint,
             "models_endpoint": models_endpoint,
             "configured_model": str(provider.get("model") or ""),
+            "configured_model_available": False,
+            "type": str(provider.get("type") or "openai_compatible"),
             "error": str(exc),
         }
 
 
 def check_local_llm(timeout: float = 1.5) -> dict[str, Any]:
     providers = {name: check_local_provider(name, timeout=timeout) for name in provider_configs()}
-    routes = {name: resolve_route(name) for name in route_names_for_status()}
+    routes = {}
+    for name in route_names_for_status():
+        route = resolve_route(name)
+        provider_status = providers.get(route["provider"], {})
+        routes[name] = {
+            **route,
+            "provider_available": bool(provider_status.get("available")),
+            "model_available": bool(provider_status.get("configured_model_available"))
+            if route["model"] == provider_status.get("configured_model")
+            else route["model"] in provider_status.get("models", []),
+        }
+        routes[name]["ready"] = routes[name]["provider_available"] and routes[name]["model_available"]
     default_provider = default_provider_name()
     default_status = providers.get(default_provider) or next(iter(providers.values()))
     return {
-        "available": bool(default_status.get("available")),
+        "available": bool(default_status.get("available")) and bool(default_status.get("configured_model_available")),
         "status": str(default_status.get("status") or "unavailable"),
         "message": str(default_status.get("message") or ""),
         "endpoint": str(default_status.get("endpoint") or ""),
         "models": default_status.get("models", []),
+        "configured_model_available": bool(default_status.get("configured_model_available")),
         "default_provider": default_provider,
         "providers": providers,
         "routes": routes,
@@ -235,8 +282,18 @@ def run_lm_studio_prompt(
     timeout: float = 180,
     temperature: float = 0.2,
     task: str = TASK_HEARTH,
+    provider_name: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
-    return run_local_llm_prompt(prompt, system, timeout=timeout, temperature=temperature, task=task)
+    return run_local_llm_prompt(
+        prompt,
+        system,
+        timeout=timeout,
+        temperature=temperature,
+        task=task,
+        provider_name=provider_name,
+        model=model,
+    )
 
 
 def run_local_llm_prompt(
@@ -245,9 +302,30 @@ def run_local_llm_prompt(
     timeout: float = 180,
     temperature: float = 0.2,
     task: str = TASK_HEARTH,
+    provider_name: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
-    local_prompt, prompt_compacted = compact_prompt_for_local_model(prompt)
-    route = resolve_route(task)
+    route = dict(resolve_route(task))
+    if provider_name:
+        providers = provider_configs()
+        if provider_name not in providers:
+            local_prompt, prompt_compacted = compact_prompt_for_local_model(prompt)
+            return {
+                "ok": False,
+                "status": "invalid_provider",
+                "error": f"Неизвестный local provider: {provider_name}.",
+                "provider": provider_name,
+                "model": model or "",
+                "route": task,
+                "prompt_chars_sent": len(local_prompt),
+                "prompt_compacted": prompt_compacted,
+            }
+        route["provider"] = provider_name
+        route["model"] = model or str(providers[provider_name].get("model") or DEFAULT_PROVIDER_MODEL)
+    local_prompt, prompt_compacted = compact_prompt_for_local_model(
+        prompt,
+        limit=int(route.get("prompt_char_limit") or local_prompt_char_limit()),
+    )
     provider = provider_config(route["provider"])
     label = provider_label(route["provider"])
     if provider.get("enabled", True) is not True:
@@ -261,18 +339,14 @@ def run_local_llm_prompt(
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
         }
-    payload = {
-        "model": route["model"],
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": local_prompt},
-        ],
-        "temperature": temperature,
-        "stream": False,
-    }
-    max_tokens = local_llm_max_tokens()
-    if max_tokens > 0:
-        payload["max_tokens"] = max_tokens
+    payload = local_llm_payload(
+        provider,
+        route["model"],
+        system,
+        local_prompt,
+        temperature,
+        max_tokens=int(route.get("max_tokens") or local_llm_max_tokens()),
+    )
     request = urllib.request.Request(
         str(provider.get("endpoint") or ""),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -282,7 +356,7 @@ def run_local_llm_prompt(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        content = response_content(provider, data)
         return {
             "ok": True,
             "answer": content,
@@ -295,7 +369,7 @@ def run_local_llm_prompt(
         }
     except urllib.error.HTTPError as exc:
         details = read_http_error_body(exc)
-        hint = " LM Studio отклонила запрос; Gaia уже сократила prompt для локальной модели." if prompt_compacted else ""
+        hint = " Provider отклонил запрос; Gaia уже сократила prompt для локальной модели." if prompt_compacted else ""
         return {
             "ok": False,
             "status": "bad_request" if exc.code == 400 else "http_error",
@@ -328,6 +402,53 @@ def run_local_llm_prompt(
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
         }
+
+
+def local_llm_payload(
+    provider: dict[str, Any],
+    model: str,
+    system: str,
+    prompt: str,
+    temperature: float,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
+    if max_tokens is None:
+        max_tokens = local_llm_max_tokens()
+    if is_ollama_provider(provider):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "think": bool(provider.get("thinking", False)),
+            "options": {"temperature": temperature},
+        }
+        if provider.get("json_mode", True):
+            payload["format"] = "json"
+        context_length = provider.get("context_length")
+        if isinstance(context_length, int) and not isinstance(context_length, bool) and context_length > 0:
+            payload["options"]["num_ctx"] = context_length
+        if max_tokens > 0:
+            payload["options"]["num_predict"] = max_tokens
+        return payload
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": False,
+    }
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
+    return payload
+
+
+def response_content(provider: dict[str, Any], data: dict[str, Any]) -> str:
+    if is_ollama_provider(provider):
+        return str(data.get("message", {}).get("content") or "")
+    return str(data.get("choices", [{}])[0].get("message", {}).get("content") or "")
 
 
 def run_lm_studio(prompt: str) -> dict[str, Any]:

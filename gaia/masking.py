@@ -76,7 +76,12 @@ class MaskResult:
     review: MaskReview
 
 
-def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False) -> MaskResult:
+def mask_with_review(
+    label: str,
+    text: str,
+    strict_dialog_privacy: bool = False,
+    include_llm_review: bool = True,
+) -> MaskResult:
     if not text:
         review = MaskReview(
             label=label,
@@ -133,7 +138,7 @@ def mask_with_review(label: str, text: str, strict_dialog_privacy: bool = False)
     else:
         status = "выполнено" if total else "выполнено, ПД по правилам не найдены"
     counts_dict = dict(sorted(counts.items()))
-    llm_review = veil_llm_review(label, masked, status, counts_dict, suspected, unresolved)
+    llm_review = veil_llm_review(label, masked, status, counts_dict, suspected, unresolved) if include_llm_review else None
     if llm_review and llm_review.get("unresolved_pii"):
         unresolved = True
         manual_confirmation_required = False

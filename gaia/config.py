@@ -148,8 +148,10 @@ def load_local_llm_providers(local_llm: dict[str, Any], lm_studio_endpoint: str,
         if not isinstance(value, dict):
             raise ConfigError(f"Config value `local_llm.providers.{name}` must be an object.")
         provider_type = str(value.get("type") or "openai_compatible").strip()
-        if provider_type != "openai_compatible":
-            raise ConfigError(f"Config value `local_llm.providers.{name}.type` must be `openai_compatible`.")
+        if provider_type not in {"openai_compatible", "ollama"}:
+            raise ConfigError(
+                f"Config value `local_llm.providers.{name}.type` must be `openai_compatible` or `ollama`."
+            )
         endpoint = value.get("endpoint")
         if not isinstance(endpoint, str) or not endpoint.strip():
             raise ConfigError(f"Config value `local_llm.providers.{name}.endpoint` must be a non-empty string.")
@@ -159,12 +161,24 @@ def load_local_llm_providers(local_llm: dict[str, Any], lm_studio_endpoint: str,
         enabled = value.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ConfigError(f"Config value `local_llm.providers.{name}.enabled` must be true or false.")
-        providers[name.strip()] = {
+        provider: dict[str, Any] = {
             "type": provider_type,
             "endpoint": expand_value(endpoint, tokens),
             "model": model.strip(),
             "enabled": enabled,
         }
+        if provider_type == "ollama":
+            for key, default in (("thinking", False), ("json_mode", True)):
+                option_value = value.get(key, default)
+                if not isinstance(option_value, bool):
+                    raise ConfigError(f"Config value `local_llm.providers.{name}.{key}` must be true or false.")
+                provider[key] = option_value
+            context_length = value.get("context_length")
+            if context_length is not None:
+                if isinstance(context_length, bool) or not isinstance(context_length, int) or context_length <= 0:
+                    raise ConfigError(f"Config value `local_llm.providers.{name}.context_length` must be a positive integer.")
+                provider["context_length"] = context_length
+        providers[name.strip()] = provider
     return providers
 
 
@@ -187,6 +201,13 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
             if not isinstance(model, str) or not model.strip():
                 raise ConfigError(f"Config value `local_llm.routes.{name}.model` must be a non-empty string.")
             route["model"] = model.strip()
+        for key in ("prompt_char_limit", "max_tokens"):
+            option_value = value.get(key)
+            if option_value is None:
+                continue
+            if isinstance(option_value, bool) or not isinstance(option_value, int) or option_value <= 0:
+                raise ConfigError(f"Config value `local_llm.routes.{name}.{key}` must be a positive integer.")
+            route[key] = option_value
         routes[name.strip()] = route
     return routes
 
