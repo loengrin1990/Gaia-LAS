@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from ipaddress import ip_address
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 SUPPORTED_CONFIG_VERSION = 1
@@ -55,6 +57,9 @@ class Settings:
     scribe_classifier_timeout_seconds: int
     project_health_llm: bool
     project_health_timeout_seconds: int
+    analyze_job_timeout_seconds: int
+    transcription_timeout_seconds: int
+    completed_job_retention_seconds: int
     config_path: Path
 
 
@@ -89,6 +94,13 @@ def optional_int(payload: dict[str, Any], key: str, default: int) -> int:
     value = payload.get(key, default)
     if not isinstance(value, int) or value < 0:
         raise ConfigError(f"Config value `{key}` must be a non-negative integer.")
+    return value
+
+
+def optional_positive_int(payload: dict[str, Any], key: str, default: int) -> int:
+    value = payload.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"Config value `{key}` must be a positive integer.")
     return value
 
 
@@ -130,6 +142,27 @@ def expand_path(value: str, tokens: dict[str, str]) -> Path:
     return Path(expand_value(value, tokens)).expanduser()
 
 
+def validate_local_endpoint(endpoint: str, key: str) -> None:
+    parts = urlsplit(endpoint)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ConfigError(f"Config value `{key}` must be an absolute HTTP(S) URL on a loopback address.")
+    try:
+        is_loopback = ip_address(parts.hostname).is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise ConfigError(f"Config value `{key}` must use a loopback IP address; remote LLM endpoints are forbidden.")
+
+
+def validate_loopback_host(host: str, key: str) -> None:
+    try:
+        is_loopback = ip_address(host).is_loopback
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise ConfigError(f"Config value `{key}` must use a loopback IP address.")
+
+
 def load_local_llm_providers(local_llm: dict[str, Any], lm_studio_endpoint: str, tokens: dict[str, str]) -> dict[str, dict[str, Any]]:
     raw = optional_mapping(local_llm, "providers")
     if not raw:
@@ -161,9 +194,11 @@ def load_local_llm_providers(local_llm: dict[str, Any], lm_studio_endpoint: str,
         enabled = value.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ConfigError(f"Config value `local_llm.providers.{name}.enabled` must be true or false.")
+        expanded_endpoint = expand_value(endpoint, tokens)
+        validate_local_endpoint(expanded_endpoint, f"local_llm.providers.{name}.endpoint")
         provider: dict[str, Any] = {
             "type": provider_type,
-            "endpoint": expand_value(endpoint, tokens),
+            "endpoint": expanded_endpoint,
             "model": model.strip(),
             "enabled": enabled,
         }
@@ -230,6 +265,9 @@ def load_settings(validate: bool = True) -> Settings:
     local_llm = payload.get("local_llm", {})
     if not isinstance(local_llm, dict):
         raise ConfigError("Config section `local_llm` must be an object.")
+    processing = payload.get("processing", {})
+    if not isinstance(processing, dict):
+        raise ConfigError("Config section `processing` must be an object.")
 
     base_tokens = {
         "HOME": str(Path.home()),
@@ -248,10 +286,12 @@ def load_settings(validate: bool = True) -> Settings:
     lm_studio_launcher = expand_path(require_str(paths, "lm_studio_launcher"), tokens)
     transcriber_launcher = expand_path(require_str(paths, "transcriber_launcher"), tokens)
     host = require_str(server, "host")
+    validate_loopback_host(host, "server.host")
     port_value = server.get("port")
     if not isinstance(port_value, int) or not 1 <= port_value <= 65535:
         raise ConfigError("Config value `server.port` must be an integer from 1 to 65535.")
     lm_studio_endpoint = require_str(endpoints, "lm_studio")
+    validate_local_endpoint(lm_studio_endpoint, "endpoints.lm_studio")
     local_llm_providers = load_local_llm_providers(local_llm, lm_studio_endpoint, tokens)
     default_provider = local_llm.get("default_provider", "lm_studio" if "lm_studio" in local_llm_providers else next(iter(local_llm_providers)))
     if not isinstance(default_provider, str) or default_provider not in local_llm_providers:
@@ -298,6 +338,9 @@ def load_settings(validate: bool = True) -> Settings:
         scribe_classifier_timeout_seconds=optional_int(lore, "scribe_classifier_timeout_seconds", 5),
         project_health_llm=optional_bool(lore, "project_health_llm", False),
         project_health_timeout_seconds=optional_int(lore, "project_health_timeout_seconds", 5),
+        analyze_job_timeout_seconds=optional_positive_int(processing, "analyze_job_timeout_seconds", 900),
+        transcription_timeout_seconds=optional_positive_int(processing, "transcription_timeout_seconds", 600),
+        completed_job_retention_seconds=optional_positive_int(processing, "completed_job_retention_seconds", 1800),
         config_path=config_path,
     )
     if validate:
@@ -360,6 +403,7 @@ def describe_settings(settings: Settings | None = SETTINGS) -> str:
         f"runs: {settings.runs_dir}",
         f"retention: runs={settings.retention_runs_days}d journals={settings.retention_journals_days}d audit={settings.retention_audit_days}d cleanup_on_startup={settings.retention_cleanup_on_startup}",
         f"lore: semantic_rerank={settings.lore_semantic_rerank} candidates={settings.lore_rerank_candidates} timeout={settings.lore_rerank_timeout_seconds}s query_rewrite={settings.lore_query_rewrite} gap_detector={settings.lore_gap_detector} veil_llm_review={settings.veil_llm_review} scribe_classifier={settings.scribe_candidate_classifier} project_health_llm={settings.project_health_llm}",
+        f"processing: analyze_job_timeout={settings.analyze_job_timeout_seconds}s transcription_timeout={settings.transcription_timeout_seconds}s completed_job_retention={settings.completed_job_retention_seconds}s",
         f"lm_studio_endpoint: {settings.lm_studio_endpoint}",
         f"local_llm: prompt_char_limit={settings.local_llm_prompt_char_limit} max_tokens={settings.local_llm_max_tokens} default_provider={settings.local_llm_default_provider} providers={','.join(settings.local_llm_providers)} routes={','.join(settings.local_llm_routes)}",
     ])

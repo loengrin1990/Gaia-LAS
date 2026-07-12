@@ -48,6 +48,11 @@
       "project_health": {"provider": "lm_studio", "prompt_char_limit": 6000, "max_tokens": 300}
     }
   },
+  "processing": {
+    "analyze_job_timeout_seconds": 900,
+    "transcription_timeout_seconds": 600,
+    "completed_job_retention_seconds": 1800
+  },
   "retention": {
     "runs_days": 7,
     "journals_days": 30,

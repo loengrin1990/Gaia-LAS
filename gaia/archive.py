@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import time
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from .config import SETTINGS, ConfigError, ensure_dirs
 from .models import AnalysisPackage
+from .storage import atomic_write_text
 
 
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}(?:-\d{6})?$")
@@ -172,7 +174,36 @@ def apply_retention(dry_run: bool = False, now: float | None = None) -> Retentio
     prune_run_dirs(SETTINGS.runs_dir, SETTINGS.retention_runs_days, current, report, dry_run)
     prune_markdown_files(SETTINGS.run_journal_dir, SETTINGS.retention_journals_days, current, report.removed_journals, report, dry_run)
     prune_markdown_files(SETTINGS.safety_audit_dir, SETTINGS.retention_audit_days, current, report.removed_audits, report, dry_run)
+    if not dry_run:
+        write_retention_status(report)
     return report
+
+
+def retention_status_path() -> Path:
+    return SETTINGS.service_docs / "Archive" / "retention-status.json"
+
+
+def write_retention_status(report: RetentionReport) -> None:
+    payload = {
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "removed_runs": len(report.removed_runs),
+        "removed_journals": len(report.removed_journals),
+        "removed_audits": len(report.removed_audits),
+        "skipped": list(report.skipped),
+    }
+    atomic_write_text(retention_status_path(), json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def retention_status() -> dict[str, object]:
+    path = retention_status_path()
+    empty = {"checked_at": "", "removed_runs": 0, "removed_journals": 0, "removed_audits": 0, "skipped": []}
+    if not path.exists():
+        return empty
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {**empty, "skipped": ["retention status unavailable"]}
+    return payload if isinstance(payload, dict) else {**empty, "skipped": ["retention status invalid"]}
 
 
 def prune_run_dirs(root: Path, days: int, now: float, report: RetentionReport, dry_run: bool) -> None:

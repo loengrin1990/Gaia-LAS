@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from gaia.archive import apply_retention, safety_audit_path, write_safety_audit
+from gaia.archive import apply_retention, retention_status, retention_status_path, safety_audit_path, write_safety_audit
 from gaia.config import SETTINGS
 from gaia.models import AnalysisPackage
 
@@ -83,6 +83,8 @@ class ArchiveRetentionTests(unittest.TestCase):
 
             with patch("gaia.archive.SETTINGS", settings):
                 report = apply_retention(now=now)
+                status_path = retention_status_path()
+                status = retention_status()
 
             self.assertFalse(old_run.exists())
             self.assertFalse(old_journal.exists())
@@ -94,6 +96,8 @@ class ArchiveRetentionTests(unittest.TestCase):
             self.assertEqual(len(report.removed_runs), 1)
             self.assertEqual(len(report.removed_journals), 1)
             self.assertEqual(len(report.removed_audits), 1)
+            self.assertTrue(status_path.exists())
+            self.assertEqual(status["removed_runs"], 1)
 
     def test_safety_audit_does_not_include_full_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

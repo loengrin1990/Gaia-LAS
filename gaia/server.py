@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import json
+from http.cookies import SimpleCookie
+from ipaddress import ip_address
+import secrets
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from email import policy as email_policy
-from email.parser import BytesParser
+from email.message import Message
+from email.parser import BytesHeaderParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import SETTINGS, SUPPORTED_EXTENSIONS, ConfigError, ensure_dirs
-from .archive import apply_retention
+from .archive import apply_retention, retention_status
 from .conversations import (
     ConversationError,
     add_user_turn,
@@ -21,7 +26,7 @@ from .conversations import (
     get_conversation,
     list_conversations,
 )
-from .jobs import get_job, job_to_dict, submit_analyze_job
+from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
 from .launchers import launch_module
 from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
@@ -52,7 +57,14 @@ from .ui import INDEX_HTML
 
 
 MAX_JSON_BODY_SIZE = 1_000_000
-MAX_MULTIPART_BODY_SIZE = 100_000_000
+MAX_MULTIPART_BODY_SIZE = 25_000_000
+MAX_UPLOAD_FILE_SIZE = 20_000_000
+MAX_UPLOAD_FILES = 8
+MAX_ACTIVE_UPLOADS = 2
+MULTIPART_READ_CHUNK_SIZE = 64 * 1024
+UPLOAD_REQUEST_SLOTS = threading.BoundedSemaphore(MAX_ACTIVE_UPLOADS)
+SESSION_COOKIE_NAME = "gaia_local_session"
+SESSION_TOKEN = secrets.token_urlsafe(32)
 
 
 @dataclass(frozen=True)
@@ -61,6 +73,10 @@ class MultipartField:
     value: str
     content: bytes
     filename: str = ""
+
+
+class UploadCapacityError(ValueError):
+    pass
 
 
 def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200) -> None:
@@ -94,21 +110,52 @@ def error_response(
     json_response(handler, api_error_payload(code, message, details), status)
 
 
-def text_response(handler: BaseHTTPRequestHandler, body: str, content_type: str = "text/html; charset=utf-8") -> None:
+def text_response(
+    handler: BaseHTTPRequestHandler,
+    body: str,
+    content_type: str = "text/html; charset=utf-8",
+    set_cookie: str = "",
+) -> None:
     data = body.encode("utf-8")
     handler.send_response(200)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Cache-Control", "no-store, max-age=0")
     handler.send_header("Pragma", "no-cache")
+    if set_cookie:
+        handler.send_header("Set-Cookie", set_cookie)
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
 
 
+def session_cookie() -> str:
+    return f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
+
+
+def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+    try:
+        is_loopback = ip_address(str(handler.client_address[0])).is_loopback
+    except (AttributeError, ValueError):
+        return False
+    if not is_loopback:
+        return False
+    host = handler.headers.get("Host", "")
+    origin = handler.headers.get("Origin", "")
+    if not host or origin != f"http://{host}":
+        return False
+    cookie = SimpleCookie()
+    try:
+        cookie.load(handler.headers.get("Cookie", ""))
+    except (TypeError, ValueError):
+        return False
+    token = cookie.get(SESSION_COOKIE_NAME)
+    return bool(token and secrets.compare_digest(token.value, SESSION_TOKEN))
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/" or self.path.startswith("/?"):
-            text_response(self, INDEX_HTML)
+            text_response(self, INDEX_HTML, set_cookie=session_cookie())
             return
         if self.path == "/api/projects":
             json_response(self, {
@@ -132,6 +179,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/local-status":
             json_response(self, check_local_llm())
             return
+        if self.path == "/api/retention-status":
+            json_response(self, retention_status())
+            return
         if self.path.startswith("/api/jobs/"):
             job_id = self.path.rsplit("/", 1)[-1]
             job = get_job(job_id)
@@ -143,6 +193,9 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
+        if not mutation_is_authorized(self):
+            error_response(self, "mutation_not_authorized", "Открой Gaia в локальном браузере и повтори действие.", 403)
+            return
         try:
             self.dispatch_POST()
         except ValueError as exc:
@@ -152,6 +205,9 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path).path
         if route == "/api/analyze":
             self.handle_analyze()
+            return
+        if route.startswith("/api/jobs/"):
+            self.handle_job_action()
             return
         if route == "/api/conversations":
             self.handle_create_conversation()
@@ -198,6 +254,9 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def do_PATCH(self) -> None:
+        if not mutation_is_authorized(self):
+            error_response(self, "mutation_not_authorized", "Открой Gaia в локальном браузере и повтори действие.", 403)
+            return
         try:
             self.dispatch_PATCH()
         except ValueError as exc:
@@ -283,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
     def handle_analyze(self) -> None:
         try:
             form = parse_multipart(self)
+        except UploadCapacityError as exc:
+            error_response(self, "upload_capacity_full", str(exc), 503)
+            return
         except ValueError as exc:
             error_response(self, "invalid_multipart", str(exc), 400)
             return
@@ -303,12 +365,21 @@ class Handler(BaseHTTPRequestHandler):
                     {"filename": item.filename},
                 )
                 return
+            if len(item.content) > MAX_UPLOAD_FILE_SIZE:
+                error_response(self, "file_too_large", f"Файл превышает лимит {MAX_UPLOAD_FILE_SIZE} bytes.", 413)
+                return
             uploaded.append((item.filename, item.content))
+        if len(uploaded) > MAX_UPLOAD_FILES:
+            error_response(self, "too_many_files", f"Разрешено не более {MAX_UPLOAD_FILES} файлов за запрос.", 413)
+            return
         if not query.strip() and not uploaded:
             error_response(self, "empty_analyze_request", "Добавь запрос или файл для анализа.", 400)
             return
         try:
             job = submit_analyze_job(project, query, uploaded, profile)
+        except JobQueueFullError as exc:
+            error_response(self, "job_queue_full", str(exc), 429)
+            return
         except Exception as exc:
             error_response(self, "analyze_failed", str(exc), 500)
             return
@@ -319,6 +390,19 @@ class Handler(BaseHTTPRequestHandler):
             "progress": job.progress,
             "status_url": f"/api/jobs/{job.id}",
         }, 202)
+
+    def handle_job_action(self) -> None:
+        parts = urlparse(self.path).path.split("/")
+        job_id = parts[3] if len(parts) >= 4 else ""
+        action = parts[4] if len(parts) >= 5 else ""
+        if action != "cancel":
+            error_response(self, "not_found", "not found", 404)
+            return
+        job = cancel_job(job_id)
+        if job is None:
+            error_response(self, "job_not_found", "job not found", 404)
+            return
+        json_response(self, job_to_dict(job))
 
     def handle_get_conversations(self) -> None:
         route = urlparse(self.path)
@@ -377,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
         if content_type.startswith("multipart/form-data"):
             try:
                 form = parse_multipart(self)
+            except UploadCapacityError as exc:
+                error_response(self, "upload_capacity_full", str(exc), 503)
+                return
             except ValueError as exc:
                 error_response(self, "invalid_multipart", str(exc), 400)
                 return
@@ -396,7 +483,13 @@ class Handler(BaseHTTPRequestHandler):
                         {"filename": item.filename},
                     )
                     return
+                if len(item.content) > MAX_UPLOAD_FILE_SIZE:
+                    error_response(self, "file_too_large", f"Файл превышает лимит {MAX_UPLOAD_FILE_SIZE} bytes.", 413)
+                    return
                 uploaded.append((item.filename, item.content))
+            if len(uploaded) > MAX_UPLOAD_FILES:
+                error_response(self, "too_many_files", f"Разрешено не более {MAX_UPLOAD_FILES} файлов за запрос.", 413)
+                return
         else:
             payload = self.read_json()
             text = str(payload.get("text") or "")
@@ -579,29 +672,109 @@ def parse_multipart(handler: BaseHTTPRequestHandler) -> list[MultipartField]:
     length = content_length(handler.headers.get("Content-Length", "0"))
     if length > MAX_MULTIPART_BODY_SIZE:
         raise ValueError(f"Multipart body is too large; limit is {MAX_MULTIPART_BODY_SIZE} bytes.")
-    raw_body = handler.rfile.read(length)
-    headers = (
-        f"Content-Type: {content_type}\r\n"
-        "MIME-Version: 1.0\r\n"
-        "\r\n"
-    ).encode("utf-8")
-    message = BytesParser(policy=email_policy.default).parsebytes(headers + raw_body)
-    if not message.is_multipart():
+    if not UPLOAD_REQUEST_SLOTS.acquire(blocking=False):
+        raise UploadCapacityError("Сервис уже обрабатывает максимальное число загрузок. Повтори запрос позже.")
+    try:
+        return parse_multipart_stream(handler.rfile, content_type, length)
+    finally:
+        UPLOAD_REQUEST_SLOTS.release()
+
+
+def parse_multipart_stream(stream: Any, content_type: str, length: int) -> list[MultipartField]:
+    """Parse multipart incrementally, without retaining the whole HTTP body or MIME tree."""
+    boundary = multipart_boundary(content_type)
+    delimiter = b"--" + boundary
+    marker = b"\r\n" + delimiter
+    remaining = length
+    pending = bytearray()
+
+    def read_from_stream(size: int) -> bytes:
+        nonlocal remaining
+        if size < 0:
+            raise ValueError("Multipart body is invalid.")
+        chunks = []
+        if pending:
+            take = min(size, len(pending))
+            chunks.append(bytes(pending[:take]))
+            del pending[:take]
+            size -= take
+        if size:
+            if size > remaining:
+                raise ValueError("Multipart body ended unexpectedly.")
+            chunk = stream.read(size)
+            if len(chunk) != size:
+                raise ValueError("Multipart body ended unexpectedly.")
+            remaining -= size
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    def read_line() -> bytes:
+        line = bytearray()
+        while True:
+            if len(line) > 16_384:
+                raise ValueError("Multipart headers are too large.")
+            byte = read_from_stream(1)
+            line.extend(byte)
+            if line.endswith(b"\n"):
+                return bytes(line)
+
+    if read_line().rstrip(b"\r\n") != delimiter:
         raise ValueError("Multipart body is invalid.")
 
     fields: list[MultipartField] = []
-    for part in message.iter_parts():
-        if part.get_content_disposition() != "form-data":
-            continue
-        name = part.get_param("name", header="content-disposition")
+    while True:
+        raw_headers = bytearray()
+        while True:
+            line = read_line()
+            raw_headers.extend(line)
+            if line in {b"\r\n", b"\n"}:
+                break
+        headers = BytesHeaderParser(policy=email_policy.default).parsebytes(bytes(raw_headers))
+        if headers.get_content_disposition() != "form-data":
+            raise ValueError("Multipart part is not form-data.")
+        name = headers.get_param("name", header="content-disposition")
         if not name:
-            continue
-        filename = part.get_filename() or ""
-        content = part.get_payload(decode=True) or b""
-        charset = part.get_content_charset() or "utf-8"
-        value = "" if filename else content.decode(charset, errors="ignore")
-        fields.append(MultipartField(name=str(name), value=value, content=content, filename=filename))
-    return fields
+            raise ValueError("Multipart field name is missing.")
+
+        content = bytearray()
+        buffered = bytearray()
+        while True:
+            if remaining <= 0 and not pending:
+                raise ValueError("Multipart body ended unexpectedly.")
+            read_size = min(MULTIPART_READ_CHUNK_SIZE, len(pending) or remaining)
+            buffered.extend(read_from_stream(read_size))
+            boundary_at = buffered.find(marker)
+            if boundary_at >= 0:
+                content.extend(buffered[:boundary_at])
+                pending.extend(buffered[boundary_at + len(marker):])
+                break
+            safe_length = max(0, len(buffered) - len(marker) + 1)
+            if safe_length:
+                content.extend(buffered[:safe_length])
+                del buffered[:safe_length]
+
+        filename = headers.get_filename() or ""
+        charset = headers.get_content_charset() or "utf-8"
+        value = "" if filename else bytes(content).decode(charset, errors="ignore")
+        fields.append(MultipartField(name=str(name), value=value, content=bytes(content), filename=filename))
+
+        boundary_end = read_from_stream(2)
+        if boundary_end == b"--":
+            return fields
+        if boundary_end != b"\r\n":
+            raise ValueError("Multipart boundary is invalid.")
+
+
+def multipart_boundary(content_type: str) -> bytes:
+    headers = Message()
+    headers["Content-Type"] = content_type
+    boundary = headers.get_param("boundary", header="content-type")
+    if not isinstance(boundary, str) or not boundary:
+        raise ValueError("Multipart boundary is missing.")
+    try:
+        return boundary.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Multipart boundary is invalid.") from exc
 
 
 def multipart_value(fields: list[MultipartField], name: str) -> str:

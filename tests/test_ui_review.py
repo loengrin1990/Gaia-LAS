@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
-from gaia.ui import INDEX_HTML
+from gaia.ui import INDEX_HTML, load_index_html
 
 
 class UiReviewContractTests(unittest.TestCase):
+    def test_ui_is_loaded_from_static_asset(self) -> None:
+        self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())
+        self.assertEqual(INDEX_HTML, load_index_html())
+
     def test_review_controls_exist(self) -> None:
         self.assertIn('id="reviewPanel"', INDEX_HTML)
         self.assertIn('id="promptPreview"', INDEX_HTML)

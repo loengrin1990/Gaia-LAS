@@ -244,3 +244,4 @@ class JobRecord:
     progress: int = 0
     result: dict[str, Any] | None = None
     error: str = ""
+    cancellation_requested: bool = False

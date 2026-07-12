@@ -12,6 +12,7 @@ from .masking import mask_with_review
 from .models import ScribeApplyResult, ScribeDraft, ScribePlan, ScribePlanItem
 from .module_assist import classify_scribe_candidates_with_local_llm
 from .projects import existing_project_dir, project_record
+from .storage import atomic_write_text
 
 
 BLOCK_REASON = "Scribe заблокирован: в пакете есть неподтвержденный риск ПД."
@@ -157,7 +158,7 @@ def apply_scribe_plan(
             else:
                 skipped.append(item.id)
                 continue
-        target.write_text(render_plan_item_node(record.code, item, package), encoding="utf-8")
+        atomic_write_text(target, render_plan_item_node(record.code, item, package))
         changed.append(str(target))
         changed.extend(apply_related_archives(project_dir, plan.id, item))
         applied.append(item.id)
@@ -1125,7 +1126,7 @@ def append_existing_node_update(target: Path, item: ScribePlanItem, package: dic
         addition += "\n".join(f"- {note}" for note in item.safety_notes) + "\n"
     else:
         addition += "- ПД и длинные цитаты не обнаружены в staged item.\n"
-    target.write_text(text.rstrip() + "\n" + addition, encoding="utf-8")
+    atomic_write_text(target, text.rstrip() + "\n" + addition)
     return target
 
 
@@ -1259,7 +1260,7 @@ def append_once(path: Path, text: str, header: str) -> None:
         if existing and not existing.endswith("\n"):
             existing += "\n"
         existing += text
-        path.write_text(existing, encoding="utf-8")
+        atomic_write_text(path, existing)
 
 
 def scribe_safety_notes(package: dict[str, Any]) -> list[str]:

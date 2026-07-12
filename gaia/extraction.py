@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -36,10 +37,14 @@ def extract_text(path: Path) -> tuple[str, str] | None:
     return external_extract_text(path)
 
 
-def extract_upload_text(path: Path, run_dir: Path) -> tuple[str, str, str]:
+def extract_upload_text(
+    path: Path,
+    run_dir: Path,
+    cancel_event: threading.Event | None = None,
+) -> tuple[str, str, str]:
     suffix = path.suffix.lower()
     if suffix in MEDIA_EXTENSIONS:
-        transcript, status = transcribe_file(path, run_dir)
+        transcript, status = transcribe_file(path, run_dir, cancel_event=cancel_event)
         return transcript, "media", status
     if suffix in {".txt", ".md"}:
         return path.read_text(encoding="utf-8", errors="ignore"), "text", "текст прочитан"

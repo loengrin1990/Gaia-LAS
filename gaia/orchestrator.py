@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import threading
 
 from .archive import journal_path, safety_audit_path, write_run_journal
 from .config import SETTINGS
@@ -13,13 +14,24 @@ from .policy import detect_concrete_pii, initial_policy_notes
 from .profiles import get_profile
 
 
+class PackageCancelledError(RuntimeError):
+    pass
+
+
+def ensure_not_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise PackageCancelledError("Обработка отменена пользователем или watchdog.")
+
+
 def create_package(
     project: str,
     query: str,
     uploaded: list[tuple[str, bytes]],
     profile_id: str | None = None,
     strict_dialog_privacy: bool = False,
+    cancel_event: threading.Event | None = None,
 ) -> AnalysisPackage:
+    ensure_not_cancelled(cancel_event)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     profile = get_profile(profile_id)
     run_dir = SETTINGS.runs_dir / run_id
@@ -45,11 +57,13 @@ def create_package(
         policy_notes.append("Запрос содержит тематический риск ПД; внешний маршрут доступен только после ручного просмотра очищенного пакета.")
 
     for filename, content in uploaded:
+        ensure_not_cancelled(cancel_event)
         safe_name = safe_filename(filename)
         file_hints.append(safe_name)
         path = upload_dir / safe_name
         path.write_bytes(content)
-        text, kind, note = extract_upload_text(path, run_dir)
+        text, kind, note = extract_upload_text(path, run_dir, cancel_event=cancel_event)
+        ensure_not_cancelled(cancel_event)
         file_mask = mask_with_review(safe_name, text)
         masked = file_mask.masked_text
         review = file_mask.review
@@ -78,6 +92,7 @@ def create_package(
             masked_text=masked,
         ))
 
+    ensure_not_cancelled(cancel_event)
     memory_selection = select_project_memory(
         project,
         masked_query,
@@ -91,6 +106,7 @@ def create_package(
     group_code = memory_selection.group_code if memory_selection else ""
     group_title = memory_selection.group_title if memory_selection else ""
     group_sections = memory_selection.group_sections if memory_selection else 0
+    ensure_not_cancelled(cancel_event)
     prompt = build_prompt(
         project,
         memory,
@@ -143,6 +159,7 @@ def create_package(
         group_sections=group_sections,
         prompt_mask_review=prompt_review,
     )
+    ensure_not_cancelled(cancel_event)
     try:
         write_run_journal(package)
     except Exception as exc:

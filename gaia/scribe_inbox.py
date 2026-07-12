@@ -12,6 +12,7 @@ from .excel_preview import preview_xlsx
 from .extraction import extract_text
 from .orchestrator import create_package
 from .projects import existing_project_dir, project_record
+from .storage import atomic_write_text, path_lock
 from .scribe import content_based_title, source_name_is_low_signal
 
 
@@ -335,14 +336,20 @@ def item_identifier(project: str, relative_path: str) -> str:
 
 
 def mark_item(project: str, relative_path: str, status: str) -> None:
-    state = read_state(project)
-    item_id = item_identifier(project, relative_path)
-    state[item_id] = {
-        "relative_path": relative_path,
-        "status": status,
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    write_state(project, state)
+    path = state_path(project)
+    with path_lock(path):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            state = payload if isinstance(payload, dict) else {}
+        except Exception:
+            state = {}
+        item_id = item_identifier(project, relative_path)
+        state[item_id] = {
+            "relative_path": relative_path,
+            "status": status,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        write_state(project, state)
 
 
 def state_path(project: str) -> Path:
@@ -364,4 +371,4 @@ def read_state(project: str) -> dict[str, Any]:
 
 
 def write_state(project: str, state: dict[str, Any]) -> None:
-    state_path(project).write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(state_path(project), json.dumps(state, ensure_ascii=False, indent=2) + "\n")

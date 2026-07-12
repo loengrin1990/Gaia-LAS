@@ -14,6 +14,7 @@ from .masking import mask_with_review
 from .models import Conversation, ConversationMessage
 from .orchestrator import create_package
 from .projects import project_names
+from .storage import atomic_write_text, path_lock
 
 
 MAX_RECENT_MESSAGES = 8
@@ -86,13 +87,27 @@ def get_conversation(conversation_id: str) -> Conversation:
 
 def archive_conversation(conversation_id: str) -> Conversation:
     conversation = get_conversation(conversation_id)
-    conversation.status = "archived"
-    conversation.updated_at = local_now()
-    write_conversation(conversation)
-    return conversation
+    with path_lock(conversation_path(conversation)):
+        conversation = get_conversation(conversation_id)
+        conversation.status = "archived"
+        conversation.updated_at = local_now()
+        write_conversation(conversation)
+        return conversation
 
 
 def add_user_turn(
+    conversation_id: str,
+    text: str,
+    uploaded: list[tuple[str, bytes]] | None = None,
+    profile_id: str | None = None,
+    run_local: bool = False,
+) -> dict[str, Any]:
+    conversation = get_conversation(conversation_id)
+    with path_lock(conversation_path(conversation)):
+        return _add_user_turn_locked(conversation_id, text, uploaded, profile_id, run_local)
+
+
+def _add_user_turn_locked(
     conversation_id: str,
     text: str,
     uploaded: list[tuple[str, bytes]] | None = None,
@@ -188,7 +203,7 @@ def conversation_path(conversation: Conversation) -> Path:
 
 def write_conversation(conversation: Conversation) -> None:
     path = conversation_path(conversation)
-    path.write_text(json.dumps(asdict(conversation), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(asdict(conversation), ensure_ascii=False, indent=2) + "\n")
 
 
 def read_conversation(path: Path) -> Conversation:

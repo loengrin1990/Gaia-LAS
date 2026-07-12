@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import SETTINGS
 from .models import ProjectGroup, ProjectRecord
+from .storage import atomic_write_text, path_lock
 from .module_assist import diagnose_project_health_with_local_llm
 
 
@@ -83,6 +84,11 @@ def create_group(code: str, title: str, description: str = "") -> ProjectGroup:
 
 def update_group(code: str, payload: dict[str, Any]) -> ProjectGroup:
     path = existing_group_dir(code)
+    with path_lock(path / GROUP_META):
+        return _update_group_locked(path, payload)
+
+
+def _update_group_locked(path: Path, payload: dict[str, Any]) -> ProjectGroup:
     meta = group_meta(path)
     if "title" in payload:
         meta["title"] = normalize_title(str(payload["title"]))
@@ -110,6 +116,11 @@ def create_project(code: str, title: str, group_code: str = "", description: str
 
 def update_project(project: str, payload: dict[str, Any]) -> ProjectRecord:
     path = existing_project_dir(project)
+    with path_lock(path / PROJECT_META):
+        return _update_project_locked(path, payload)
+
+
+def _update_project_locked(path: Path, payload: dict[str, Any]) -> ProjectRecord:
     meta = project_meta(path)
     old_code = meta["code"]
     old_title = meta.get("title") or path.name
@@ -194,7 +205,7 @@ def update_project_code_references(path: Path, old_code: str, new_code: str) -> 
         text = item.read_text(encoding="utf-8", errors="ignore")
         updated = text.replace(old_prefix, new_prefix).replace(old_code_line, new_code_line)
         if updated != text:
-            item.write_text(updated, encoding="utf-8")
+            atomic_write_text(item, updated)
 
 
 def project_record(path: Path) -> ProjectRecord:
@@ -543,13 +554,13 @@ def read_meta(path: Path) -> dict[str, Any]:
 
 
 def write_meta(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
 def ensure_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_text(text, encoding="utf-8")
+        atomic_write_text(path, text)
 
 
 def now_iso() -> str:
