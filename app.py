@@ -10,4 +10,4 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"Gaia startup error: {exc}", file=sys.stderr)
         raise SystemExit(2)
-    raise SystemExit(main())
+    raise SystemExit(main(open_window=True))

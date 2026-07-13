@@ -11,6 +11,13 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())
         self.assertEqual(INDEX_HTML, load_index_html())
 
+    def test_brand_header_uses_gaia_logo_and_desktop_window(self) -> None:
+        self.assertIn('<title>Gaia</title>', INDEX_HTML)
+        self.assertIn('src="/assets/gaia-logo.png"', INDEX_HTML)
+        self.assertIn('Local Analytics System', INDEX_HTML)
+        self.assertIn('function openGaiaWindow()', INDEX_HTML)
+        self.assertIn("module: 'gaia'", INDEX_HTML)
+
     def test_review_controls_exist(self) -> None:
         self.assertIn('id="reviewPanel"', INDEX_HTML)
         self.assertIn('id="promptPreview"', INDEX_HTML)
@@ -149,6 +156,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("function clearAnalysisWarning()", INDEX_HTML)
         self.assertIn("if (!query && !hasFiles)", INDEX_HTML)
         self.assertLess(INDEX_HTML.index("if (!query && !hasFiles)"), INDEX_HTML.index("fetch('/api/analyze'"))
+        self.assertNotIn("addDialogCard('error', 'Запуск остановлен'", INDEX_HTML)
 
     def test_file_without_query_is_allowed_with_warning(self) -> None:
         self.assertIn("if (!query && hasFiles)", INDEX_HTML)
@@ -208,6 +216,10 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("function addStructuredRisksSection(root, risks)", INDEX_HTML)
         self.assertIn("data.structured_answer || data.answer", INDEX_HTML)
         self.assertIn("message.structured_answer", INDEX_HTML)
+        self.assertIn("function conversationAnswerActions()", INDEX_HTML)
+        self.assertIn("function syncScribeButtonForConversation()", INDEX_HTML)
+        self.assertIn("title.title = fullTitle", INDEX_HTML)
+        self.assertIn("tabs-scroll-hint", INDEX_HTML)
         self.assertIn("Контекст готов", INDEX_HTML)
         self.assertIn("Локальный ответ", INDEX_HTML)
         self.assertIn("Разговор не выбран. Gaia создаёт новый разговор", INDEX_HTML)
@@ -239,7 +251,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Lore не нашёл подходящих разделов — анализ источников не выполнялся.", INDEX_HTML)
 
     def test_project_dialogue_uses_business_language(self) -> None:
-        self.assertIn("Gaia Local Analytics System", INDEX_HTML)
+        self.assertIn("Local Analytics System", INDEX_HTML)
         self.assertIn("Рабочее пространство", INDEX_HTML)
         self.assertIn("Проектный диалог", INDEX_HTML)
         self.assertIn("Новый разговор", INDEX_HTML)
@@ -267,9 +279,14 @@ class UiReviewContractTests(unittest.TestCase):
 
     def test_conversation_local_answer_updates_safety_summary(self) -> None:
         self.assertIn("function renderConversationLocalSummary(data)", INDEX_HTML)
-        self.assertIn("function renderConversationLocalAnswer(data)", INDEX_HTML)
+        self.assertIn("function setConversationBusy(active, runLocal)", INDEX_HTML)
+        self.assertIn('id="dialogBusy"', INDEX_HTML)
+        self.assertIn('id="sendMessageBtn"', INDEX_HTML)
+        self.assertIn("setConversationBusy(true, runLocal);", INDEX_HTML)
+        self.assertIn("setConversationBusy(false);", INDEX_HTML)
         self.assertIn("if (runLocal) renderConversationLocalSummary(data);", INDEX_HTML)
-        self.assertIn("renderConversationLocalAnswer(data);", INDEX_HTML)
+        self.assertNotIn("function renderConversationLocalAnswer(data)", INDEX_HTML)
+        self.assertNotIn("renderConversationLocalAnswer(data);", INDEX_HTML)
         self.assertIn("Локальный ответ получен в продолжении диалога.", INDEX_HTML)
         self.assertIn("Внешний маршрут не использовался.", INDEX_HTML)
         self.assertIn("Проверка данных: ${packageData.query_mask_status || '-'}, замен ${packageData.query_mask_replacements || 0}.", INDEX_HTML)

@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gaia Local Analytics System</title>
+  <title>Gaia</title>
   <style>
     :root {
-      --sun: #f2c84b;
-      --sun-deep: #d99b18;
-      --sun-soft: #fff0ad;
-      --mint: #e7f5ec;
-      --sky: #e9f2ff;
-      --clay: #f5ede2;
-      --ink: #201d18;
-      --line: #d8b64d;
-      --paper: #fff8df;
-      --panel: #fffdf3;
-      --white: #ffffff;
-      --green: #2f7d59;
-      --red: #9f3a33;
-      --amber: #a76500;
+      --sun: #f1dfb0;
+      --sun-deep: #d4af64;
+      --sun-soft: #fff5d9;
+      --mint: #d8f1eb;
+      --sky: #dce9ff;
+      --clay: #e7eaf2;
+      --ink: #eaf0ff;
+      --line: #53c7b6;
+      --paper: #101b36;
+      --panel: #14213f;
+      --white: #f7f9ff;
+      --green: #49bd9d;
+      --red: #e97c83;
+      --amber: #e4bd73;
     }
     * { box-sizing: border-box; }
     body {
@@ -27,7 +27,9 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--ink);
       background:
-        linear-gradient(140deg, rgba(242,200,75,.45) 0, rgba(233,242,255,.72) 38%, rgba(231,245,236,.64) 72%, rgba(255,250,240,1) 100%);
+        radial-gradient(circle at 84% -12%, rgba(83,199,182,.16), transparent 35%),
+        radial-gradient(circle at 8% 12%, rgba(241,223,176,.13), transparent 28%),
+        linear-gradient(140deg, #071126 0%, #0d1b38 52%, #101c3a 100%);
       min-height: 100vh;
     }
     header {
@@ -36,12 +38,20 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      border-bottom: 1px solid rgba(255,255,255,.5);
-      background: rgba(255,253,243,.5);
+      border-bottom: 1px solid rgba(175,205,241,.16);
+      background: rgba(7,17,38,.68);
       backdrop-filter: blur(18px);
     }
-    h1 { margin: 0; font-size: 25px; letter-spacing: 0; }
-    .subtitle { margin-top: 4px; opacity: .75; font-size: 14px; }
+    .brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+    .brand-logo {
+      width: 62px;
+      height: 62px;
+      border-radius: 18px;
+      object-fit: cover;
+      box-shadow: 0 0 0 1px rgba(241,223,176,.3), 0 14px 30px rgba(0,0,0,.32);
+    }
+    h1 { margin: 0; color: #fff7df; font-size: 34px; line-height: .95; letter-spacing: -.055em; }
+    .subtitle { margin-top: 7px; color: rgba(218,233,255,.7); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
     .header-actions {
       display: flex;
       align-items: center;
@@ -62,7 +72,7 @@
       padding: 6px 10px;
       font-size: 12px;
       font-weight: 750;
-      color: rgba(32,29,24,.82);
+      color: rgba(234,240,255,.88);
       max-width: 280px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -91,7 +101,7 @@
     .status-chip.warn::before { background: var(--amber); }
     .status-chip.danger::before { background: var(--red); }
     .app-status-bar .status-chip {
-      color: rgba(32,29,24,.72);
+      color: rgba(218,233,255,.72);
       font-weight: 650;
       max-width: none;
     }
@@ -99,11 +109,11 @@
       padding: 18px 28px 28px;
     }
     section {
-      background: rgba(255,255,255,.56);
-      border: 1px solid rgba(255,255,255,.62);
+      background: rgba(20,33,63,.74);
+      border: 1px solid rgba(175,205,241,.16);
       border-radius: 8px;
       padding: 16px;
-      box-shadow: 0 18px 42px rgba(60, 43, 0, .10);
+      box-shadow: 0 18px 42px rgba(0, 4, 16, .24);
       backdrop-filter: blur(18px);
     }
     .context-panel,
@@ -116,28 +126,28 @@
       display: flex;
       gap: 4px;
       padding: 10px 28px 12px;
-      border-bottom: 1px solid rgba(255,255,255,.46);
-      background: rgba(255,253,243,.44);
+      border-bottom: 1px solid rgba(175,205,241,.12);
+      background: rgba(7,17,38,.45);
       backdrop-filter: blur(18px);
     }
     .nav-button {
-      background: rgba(255,255,255,.54);
+      background: rgba(255,255,255,.07);
       color: var(--ink);
-      border-color: rgba(32,29,24,.10);
+      border-color: rgba(175,205,241,.16);
       box-shadow: none;
     }
     .nav-button.active {
-      background: linear-gradient(180deg, rgba(43,42,38,.95), rgba(32,29,24,.92));
-      color: white;
-      box-shadow: 0 8px 20px rgba(32,29,24,.18);
+      background: linear-gradient(180deg, #2e8f91, #1b5969);
+      color: #fffdf5;
+      box-shadow: 0 8px 20px rgba(0,0,0,.24);
     }
     .app-status-bar {
       display: none;
       flex-wrap: wrap;
       gap: 8px;
       padding: 0 28px 14px;
-      background: rgba(255,253,243,.26);
-      border-bottom: 1px solid rgba(255,255,255,.38);
+      background: rgba(7,17,38,.32);
+      border-bottom: 1px solid rgba(175,205,241,.1);
     }
     .screen { display: none; }
     .screen.active { display: block; }
@@ -194,42 +204,42 @@
     }
     .panel-head p {
       margin: 4px 0 0;
-      color: rgba(32,29,24,.68);
+      color: rgba(218,233,255,.68);
       font-size: 13px;
       line-height: 1.35;
     }
     label { display: block; font-size: 13px; font-weight: 650; margin: 12px 0 6px; }
     select, textarea, input[type=file] {
       width: 100%;
-      border: 1px solid rgba(32,29,24,.25);
+      border: 1px solid rgba(175,205,241,.24);
       border-radius: 6px;
-      background: white;
+      background: rgba(6,15,34,.7);
       color: var(--ink);
       padding: 10px;
       font: inherit;
     }
     textarea { min-height: 180px; resize: vertical; line-height: 1.4; }
     button {
-      border: 1px solid rgba(32,29,24,.18);
+      border: 1px solid rgba(175,205,241,.18);
       border-radius: 6px;
-      background: linear-gradient(180deg, #2f2d28, #1f1d19);
-      color: white;
+      background: linear-gradient(180deg, #347f87, #1f5a6c);
+      color: #fffdf5;
       padding: 10px 13px;
       font-weight: 700;
       cursor: pointer;
       max-width: 100%;
       white-space: normal;
-      box-shadow: 0 8px 18px rgba(32,29,24,.12);
+      box-shadow: 0 8px 18px rgba(0,0,0,.2);
     }
     button.secondary {
-      background: rgba(255,255,255,.72);
+      background: rgba(255,255,255,.08);
       color: var(--ink);
       box-shadow: none;
     }
     button.secondary.primary {
       border-color: rgba(47,128,92,.8);
-      background: rgba(232,247,239,.95);
-      color: #18563c;
+      background: rgba(73,189,157,.18);
+      color: #c9f5e6;
     }
     button.local { background: linear-gradient(180deg, #3a956b, var(--green)); }
     button:disabled { opacity: .55; cursor: not-allowed; }
@@ -306,7 +316,12 @@
     }
     .conversation-row b,
     .conversation-row span { display: block; }
-    .conversation-row b { font-size: 13px; }
+    .conversation-row b {
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .conversation-row span { color: rgba(32,29,24,.68); font-size: 12px; margin-top: 3px; }
     .conversation-compose textarea {
       min-height: 72px;
@@ -323,6 +338,29 @@
     .dialogue-actions {
       margin-top: 10px;
     }
+    .dialog-busy {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 0 0;
+      padding: 9px 10px;
+      border: 1px solid rgba(8, 126, 139, .28);
+      border-radius: 8px;
+      background: #edf9fa;
+      color: #0c5460;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .dialog-busy::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border: 2px solid rgba(8, 126, 139, .28);
+      border-top-color: var(--teal);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .dialogue-actions button {
       min-height: 42px;
     }
@@ -644,6 +682,8 @@
       border-bottom: 1px solid rgba(32,29,24,.14);
       padding-bottom: 8px;
     }
+    .tabs-wrap { position: relative; }
+    .tabs-scroll-hint { display: none; }
     .tab-button {
       background: white;
       color: var(--ink);
@@ -921,6 +961,79 @@
     body.inspector-collapsed .inspector-panel .collapsed-label {
       display: block;
     }
+    /* Контрастная система: светлый текст существует только на темных поверхностях. */
+    :root {
+      --surface: #14213f;
+      --surface-raised: #1a2a4d;
+      --surface-input: #0b1730;
+      --text: #f3f7ff;
+      --text-muted: #b8c8e5;
+      --text-subtle: #90a5ca;
+    }
+    body, button, select, textarea, input { color: var(--text); }
+    .chip {
+      border-color: rgba(175,205,241,.2);
+      background: rgba(255,255,255,.09);
+    }
+    .metric,
+    .conversation-row,
+    .inbox-item,
+    .inbox-preview,
+    .message-card,
+    .mask-card,
+    .veil-table,
+    .summary-panel,
+    .empty-state,
+    .lore-source,
+    .local-status,
+    .project-row,
+    .project-detail-item,
+    .review-panel,
+    .dialog-panel,
+    .dialogue-composer {
+      color: var(--text);
+      background: var(--surface);
+      border-color: rgba(175,205,241,.2);
+    }
+    .conversation-row:hover,
+    .conversation-row:focus-visible,
+    .conversation-row.active,
+    .inbox-item.active,
+    .project-row.active,
+    .dialog-card.user,
+    .veil-table th,
+    .inline-warning.neutral,
+    .summary-item,
+    .scribe-plan-body,
+    .prompt-preview {
+      color: var(--text);
+      background: var(--surface-raised);
+      border-color: rgba(175,205,241,.24);
+    }
+    .conversation-row span,
+    .inbox-item span,
+    .field-hint,
+    .lore-source span,
+    .project-row span,
+    .empty-state,
+    .metric b,
+    .summary-item b,
+    .panel-head p {
+      color: var(--text-muted);
+      opacity: 1;
+    }
+    select, textarea, input[type=file], .project-detail-item textarea {
+      color: var(--text);
+      background: var(--surface-input);
+      border-color: rgba(175,205,241,.3);
+    }
+    textarea::placeholder { color: var(--text-muted); opacity: 1; }
+    .dialog-card.gaia { background: #123f4e; border-color: rgba(83,199,182,.45); }
+    .dialog-card.error, .inline-warning { background: #432937; color: #ffe8ea; }
+    .dialog-busy { background: #123f4e; color: #dbfbf5; border-color: rgba(83,199,182,.45); }
+    .dialog-busy::before { border-color: rgba(219,251,245,.35); border-top-color: #dbfbf5; }
+    .tab-button { background: var(--surface-raised); color: var(--text); border-color: rgba(175,205,241,.2); }
+    .tab-button.active { background: #2e8f91; color: #fffdf5; }
     .danger { color: var(--red); font-weight: 700; }
     .ok { color: var(--green); font-weight: 700; }
     .warn { color: var(--amber); font-weight: 700; }
@@ -945,6 +1058,22 @@
       .project-detail-grid { grid-template-columns: 1fr; }
       .tabs { overflow-x: auto; flex-wrap: nowrap; }
       .tab-button { flex: 0 0 auto; }
+      .tabs { padding-right: 36px; }
+      .tabs-scroll-hint {
+        display: block;
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 8px;
+        width: 34px;
+        padding-top: 8px;
+        color: var(--ink);
+        font-size: 22px;
+        font-weight: 800;
+        text-align: right;
+        pointer-events: none;
+        background: linear-gradient(90deg, rgba(255,253,243,0), rgba(255,253,243,.98) 52%);
+      }
     }
     @media (max-width: 560px) {
       .status { grid-template-columns: 1fr; }
@@ -955,11 +1084,15 @@
 </head>
 <body>
   <header>
-    <div>
-      <h1>Gaia Local Analytics System</h1>
-      <div class="subtitle">рабочий диалог по проекту с проверкой данных и управляемой памятью</div>
+    <div class="brand">
+      <img class="brand-logo" src="/assets/gaia-logo.png" alt="Gaia — богиня, держащая граф знаний">
+      <div>
+        <h1>Gaia</h1>
+        <div class="subtitle">Local Analytics System</div>
+      </div>
     </div>
     <div class="header-actions">
+      <button class="secondary" type="button" onclick="openGaiaWindow()">Открыть в отдельном окне</button>
       <span class="chip status-chip warn" id="workspaceHeaderChip" role="status" title="Работа идет на этом компьютере. Ответ: проверяется. Данные: проверка готова.">Проверяем готовность</span>
     </div>
   </header>
@@ -1011,6 +1144,7 @@
               <p>Задавай вопросы, прикладывай материалы и сохраняй устойчивые выводы в память после проверки.</p>
             </div>
           </div>
+          <div id="dialogBusy" class="dialog-busy" role="status" aria-live="polite" hidden>Gaia формирует локальный ответ. Это может занять некоторое время.</div>
           <div class="status dialogue-status" aria-label="Состояние ответа">
             <div class="metric"><b>Ответ</b><span id="route">-</span></div>
             <div class="metric"><b>Задача</b><span id="profileState">-</span></div>
@@ -1044,8 +1178,8 @@
             <input id="files" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
             <div id="analysisWarning" class="inline-warning" hidden></div>
             <div class="row dialogue-actions">
-              <button class="local" type="button" onclick="sendConversationMessage(true)">Получить ответ</button>
-              <button class="secondary" type="button" onclick="analyze()">Подготовить материалы</button>
+              <button class="local" id="sendMessageBtn" type="button" onclick="sendConversationMessage(true)">Получить ответ</button>
+              <button class="secondary" id="prepareMaterialsBtn" type="button" onclick="analyze()">Подготовить материалы</button>
               <button class="secondary" id="cancelJobBtn" type="button" onclick="cancelAnalysisJob()" disabled>Остановить подготовку</button>
               <button class="secondary" id="cancelLocalBtn" onclick="cancelLocalAnswer()" disabled>Остановить</button>
               <button class="secondary" id="scribeBtn" onclick="createScribePlan()" disabled>Сохранить выводы в память</button>
@@ -1170,6 +1304,7 @@
         <button class="secondary" type="button" onclick="showScreen('dialog')">Назад в Диалог</button>
       </div>
       <div class="inspector-body">
+      <div class="tabs-wrap">
       <div class="tabs" role="tablist" aria-label="Результат анализа">
         <button class="tab-button active" id="tab-summary" type="button" onclick="showTab('summary')" role="tab">Итог</button>
         <button class="tab-button" id="tab-security" type="button" onclick="showTab('security')" role="tab">Проверка данных</button>
@@ -1177,6 +1312,8 @@
         <button class="tab-button" id="tab-scribe" type="button" onclick="showScreen('scribe')" role="tab">Запись в память</button>
         <button class="tab-button" id="tab-prompt" type="button" onclick="showTab('prompt')" role="tab">Подготовленный запрос</button>
         <button class="tab-button" id="tab-json" type="button" onclick="showTab('json')" role="tab">Технические данные</button>
+      </div>
+      <span class="tabs-scroll-hint" aria-hidden="true">›</span>
       </div>
       <div id="panel-summary" class="tab-panel">
         <div id="summaryDetails" class="empty-state">Результат появится после сборки контекста.</div>
@@ -1604,7 +1741,12 @@
         button.type = 'button';
         button.className = `conversation-row ${currentConversation?.id === conversation.id ? 'active' : ''}`.trim();
         const title = document.createElement('b');
+        const firstUserMessage = (conversation.messages || []).find((message) => message.role === 'user');
+        const fullTitle = firstUserMessage?.masked_text || firstUserMessage?.text || conversation.title || 'Разговор';
         title.textContent = conversation.title || 'Разговор';
+        title.title = fullTitle;
+        button.title = fullTitle;
+        button.setAttribute('aria-label', fullTitle);
         const meta = document.createElement('span');
         meta.textContent = `${(conversation.messages || []).length} сообщений; ${conversation.updated_at || '-'}`;
         button.appendChild(title);
@@ -1622,19 +1764,27 @@
       resetDialogTimeline();
       if (!currentConversation) {
         addDialogCard('gaia', 'Разговор проекта', 'Создай новый разговор или подготовь материалы для ответа.');
+        syncScribeButtonForConversation();
         return;
       }
       const messages = currentConversation.messages || [];
       if (!messages.length) {
         addDialogCard('gaia', currentConversation.title || 'Новый разговор', 'История пуста. Напиши первое сообщение ниже.');
+        syncScribeButtonForConversation();
         return;
       }
+      const canUseCurrentAnswer = !!lastPackage && currentConversation.last_job_id === lastPackage.run_id;
+      const latestMessage = messages[messages.length - 1];
       for (const message of messages) {
-        addMessageCard(message);
+        const actions = canUseCurrentAnswer && message.id === latestMessage.id && message.role === 'assistant'
+          ? conversationAnswerActions()
+          : null;
+        addMessageCard(message, actions);
       }
+      syncScribeButtonForConversation();
     }
 
-    function addMessageCard(message) {
+    function addMessageCard(message, actions) {
       const root = document.getElementById('dialogTimeline');
       const card = document.createElement('div');
       card.className = `message-card ${message.role || 'user'}`;
@@ -1648,6 +1798,19 @@
       }
       card.appendChild(head);
       card.appendChild(body);
+      if (actions && actions.length) {
+        const row = document.createElement('div');
+        row.className = 'dialog-actions';
+        for (const action of actions) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = action.className || 'secondary';
+          button.textContent = action.label;
+          button.onclick = action.onClick;
+          row.appendChild(button);
+        }
+        card.appendChild(row);
+      }
       root.appendChild(card);
       root.scrollTop = root.scrollHeight;
     }
@@ -1686,47 +1849,62 @@
         return;
       }
       conversationMessage(runLocal ? 'Gaia проверяет данные и готовит ответ...' : 'Gaia проверяет данные и готовит материалы...', true);
+      setConversationBusy(true, runLocal);
       const form = new FormData();
       form.append('text', text);
       form.append('profile', document.getElementById('profile').value);
       form.append('run_local', runLocal ? 'true' : 'false');
       for (const file of filesInput.files) form.append('files', file);
-      const res = await fetch(`/api/conversations/${currentConversation.id}/messages`, {
-        method: 'POST',
-        body: form
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        conversationMessage(errorMessage(data.error, 'Не удалось отправить сообщение.'), false);
-        setOutput(JSON.stringify(data, null, 2));
-        return;
-      }
-      input.value = "";
-      filesInput.value = "";
-      currentConversation = data.conversation;
-      lastPackage = data.package;
-      lastPrompt = data.package?.prompt || "";
-      currentJobId = data.package?.run_id || "";
-      renderPackage(data.package);
-      currentConversation = data.conversation;
-      renderCurrentConversation();
-      await loadConversations();
-      if (runLocal) renderConversationLocalSummary(data);
-      if (runLocal && data.local_result && !data.local_result.ok) {
-        conversationMessage(errorMessage(data.local_result.error, 'Сообщение сохранено, но ответ не получен.'), false);
-        addDialogCard('error', 'Ответ не получен', errorMessage(data.local_result.error, 'Локальный ответ не вернулся.'));
-      } else if (runLocal && data.local_result && data.local_result.prompt_compacted) {
-        conversationMessage('Ответ получен. Материалы были сокращены под окно локальной модели.', true);
-        renderConversationLocalAnswer(data);
-        addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
-      } else {
-        conversationMessage('Сообщение сохранено в истории проекта.', true);
-        if (runLocal && data.local_result) {
-          renderConversationLocalAnswer(data);
-          addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
+      try {
+        const res = await fetch(`/api/conversations/${currentConversation.id}/messages`, {
+          method: 'POST',
+          body: form
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          conversationMessage(errorMessage(data.error, 'Не удалось отправить сообщение.'), false);
+          setOutput(JSON.stringify(data, null, 2));
+          return;
         }
+        input.value = "";
+        filesInput.value = "";
+        currentConversation = data.conversation;
+        lastPackage = data.package;
+        lastPrompt = data.package?.prompt || "";
+        currentJobId = data.package?.run_id || "";
+        renderPackage(data.package);
+        currentConversation = data.conversation;
+        renderCurrentConversation();
+        await loadConversations();
+        if (runLocal) renderConversationLocalSummary(data);
+        if (runLocal && data.local_result && !data.local_result.ok) {
+          conversationMessage(errorMessage(data.local_result.error, 'Сообщение сохранено, но ответ не получен.'), false);
+          addDialogCard('error', 'Ответ не получен', errorMessage(data.local_result.error, 'Локальный ответ не вернулся.'));
+        } else if (runLocal && data.local_result && data.local_result.prompt_compacted) {
+          conversationMessage('Ответ получен. Материалы были сокращены под окно локальной модели.', true);
+          addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
+        } else {
+          conversationMessage('Сообщение сохранено в истории проекта.', true);
+          if (runLocal && data.local_result) {
+            addDialogCard('gaia', 'Защита данных', safeTokenExplanation(data.package));
+          }
+        }
+        setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
+      } finally {
+        setConversationBusy(false);
       }
-      setOutput(JSON.stringify(redactTechnicalPayload(data), null, 2));
+    }
+
+    function setConversationBusy(active, runLocal) {
+      const busy = document.getElementById('dialogBusy');
+      const answerButton = document.getElementById('sendMessageBtn');
+      const prepareButton = document.getElementById('prepareMaterialsBtn');
+      busy.hidden = !active;
+      if (active) busy.textContent = runLocal
+        ? 'Gaia формирует локальный ответ. Это может занять некоторое время.'
+        : 'Gaia готовит материалы. Это может занять некоторое время.';
+      answerButton.disabled = active;
+      prepareButton.disabled = active;
     }
 
     async function archiveCurrentConversation() {
@@ -2040,7 +2218,6 @@
           reason: 'Добавь запрос или файл для анализа.'
         });
         setSummaryDetails(['Пустая форма не отправлена: задача обработки не создана.']);
-        addDialogCard('error', 'Запуск остановлен', 'Добавь запрос или файл для анализа.');
         return;
       }
       if (!query && hasFiles) {
@@ -2897,14 +3074,23 @@
       ]);
     }
 
-    function renderConversationLocalAnswer(data) {
-      const localResult = data.local_result || {};
-      if (!localResult.ok) return;
-      addDialogCard('local-answer', 'Локальный ответ', localResult.structured_answer || localResult.answer || 'Локальный ответ пуст.', [
+    function conversationAnswerActions() {
+      return [
         { label: 'Уточнить запрос', onClick: () => document.getElementById('query').focus() },
         { label: 'Сохранить выводы в память', onClick: () => createScribePlan() },
         { label: 'Показать подготовленный запрос', onClick: () => showInspectorTab('prompt') }
-      ]);
+      ];
+    }
+
+    function syncScribeButtonForConversation() {
+      const button = document.getElementById('scribeBtn');
+      if (!button) return;
+      const messages = currentConversation?.messages || [];
+      const latestMessage = messages[messages.length - 1];
+      const hasCurrentAnswerAction = !!lastPackage
+        && currentConversation?.last_job_id === lastPackage.run_id
+        && latestMessage?.role === 'assistant';
+      button.hidden = hasCurrentAnswerAction;
     }
 
     function renderPackageSummary(data) {
@@ -3480,6 +3666,25 @@
       });
       const data = await res.json();
       setOutput(JSON.stringify(data, null, 2));
+    }
+
+    async function openGaiaWindow() {
+      const button = document.activeElement;
+      if (button instanceof HTMLButtonElement) button.disabled = true;
+      try {
+        const res = await fetch('/api/launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ module: 'gaia' })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Не удалось открыть окно Gaia.');
+        setOutput('Gaia открыта в отдельном системном окне. Эту вкладку можно закрыть.');
+      } catch (error) {
+        setOutput(`Окно Gaia не открыто: ${error.message}`);
+      } finally {
+        if (button instanceof HTMLButtonElement) button.disabled = false;
+      }
     }
 
     function setOutput(value) {

@@ -27,7 +27,7 @@ from .conversations import (
     list_conversations,
 )
 from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
-from .launchers import launch_module
+from .launchers import launch_gaia_window, launch_module
 from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
 from .profiles import profile_payloads
@@ -156,6 +156,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/" or self.path.startswith("/?"):
             text_response(self, INDEX_HTML, set_cookie=session_cookie())
+            return
+        if self.path == "/assets/gaia-logo.png":
+            logo = Path(__file__).with_name("static") / "assets" / "gaia-logo.png"
+            try:
+                body = logo.read_bytes()
+            except OSError:
+                error_response(self, "asset_not_found", "asset not found", 404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path == "/api/projects":
             json_response(self, {
@@ -788,7 +802,7 @@ def multipart_files(fields: list[MultipartField], name: str) -> list[MultipartFi
     return [field for field in fields if field.name == name and field.filename]
 
 
-def main() -> int:
+def main(open_window: bool = False) -> int:
     try:
         ensure_dirs()
     except ConfigError as exc:
@@ -810,6 +824,10 @@ def main() -> int:
         print(f"Gaia server error: cannot bind http://{SETTINGS.host}:{SETTINGS.port}: {exc}")
         return 2
     print(f"Gaia Local Analytics: http://{SETTINGS.host}:{SETTINGS.port}")
+    if open_window:
+        result = launch_gaia_window()
+        if not result.get("ok"):
+            print(f"Gaia window warning: {result.get('error')}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
