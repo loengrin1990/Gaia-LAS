@@ -292,6 +292,22 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Проверка данных: ${packageData.query_mask_status || '-'}, замен ${packageData.query_mask_replacements || 0}.", INDEX_HTML)
         self.assertIn("Проектная память не менялась автоматически.", INDEX_HTML)
 
+    def test_dialog_busy_respects_hidden_attribute(self) -> None:
+        self.assertIn('.dialog-busy[hidden] { display: none; }', INDEX_HTML)
+        self.assertIn('id="dialogBusy" class="dialog-busy"', INDEX_HTML)
+
+    def test_contrast_overrides_cover_all_top_level_screens(self) -> None:
+        for selector in (
+            '.dialog-card.local-answer',
+            '.scope-note',
+            '.management-panel',
+            '.mini-grid input',
+            '.mini-grid select',
+        ):
+            self.assertIn(selector, INDEX_HTML)
+        self.assertIn('color: var(--text);', INDEX_HTML)
+        self.assertIn('background: var(--surface);', INDEX_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

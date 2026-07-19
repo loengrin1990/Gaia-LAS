@@ -360,6 +360,7 @@
       border-radius: 50%;
       animation: spin .8s linear infinite;
     }
+    .dialog-busy[hidden] { display: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .dialogue-actions button {
       min-height: 42px;
@@ -1028,8 +1029,25 @@
       border-color: rgba(175,205,241,.3);
     }
     textarea::placeholder { color: var(--text-muted); opacity: 1; }
+    .dialog-card,
+    .dialog-card.user,
+    .dialog-card.local-answer,
+    .structured-risk,
+    .token-note,
+    .scope-note,
+    .management-panel,
+    .mini-grid input,
+    .mini-grid select {
+      color: var(--text);
+      background: var(--surface);
+      border-color: rgba(175,205,241,.2);
+    }
     .dialog-card.gaia { background: #123f4e; border-color: rgba(83,199,182,.45); }
     .dialog-card.error, .inline-warning { background: #432937; color: #ffe8ea; }
+    .risk-level { color: var(--text); background: var(--surface-raised); }
+    .risk-level.high { background: #5b2d31; color: #ffe8ea; }
+    .risk-level.medium { background: #5b4820; color: #fff1bd; }
+    .risk-level.low { background: #174d3a; color: #d7f7e9; }
     .dialog-busy { background: #123f4e; color: #dbfbf5; border-color: rgba(83,199,182,.45); }
     .dialog-busy::before { border-color: rgba(219,251,245,.35); border-top-color: #dbfbf5; }
     .tab-button { background: var(--surface-raised); color: var(--text); border-color: rgba(175,205,241,.2); }
