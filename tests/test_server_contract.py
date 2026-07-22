@@ -37,12 +37,21 @@ class ServerContractTests(unittest.TestCase):
         self.assertEqual(submit.call_args.args[2], [("cleaned.txt", b"[PERSON_1]")])
 
     def test_review_replacement_creates_managed_new_version(self) -> None:
-        service = Mock(); service.decide.return_value = {"state": "review_in_progress"}; service.get.return_value = {"cleaned_text": "Residual", "findings": [{"finding_id":"model-1","category":"Сотрудник","start":0,"end":8}]}
+        service = Mock(); service.decide.return_value = {"state": "review_in_progress"}; service.get.return_value = {"cleaned_text": "Residual", "findings": [{"finding_id":"model-1","category":"Сотрудник","start":0,"end":8}]}; service.create_successor.return_value={"artifact_id":"san_2"}
         intake = Mock(); intake.review.return_value = service; intake.add_dictionary_value.return_value = {"artifact_id":"san_2"}
         handler = SimpleNamespace(path="/api/reviews/san_1/decision", read_json=lambda: {"project":"synthetic","finding_id":"model-1","decision":"replace"})
         with (patch("gaia.server.ControlledIntake", return_value=intake), patch("gaia.server.json_response") as response): Handler.handle_review_action(handler)
         intake.add_dictionary_value.assert_called_once_with("synthetic", "san_1", "Сотрудник", "Residual")
         self.assertEqual(response.call_args.args[1]["new_version"]["artifact_id"], "san_2")
+        service.create_successor.assert_called_once_with("san_1", "san_2")
+
+    def test_dictionary_version_creates_successor_review(self) -> None:
+        service=Mock(); service.create_successor.return_value={"artifact_id":"san_2"}
+        intake=Mock(); intake.review.return_value=service; intake.add_dictionary_value.return_value={"artifact_id":"san_2"}
+        handler=SimpleNamespace(path="/api/reviews/san_1/dictionary",read_json=lambda:{"project":"synthetic","category":"Сотрудник","value":"Residual"})
+        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.json_response") as response): Handler.handle_review_action(handler)
+        service.create_successor.assert_called_once_with("san_1", "san_2")
+        self.assertEqual(response.call_args.args[1]["review"]["artifact_id"], "san_2")
 
     def test_context_compile_uses_existing_local_api(self) -> None:
         compiler=Mock(); compiler.compile.return_value=[{"id":"ctx_1","item_type":"requirement"}]

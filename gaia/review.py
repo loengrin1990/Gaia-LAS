@@ -46,6 +46,33 @@ class ReviewService:
         if not record or record["workspace_id"] != self.workspace_id: raise ProvenanceError("Проверка недоступна в этом рабочем пространстве.")
         return self.safe(record, include_text)
 
+    def get_or_start(self, artifact_id: str, include_text: bool = False) -> dict[str, Any]:
+        """Return a durable review, restoring a missing state for a current version."""
+        record = self._read().get(artifact_id)
+        if record and record.get("workspace_id") == self.workspace_id:
+            return self.safe(record, include_text)
+        item = self.store.object_metadata(self.workspace_id, artifact_id)
+        if item.get("kind") != "sanitized" or not item.get("current"):
+            raise ProvenanceError("Проверка недоступна для этой версии.")
+        return self.start(artifact_id)
+
+    def create_successor(self, previous_id: str, artifact_id: str) -> dict[str, Any]:
+        """Create the review state before exposing a newly sanitized version.
+
+        A new deterministic version needs a fresh local check because positions
+        and residual findings can change. Prior user decisions are retained as
+        review history but never confirm the new version automatically.
+        """
+        previous = self._read().get(previous_id)
+        if not previous or previous.get("workspace_id") != self.workspace_id:
+            raise ProvenanceError("Предыдущее состояние проверки недоступно.")
+        self.start(artifact_id)
+        record = self._read()[artifact_id]
+        record["carried_decisions"] = list(previous.get("decisions") or [])
+        record["replaces_review"] = previous_id
+        self._write(artifact_id, record)
+        return self.safe(record, include_text=True)
+
     def decide(self, artifact_id: str, finding_id: str, decision: str, category: str = "") -> dict[str, Any]:
         if decision not in {"replace", "keep", "change_category"}: raise ProvenanceError("Некорректное решение проверки.")
         record = self._read().get(artifact_id)
@@ -66,6 +93,7 @@ class ReviewService:
 
     def safe(self, record: dict[str, Any], include_text: bool = False) -> dict[str, Any]:
         result = {k: record[k] for k in ("artifact_id", "state", "findings", "decisions", "confirmed")}
+        result["carried_decisions"] = list(record.get("carried_decisions") or [])
         if include_text: result["cleaned_text"] = self._text(record["artifact_id"])
         return result
 

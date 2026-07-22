@@ -38,3 +38,21 @@ class LocalReviewTests(unittest.TestCase):
             self.assertFalse(state["confirmed"])
             self.assertTrue(s.object_metadata(w,san["artifact_id"])["current"])
         finally: tmp.cleanup()
+
+    def test_successor_review_is_available_without_confirming_the_new_version(self):
+        tmp,s,w,src,ext,san=self.setup_review()
+        try:
+            model=lambda text:{"findings":[]}
+            review=ReviewService(s,w,model)
+            review.start(san["artifact_id"])
+            old_record=review._read()[san["artifact_id"]]
+            old_record["decisions"]=[{"finding_id":"model-1","decision":"replace","category":"Сотрудник","created_at":"synthetic"}]
+            review._write(san["artifact_id"], old_record)
+            newer=protect(s,w,ext["artifact_id"],rules_version="v2")["sanitized"]
+            successor=review.create_successor(san["artifact_id"], newer["artifact_id"])
+            self.assertEqual(successor["artifact_id"], newer["artifact_id"])
+            self.assertFalse(successor["confirmed"])
+            self.assertEqual(len(successor["carried_decisions"]), 1)
+            self.assertEqual(review.get(newer["artifact_id"])["artifact_id"], newer["artifact_id"])
+            with self.assertRaises(ProvenanceError): review.confirm(san["artifact_id"])
+        finally: tmp.cleanup()

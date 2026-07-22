@@ -1489,6 +1489,8 @@
       box.hidden = !message; box.textContent = message || ''; box.classList.toggle('error', error);
     }
     function journeyError(data, fallback) {
+      if (data?.error?.code === 'material_not_available') return 'Материал недоступен в выбранном рабочем пространстве. Данные не изменены.';
+      if (data?.error?.code === 'review_temporarily_unavailable') return 'Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.';
       const message = errorMessage(data?.error, fallback);
       return `${message} Данные не изменены. Проверьте рабочее пространство и повторите действие.`;
     }
@@ -1568,6 +1570,7 @@
       const side=document.createElement('section'); side.className='journey-card'; side.innerHTML='<h3>Результат проверки</h3>';
       const badge=document.createElement('span'); badge.className=`journey-status ${state.tone}`; badge.textContent=state.label; side.appendChild(badge);
       const explanation=document.createElement('p'); explanation.textContent=state.detail; side.appendChild(explanation);
+      if ((review.carried_decisions || []).length) { const carried=document.createElement('p'); carried.className='journey-meta'; carried.textContent=`Сохранены решения предыдущей версии: ${review.carried_decisions.length}. Новая версия требует отдельного подтверждения.`; side.appendChild(carried); }
       for (const finding of review.findings || []) {
         const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);
         const name=document.createElement('b'); name.textContent=`Предложение: ${finding.category}`; row.appendChild(name);

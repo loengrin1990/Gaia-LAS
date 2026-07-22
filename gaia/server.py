@@ -483,22 +483,33 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_review_get(self) -> None:
         route = urlparse(self.path); parts = route.path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
-        try: json_response(self, ControlledIntake().review(project).get(artifact_id, include_text=True))
-        except ProvenanceError: error_response(self, "review_not_found", "Проверка недоступна в этом рабочем пространстве.", 404)
+        intake = ControlledIntake()
+        try:
+            json_response(self, intake.review(project).get_or_start(artifact_id, include_text=True))
+        except ProvenanceError:
+            try:
+                intake.store.object_metadata(intake._workspace_for(project), artifact_id)
+            except ProvenanceError:
+                error_response(self, "material_not_available", "Материал недоступен в выбранном рабочем пространстве. Данные не изменены.", 404)
+            else:
+                error_response(self, "review_temporarily_unavailable", "Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.", 409)
 
     def handle_review_action(self) -> None:
         parts = urlparse(self.path).path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; action = parts[4] if len(parts) >= 5 else ""; payload = self.read_json(); project = str(payload.get("project") or "")
         try:
-            review = ControlledIntake().review(project)
+            intake = ControlledIntake(); review = intake.review(project)
             if action == "check": json_response(self, review.start(artifact_id), 202); return
             if action == "decision":
                 decision = str(payload.get("decision") or ""); result = review.decide(artifact_id, str(payload.get("finding_id") or ""), decision, str(payload.get("category") or ""))
                 if decision == "replace":
                     current = review.get(artifact_id, include_text=True); finding = next(item for item in current["findings"] if item["finding_id"] == str(payload.get("finding_id") or ""))
-                    result["new_version"] = ControlledIntake().add_dictionary_value(project, artifact_id, finding["category"], current["cleaned_text"][finding["start"]:finding["end"]])
+                    result["new_version"] = intake.add_dictionary_value(project, artifact_id, finding["category"], current["cleaned_text"][finding["start"]:finding["end"]])
+                    result["review"] = review.create_successor(artifact_id, result["new_version"]["artifact_id"])
                 json_response(self, result); return
             if action == "dictionary":
-                json_response(self, ControlledIntake().add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or "")), 202); return
+                result = intake.add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or ""))
+                result["review"] = review.create_successor(artifact_id, result["artifact_id"])
+                json_response(self, result, 202); return
             if action == "confirm":
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)

@@ -17,6 +17,8 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("function loadJourneySummary()", INDEX_HTML)
         self.assertIn("/api/materials?project=", INDEX_HTML)
         self.assertIn("Эта версия устарела. Откройте актуальную версию материала.", INDEX_HTML)
+        self.assertIn("Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.", INDEX_HTML)
+        self.assertIn("Материал недоступен в выбранном рабочем пространстве. Данные не изменены.", INDEX_HTML)
         self.assertIn("button.disabled=true", INDEX_HTML)
         self.assertNotIn(">requires_review<", INDEX_HTML)
 
