@@ -33,6 +33,8 @@ class ControlledIntakeTests(unittest.TestCase):
             self.assertFalse(reprocessed["export_allowed"])
             self.assertNotIn("text", intake.protection_metadata("synthetic-first", reprocessed["artifact_id"]))
             self.assertEqual(intake.protection_lineage("synthetic-first", reprocessed["artifact_id"])["source_id"], source["source_id"])
+            updated = intake.add_dictionary_value("synthetic-first", reprocessed["artifact_id"], "Организация", "Организация Альфа")
+            self.assertTrue(intake.store.object_metadata(intake._workspace_for("synthetic-first"), updated["artifact_id"])["current"])
             with self.assertRaises(ProvenanceError):
                 intake.metadata("synthetic-second", source["source_id"])
 

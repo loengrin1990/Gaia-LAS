@@ -476,6 +476,8 @@ class Handler(BaseHTTPRequestHandler):
             review = ControlledIntake().review(project)
             if action == "check": json_response(self, review.start(artifact_id), 202); return
             if action == "decision": json_response(self, review.decide(artifact_id, str(payload.get("finding_id") or ""), str(payload.get("decision") or ""), str(payload.get("category") or ""))); return
+            if action == "dictionary":
+                json_response(self, ControlledIntake().add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or "")), 202); return
             if action == "confirm":
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)

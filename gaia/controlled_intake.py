@@ -110,6 +110,17 @@ class ControlledIntake:
         path = self.store.root / "pseudonyms" / f"{workspace_id}.dictionary.json"
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
+    def add_dictionary_value(self, project: str, artifact_id: str, category: str, value: str) -> dict[str, Any]:
+        workspace_id = self._workspace_for(project)
+        if not value.strip(): raise ProvenanceError("Не удалось добавить пустое значение в локальный словарь.")
+        dictionary = self.dictionary(project); dictionary.setdefault(category, [])
+        if value not in dictionary[category]: dictionary[category].append(value)
+        self.set_dictionary(project, dictionary)
+        item = self.store.object_metadata(workspace_id, artifact_id)
+        parent = (item.get("parents") or [""])[0]
+        if item.get("kind") != "sanitized" or not parent: raise ProvenanceError("Очищенная версия недоступна для повторной очистки.")
+        return self.reprocess_protection(project, parent, "dictionary-v2")
+
     def _workspace_for(self, project: str) -> str:
         key = hashlib.sha256(project.strip().encode("utf-8")).hexdigest()
         with path_lock(self.path):

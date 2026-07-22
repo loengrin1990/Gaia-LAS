@@ -1765,6 +1765,12 @@
           button.onclick=async()=>{ await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/decision`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,finding_id:finding.finding_id,decision:decision[0]})}); button.disabled=true; };
           actions.appendChild(button);
         }
+        const category = document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent=`Изменить категорию: ${finding.category}`;
+        category.onclick=async()=>{ const value=window.prompt('Категория',finding.category); if(!value)return; await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,finding_id:finding.finding_id,decision:'change_category',category:value})}); };
+        actions.appendChild(category);
+        const dictionary = document.createElement('button'); dictionary.type='button'; dictionary.className='secondary'; dictionary.textContent=`Добавить в словарь: ${finding.category}`;
+        dictionary.onclick=async()=>{ const value=(review.cleaned_text||'').slice(finding.start,finding.end); const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/dictionary`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,category:finding.category,value})}); const data=await res.json(); if(res.ok){ state.textContent='Создана новая версия очищенного материала'; } };
+        actions.appendChild(dictionary);
       }
       const confirm = document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить очищенный материал';
       confirm.onclick=async()=>{ const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,query,profile})}); const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось подтвердить материал.'),data);return;} currentJobId=data.job_id; pollJob(currentJobId); };
