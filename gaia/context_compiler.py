@@ -11,6 +11,7 @@ COMPILER_VERSION = "context-v1"
 PROMPT_SCHEMA_VERSION = "context-schema-v1"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
+RELATIONS_FIELD = "relations"
 MAX_CANDIDATES = 32
 MAX_RESULT_SIZE = 48_000
 MAX_INPUT_SIZE = 120_000
@@ -54,7 +55,12 @@ class ContextCompiler:
                 if sanitized_id not in sources:
                     sources.append(sanitized_id); self.store._update(duplicate["id"], source_links=sources)
                 result.append(self.store.object_metadata(self.workspace_id, duplicate["id"])); continue
-            record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=[candidate["block"]], title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route="local_loopback", version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **{key: candidate.get(key) for key in OPTIONAL if key in candidate})
+            values = {key: candidate.get(key) for key in OPTIONAL - {"status"} if key in candidate}
+            if "status" in candidate:
+                values["explicit_status"] = candidate["status"]
+            if RELATIONS_FIELD in candidate:
+                values["proposed_relations"] = candidate[RELATIONS_FIELD]
+            record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=[candidate["block"]], title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route="local_loopback", version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **values)
             self._mark_possible_duplicates(record)
             self._mark_conflicts(record)
             self.store._add(record); result.append(record)
@@ -152,11 +158,13 @@ def validate_candidates(payload: Any, length: int) -> list[dict[str, Any]]:
     result=[]
     required={"type","title","statement","block","confidence","requires_review"}
     for item in payload["candidates"]:
-        if not isinstance(item,dict) or not required.issubset(item) or set(item)-required-OPTIONAL: raise ProvenanceError("Некорректный результат компилятора.")
+        if not isinstance(item,dict) or not required.issubset(item) or set(item)-required-OPTIONAL-{RELATIONS_FIELD}: raise ProvenanceError("Некорректный результат компилятора.")
         if item["type"] not in TYPES or not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str) or not 1<=len(item["statement"])<=1200 or item["confidence"] not in {"low","medium","high"} or item["requires_review"] is not True: raise ProvenanceError("Некорректный результат компилятора.")
         block=item["block"]
         if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise ProvenanceError("Некорректная ссылка на блок.")
         for field in OPTIONAL:
             if field in item and not isinstance(item[field],str): raise ProvenanceError("Некорректный результат компилятора.")
+        if RELATIONS_FIELD in item and (not isinstance(item[RELATIONS_FIELD], list) or len(item[RELATIONS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[RELATIONS_FIELD])):
+            raise ProvenanceError("Некорректный результат компилятора.")
         result.append(dict(item))
     return result

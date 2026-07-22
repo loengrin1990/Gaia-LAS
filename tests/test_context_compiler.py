@@ -106,6 +106,15 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertFalse(service.get(result[1]["id"])["current"])
         finally: tmp.cleanup()
 
+    def test_explicit_optional_status_and_proposed_relations_are_safe_metadata(self):
+        tmp,s,w,san=self.setup()
+        try:
+            item=ContextCompiler(s,w,lambda text:{"candidates":[{"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":6},"confidence":"medium","requires_review":True,"status":"назначено","relations":["Локальная проверка"]}]}).compile(san["artifact_id"])[0]
+            self.assertEqual(item["status"],"requires_review")
+            self.assertEqual(item["explicit_status"],"назначено")
+            self.assertEqual(item["proposed_relations"],["Локальная проверка"])
+        finally: tmp.cleanup()
+
     def test_loopback_http_flow_compiles_and_reviews_safe_candidates(self):
         tmp,s,w,san=self.setup()
         server=None
