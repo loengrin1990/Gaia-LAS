@@ -203,13 +203,25 @@ def load_privacy_masker() -> Any | None:
     try:
         from privacy_masker import PrivacyMasker  # type: ignore
     except Exception:
-        return None
+        class BuiltInPrivacyMasker:
+            """Compatibility baseline when the optional Obsidian helper is absent."""
+
+            def apply(self, text: str) -> Any:
+                return type("MaskerResult", (), {"text": text, "counts": {}, "samples": {}})()
+
+        return BuiltInPrivacyMasker
     return PrivacyMasker
 
 
 def apply_base_masker(privacy_masker: Any, text: str) -> tuple[str, Counter, list[MaskFinding]]:
     masker = privacy_masker()
-    result = masker.apply(text)
+    apply = getattr(masker, "apply", None)
+    if not callable(apply):
+        # The optional external module is not a required part of Gaia's
+        # protection boundary. Keep the deterministic Gaia rules active when
+        # an incomplete or stale external class is present.
+        return text, Counter(), []
+    result = apply(text)
     findings: list[MaskFinding] = []
     for category, samples in sorted(result.samples.items()):
         for sample in samples:

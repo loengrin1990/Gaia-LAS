@@ -7,6 +7,19 @@ from gaia.ui import INDEX_HTML, load_index_html
 
 
 class UiReviewContractTests(unittest.TestCase):
+    def test_stage_six_journey_uses_business_sections_and_central_statuses(self) -> None:
+        for label in ("Материалы", "Проверка", "Контекст проекта", "Сводка"):
+            self.assertIn(label, INDEX_HTML)
+        self.assertIn("const journeyState =", INDEX_HTML)
+        self.assertIn("function loadJourneyMaterials()", INDEX_HTML)
+        self.assertIn("function openJourneyReview(artifactId)", INDEX_HTML)
+        self.assertIn("function renderJourneyContext(candidates)", INDEX_HTML)
+        self.assertIn("function loadJourneySummary()", INDEX_HTML)
+        self.assertIn("/api/materials?project=", INDEX_HTML)
+        self.assertIn("Эта версия устарела. Откройте актуальную версию материала.", INDEX_HTML)
+        self.assertIn("button.disabled=true", INDEX_HTML)
+        self.assertNotIn(">requires_review<", INDEX_HTML)
+
     def test_ui_is_loaded_from_static_asset(self) -> None:
         self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())
         self.assertEqual(INDEX_HTML, load_index_html())

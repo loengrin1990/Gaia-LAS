@@ -97,6 +97,12 @@ class EndToEndValidationTests(unittest.TestCase):
                 review = initial["review"]
                 assert isinstance(review, dict)
                 old_sanitized = str(review["artifact_id"])
+                status, materials = request("GET", f"/api/materials?project={project}")
+                self.assertEqual(status, 200)
+                self.assertEqual(len(materials["materials"]), 1)
+                self.assertEqual(materials["materials"][0]["review_state"], "requires_review")
+                self.assertNotIn(email, json.dumps(materials, ensure_ascii=False))
+                self.assertNotIn(secret, json.dumps(materials, ensure_ascii=False))
                 self.assertEqual(request("POST", f"/api/context/{old_sanitized}/compile", {"project": project})[0], 400)
                 status, safe_report = request("GET", f"/api/protection/{old_sanitized}?project={project}")
                 self.assertEqual(status, 200)
@@ -149,6 +155,7 @@ class EndToEndValidationTests(unittest.TestCase):
 
                 for path in (f"/api/materials/{source_id}?project={other}", f"/api/protection/{new_sanitized}?project={other}", f"/api/reviews/{new_sanitized}?project={other}", f"/api/context/{edited['id']}?project={other}"):
                     self.assertEqual(request("GET", path)[0], 404)
+                self.assertEqual(request("GET", f"/api/materials?project={other}")[1]["materials"], [])
                 self.assertEqual(request("POST", f"/api/context/{new_sanitized}/compile", {"project": other})[0], 400)
 
                 server.shutdown(); server.server_close(); server = start_server()

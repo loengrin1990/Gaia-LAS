@@ -206,6 +206,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             json_response(self, job_to_dict(job))
             return
+        if self.path == "/api/materials" or self.path.startswith("/api/materials?"):
+            self.handle_material_list()
+            return
         if self.path.startswith("/api/materials/"):
             self.handle_material_get()
             return
@@ -447,6 +450,13 @@ class Handler(BaseHTTPRequestHandler):
             error_response(self, "material_not_found", str(exc), 404)
             return
         json_response(self, payload)
+
+    def handle_material_list(self) -> None:
+        project = parse_qs(urlparse(self.path).query).get("project", [""])[0]
+        if not project:
+            error_response(self, "workspace_required", "Выберите рабочее пространство, чтобы увидеть материалы.", 400)
+            return
+        json_response(self, {"materials": ControlledIntake().materials(project)})
 
     def handle_protection_get(self) -> None:
         route = urlparse(self.path); parts = route.path.split("/")

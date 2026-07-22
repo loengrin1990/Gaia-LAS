@@ -78,6 +78,46 @@ class ControlledIntake:
         item = self.store.source_metadata(self._workspace_for(project), source_id)
         return {key: item[key] for key in ("source_id", "workspace_id", "status", "integrity_status", "created_at") if key in item}
 
+    def materials(self, project: str) -> list[dict[str, Any]]:
+        """Return a safe, user-facing index of material progress in one workspace.
+
+        The index intentionally contains no source bytes, checksums, paths, or
+        pseudonym dictionary entries. Identifiers are retained only for the UI
+        to address existing protected endpoints.
+        """
+        workspace_id = self._workspace_for(project)
+        objects = self.store._registry()["objects"].values()
+        by_parent: dict[str, list[dict[str, Any]]] = {}
+        for item in objects:
+            if item.get("workspace_id") != workspace_id:
+                continue
+            for parent in item.get("parents") or []:
+                by_parent.setdefault(parent, []).append(item)
+
+        records: list[dict[str, Any]] = []
+        for source in objects:
+            if source.get("workspace_id") != workspace_id or source.get("kind") != "source":
+                continue
+            extraction = next((item for item in by_parent.get(source["id"], []) if item.get("kind") == "extraction" and item.get("current")), None)
+            sanitized = next((item for item in by_parent.get(extraction["id"], []) if item.get("kind") == "sanitized" and item.get("current")), None) if extraction else None
+            review: dict[str, Any] = {}
+            if sanitized:
+                try:
+                    review = self.review(project).get(sanitized["id"])
+                except ProvenanceError:
+                    review = {}
+            records.append({
+                "source_id": source["id"],
+                "created_at": source.get("created_at", ""),
+                "source_status": source.get("status", "accepted"),
+                "current": bool(source.get("current", True)),
+                "version_count": 1 + int(bool(source.get("previous_id"))),
+                "sanitized_id": sanitized.get("id", "") if sanitized else "",
+                "review_state": review.get("state", "not_started"),
+                "review_confirmed": bool(review.get("confirmed")),
+            })
+        return sorted(records, key=lambda item: str(item["created_at"]), reverse=True)
+
     def lineage(self, project: str, object_id: str) -> dict[str, Any]:
         return self.store.lineage(self._workspace_for(project), object_id)
 

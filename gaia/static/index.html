@@ -1098,6 +1098,34 @@
       .row button { flex-basis: 100%; }
       .mask-details { grid-template-columns: 1fr; }
     }
+    .journey-screen { max-width: 1240px; margin: 0 auto; }
+    .journey-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
+    .journey-head h2 { margin:0; font-size:24px; color:#fff7df; }
+    .journey-head p { margin:6px 0 0; color:rgba(218,233,255,.72); }
+    .journey-workspace { min-width:260px; }
+    .journey-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:12px; }
+    .journey-card { border:1px solid rgba(175,205,241,.18); border-radius:8px; padding:14px; background:rgba(6,15,34,.42); min-width:0; }
+    .journey-card h3 { margin:0 0 7px; font-size:16px; }
+    .journey-card p { margin:6px 0; line-height:1.4; overflow-wrap:anywhere; }
+    .journey-meta { color:rgba(218,233,255,.68); font-size:12px; }
+    .journey-status { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 8px; font-weight:750; font-size:12px; background:rgba(255,255,255,.08); }
+    .journey-status::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--line); }
+    .journey-status.warn::before { background:var(--amber); }
+    .journey-status.danger::before { background:var(--red); }
+    .journey-status.ok::before { background:var(--green); }
+    .journey-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .journey-actions button { flex:0 1 auto; }
+    .journey-empty { padding:28px; text-align:center; color:rgba(218,233,255,.78); border:1px dashed rgba(175,205,241,.28); border-radius:8px; }
+    .journey-notice { margin:12px 0; padding:10px 12px; border-radius:6px; background:rgba(73,189,157,.12); border:1px solid rgba(73,189,157,.32); }
+    .journey-notice.error { background:rgba(233,124,131,.12); border-color:rgba(233,124,131,.42); }
+    .review-text { min-height:260px; white-space:pre-wrap; background:rgba(6,15,34,.7); border:1px solid rgba(175,205,241,.24); border-radius:6px; padding:12px; line-height:1.5; overflow:auto; }
+    .candidate-group { margin-top:18px; }
+    .candidate-group h3 { margin:0 0 9px; color:#fff7df; }
+    .candidate-flag { font-size:12px; color:#ffe0a0; font-weight:700; }
+    .summary-filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; margin-bottom:16px; }
+    .summary-filters label { margin:0; }
+    .journey-screen button:focus-visible, .journey-screen select:focus-visible, .journey-screen input:focus-visible { outline:3px solid #f1dfb0; outline-offset:2px; }
+    @media (max-width: 720px) { .journey-head { align-items:stretch; } .journey-workspace { width:100%; } }
   </style>
 </head>
 <body>
@@ -1115,10 +1143,13 @@
     </div>
   </header>
   <nav class="top-nav" aria-label="Основная навигация">
-    <button class="nav-button active" id="nav-dialog" type="button" onclick="showScreen('dialog')">Диалог</button>
+    <button class="nav-button active" id="nav-materials" type="button" onclick="showScreen('materials')">Материалы</button>
+    <button class="nav-button" id="nav-review" type="button" onclick="showScreen('review')">Проверка</button>
+    <button class="nav-button" id="nav-context" type="button" onclick="showScreen('context')">Контекст проекта</button>
+    <button class="nav-button" id="nav-summary" type="button" onclick="showScreen('summary')">Сводка</button>
+    <button class="nav-button" id="nav-dialog" type="button" onclick="showScreen('dialog')">Диалог</button>
     <button class="nav-button" id="nav-scribe" type="button" onclick="showScreen('scribe')">Память</button>
     <button class="nav-button" id="nav-projects" type="button" onclick="showScreen('projects')">Проекты</button>
-    <button class="nav-button" id="nav-inspector" type="button" onclick="showScreen('inspector')">Проверка</button>
   </nav>
   <div class="app-status-bar" aria-label="Состояние Gaia">
     <span class="chip status-chip" role="status" title="Память проекта используется для ответа">Память проекта</span>
@@ -1127,7 +1158,42 @@
     <span class="chip status-chip" role="status" title="Запись в память доступна только после проверки">Запись в память</span>
   </div>
   <main>
-    <div id="screen-dialog" class="screen active">
+    <section id="screen-materials" class="screen active journey-screen" aria-labelledby="materialsTitle">
+      <div class="journey-head">
+        <div><h2 id="materialsTitle">Материалы</h2><p>Добавляйте материалы проекта и переходите к следующему нужному действию.</p></div>
+        <div class="journey-workspace"><label for="journeyProject">Рабочее пространство</label><select id="journeyProject" onchange="changeJourneyWorkspace()"></select></div>
+      </div>
+      <section>
+        <label for="journeyFiles">Добавить материал</label>
+        <input id="journeyFiles" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
+        <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить материалы</button></div>
+        <div id="journeyMaterialsNotice" class="journey-notice" hidden role="status" aria-live="polite"></div>
+      </section>
+      <div id="journeyMaterials" class="journey-grid" aria-live="polite"></div>
+    </section>
+
+    <section id="screen-review" class="screen journey-screen" aria-labelledby="reviewTitle">
+      <div class="journey-head"><div><h2 id="reviewTitle">Проверка очищенного материала</h2><p>Проверьте предложения перед подтверждением актуальной версии.</p></div><button class="secondary" type="button" onclick="showScreen('materials')">К материалам</button></div>
+      <div id="journeyReview" class="journey-empty">Откройте материал, который требует проверки.</div>
+    </section>
+
+    <section id="screen-context" class="screen journey-screen" aria-labelledby="contextTitle">
+      <div class="journey-head"><div><h2 id="contextTitle">Контекст проекта</h2><p>Подтвердите, уточните или отклоните предложения из подтверждённых материалов.</p></div><button class="secondary" type="button" onclick="showScreen('summary')">Открыть сводку</button></div>
+      <div id="journeyContext" class="journey-empty">Сначала подтвердите очищенный материал, затем соберите проектный контекст.</div>
+    </section>
+
+    <section id="screen-summary" class="screen journey-screen" aria-labelledby="summaryTitle">
+      <div class="journey-head"><div><h2 id="summaryTitle">Сводка проекта</h2><p>Здесь отображаются только подтверждённые актуальные элементы контекста.</p></div><button class="secondary" type="button" onclick="showScreen('materials')">Вернуться к материалам</button></div>
+      <section class="summary-filters" aria-label="Фильтры сводки">
+        <label for="summaryType">Тип<select id="summaryType"><option value="">Все типы</option><option value="requirement">Требования</option><option value="decision">Решения</option><option value="risk">Риски</option><option value="open_question">Открытые вопросы</option><option value="action">Действия</option></select></label>
+        <label for="summaryConflict">Противоречия<select id="summaryConflict"><option value="">Все</option><option value="true">Есть открытое</option></select></label>
+        <label for="summaryDeadline">Срок<select id="summaryDeadline"><option value="">Не важно</option><option value="true">Указан</option></select></label>
+        <label for="summaryActor">Ответственный<select id="summaryActor"><option value="">Не важно</option><option value="true">Указан</option></select></label>
+        <button type="button" onclick="loadJourneySummary()">Применить</button>
+      </section>
+      <div id="journeySummary" class="journey-empty">Контекст ещё не собран.</div>
+    </section>
+    <div id="screen-dialog" class="screen">
       <div class="dialog-workspace project-dialogue">
         <section class="context-panel dialogue-sidebar">
           <div class="panel-head">
@@ -1398,6 +1464,138 @@
     let localAnswerCanceled = false;
     let localAnswerTimedOut = false;
     const LOCAL_ANSWER_TIMEOUT_MS = 195000;
+    let journeyMaterials = [];
+    let journeyReview = null;
+
+    const journeyState = {
+      accepted: { label: 'Добавляется', detail: 'Материал принят и готовится к обработке.', tone: 'warn', next: 'Откройте материал позже.' },
+      ready: { label: 'Готово к подтверждению', detail: 'Очищенная версия готова к проверке.', tone: 'warn', next: 'Откройте проверку материала.' },
+      requires_review: { label: 'Требуется проверка', detail: 'Нужно принять решения по найденным местам.', tone: 'danger', next: 'Откройте проверку материала.' },
+      review_in_progress: { label: 'Проверка продолжается', detail: 'Часть решений уже сохранена.', tone: 'warn', next: 'Завершите проверку и подтвердите актуальную версию.' },
+      confirmed: { label: 'Подтверждено', detail: 'Актуальная очищенная версия подтверждена.', tone: 'ok', next: 'Соберите проектный контекст.' },
+      superseded: { label: 'Создана новая версия', detail: 'Прежняя версия больше не является актуальной.', tone: 'warn', next: 'Откройте актуальную версию материала.' },
+      not_started: { label: 'Готово к проверке', detail: 'Локальная проверка ещё не запускалась.', tone: 'warn', next: 'Откройте материал и начните проверку.' },
+      duplicate: { label: 'Такой материал уже добавлен', detail: 'Данные не были добавлены повторно.', tone: 'warn', next: 'Откройте уже добавленный материал.' },
+      failed: { label: 'Не удалось обработать', detail: 'Материал сохранён без изменений.', tone: 'danger', next: 'Проверьте файл и повторите разрешённое действие.' },
+      unavailable: { label: 'Локальная проверка недоступна', detail: 'Материал сохранён и ожидает ручной проверки.', tone: 'warn', next: 'Вернитесь к материалу позже.' }
+    };
+    const journeyTypeLabels = { requirement: 'Требования', decision: 'Решения', risk: 'Риски', open_question: 'Открытые вопросы', action: 'Действия' };
+    const journeyConfidence = { high: 'Высокая уверенность', medium: 'Средняя уверенность', low: 'Низкая уверенность' };
+
+    function journeyProject() { return document.getElementById('journeyProject')?.value || document.getElementById('project')?.value || ''; }
+    function journeyMessage(message, error=false) {
+      const box = document.getElementById('journeyMaterialsNotice');
+      if (!box) return;
+      box.hidden = !message; box.textContent = message || ''; box.classList.toggle('error', error);
+    }
+    function journeyError(data, fallback) {
+      const message = errorMessage(data?.error, fallback);
+      return `${message} Данные не изменены. Проверьте рабочее пространство и повторите действие.`;
+    }
+    function journeyStateFor(material) {
+      if (!material.current) return journeyState.superseded;
+      return journeyState[material.review_state] || journeyState[material.source_status] || journeyState.accepted;
+    }
+    function journeyDate(value) {
+      if (!value) return 'дата добавления неизвестна';
+      const date = new Date(value);
+      return Number.isNaN(date.valueOf()) ? 'дата добавления неизвестна' : `добавлен ${date.toLocaleString('ru-RU')}`;
+    }
+    function syncJourneyWorkspace() {
+      const select = document.getElementById('journeyProject');
+      const source = document.getElementById('project');
+      if (!select || !source) return;
+      select.innerHTML = '';
+      for (const item of Array.from(source.options)) select.appendChild(item.cloneNode(true));
+      select.value = source.value;
+    }
+    function changeJourneyWorkspace() {
+      const selected = journeyProject(); const legacy = document.getElementById('project');
+      if (legacy && legacy.value !== selected) { legacy.value = selected; legacy.dispatchEvent(new Event('change')); }
+      journeyMaterials = []; journeyReview = null;
+      document.getElementById('journeyReview').className = 'journey-empty';
+      document.getElementById('journeyReview').textContent = 'Выберите материал из нового рабочего пространства.';
+      document.getElementById('journeyContext').className = 'journey-empty';
+      document.getElementById('journeyContext').textContent = 'Контекст другого рабочего пространства не показывается.';
+      loadJourneyMaterials();
+    }
+    async function loadJourneyMaterials() {
+      const root = document.getElementById('journeyMaterials'); const project = journeyProject();
+      if (!root || !project) return;
+      root.innerHTML = '<div class="journey-empty">Загружаем материалы рабочего пространства…</div>';
+      const response = await fetch(`/api/materials?project=${encodeURIComponent(project)}`); const data = await response.json();
+      if (!response.ok) { root.innerHTML = `<div class="journey-empty">${journeyError(data, 'Не удалось загрузить материалы.')}</div>`; return; }
+      journeyMaterials = data.materials || []; root.innerHTML = '';
+      if (!journeyMaterials.length) {
+        root.innerHTML = '<div class="journey-empty"><b>Здесь будут находиться материалы проекта.</b><p>Начните с добавления первого материала кнопкой выше.</p></div>'; return;
+      }
+      for (const material of journeyMaterials) {
+        const state = journeyStateFor(material); const card = document.createElement('article'); card.className = 'journey-card';
+        const title = document.createElement('h3'); title.textContent = `Материал — ${journeyDate(material.created_at)}`; card.appendChild(title);
+        const status = document.createElement('span'); status.className = `journey-status ${state.tone}`; status.textContent = state.label; card.appendChild(status);
+        const detail = document.createElement('p'); detail.textContent = state.detail; card.appendChild(detail);
+        const meta = document.createElement('p'); meta.className = 'journey-meta'; meta.textContent = `${state.next}${material.version_count > 1 ? ` Версий: ${material.version_count}.` : ''}`; card.appendChild(meta);
+        const actions = document.createElement('div'); actions.className = 'journey-actions';
+        if (material.sanitized_id) { const open = document.createElement('button'); open.type='button'; open.textContent = material.review_confirmed ? 'Открыть актуальную версию' : 'Открыть проверку'; open.onclick=()=>openJourneyReview(material.sanitized_id); actions.appendChild(open); }
+        card.appendChild(actions); root.appendChild(card);
+      }
+    }
+    async function uploadJourneyMaterials() {
+      const input = document.getElementById('journeyFiles'); const files = Array.from(input.files || []); const project = journeyProject();
+      const query = ''; const hasFiles = files.length > 0;
+      if (!query && !hasFiles) { journeyMessage('Выберите хотя бы один файл перед добавлением.', true); return; }
+      const button = document.getElementById('journeyUploadButton'); button.disabled = true; journeyMessage('Добавляем материал и выполняем локальную очистку…');
+      const form = new FormData(); form.append('project', project); for (const file of files) form.append('files', file);
+      try {
+        const response = await fetch('/api/analyze', { method:'POST', body:form }); const data = await response.json();
+        if (!response.ok) { journeyMessage(journeyError(data, 'Не удалось добавить файл.'), true); return; }
+        input.value = ''; journeyMessage('Материал добавлен. Откройте проверку очищенной версии.'); await loadJourneyMaterials();
+        if (data.review?.artifact_id) openJourneyReview(data.review.artifact_id);
+      } catch (_) { journeyMessage('Не удалось связаться с Gaia. Данные не были добавлены. Проверьте, что приложение открыто на этом устройстве.', true); }
+      finally { button.disabled = false; }
+    }
+    async function openJourneyReview(artifactId) {
+      showScreen('review'); const root = document.getElementById('journeyReview'); root.className='journey-empty'; root.textContent='Загружаем очищенную версию…';
+      const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(journeyProject())}`); const data = await response.json();
+      if (!response.ok) { root.textContent=journeyError(data, 'Не удалось открыть проверку.'); return; }
+      journeyReview = data; renderJourneyReview(data);
+    }
+    function renderJourneyReview(review) {
+      const root = document.getElementById('journeyReview'); root.className='journey-grid'; root.innerHTML=''; const state=journeyState[review.state] || journeyState.requires_review;
+      const content = document.createElement('section'); content.className='journey-card'; content.innerHTML='<h3>Очищенный текст</h3>';
+      const text=document.createElement('div'); text.className='review-text'; text.textContent=review.cleaned_text || 'Очищенная версия пока недоступна.'; content.appendChild(text); root.appendChild(content);
+      const decisions = new Map((review.decisions || []).map(item=>[item.finding_id,item]));
+      const side=document.createElement('section'); side.className='journey-card'; side.innerHTML='<h3>Результат проверки</h3>';
+      const badge=document.createElement('span'); badge.className=`journey-status ${state.tone}`; badge.textContent=state.label; side.appendChild(badge);
+      const explanation=document.createElement('p'); explanation.textContent=state.detail; side.appendChild(explanation);
+      for (const finding of review.findings || []) {
+        const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);
+        const name=document.createElement('b'); name.textContent=`Предложение: ${finding.category}`; row.appendChild(name);
+        const confidence=document.createElement('p'); confidence.className='journey-meta'; confidence.textContent=journeyConfidence[finding.confidence] || 'Уверенность не определена'; row.appendChild(confidence);
+        if (saved) { const done=document.createElement('p'); done.textContent=`Решение сохранено: ${saved.decision === 'keep' ? 'оставить без изменения' : saved.decision === 'replace' ? 'заменить псевдонимом' : 'изменить категорию'}.`; row.appendChild(done); }
+        else if (!review.confirmed) {
+          const actions=document.createElement('div'); actions.className='journey-actions';
+          for (const [decision,label] of [['replace','Заменить псевдонимом'],['keep','Оставить без изменения']]) { const button=document.createElement('button'); button.type='button'; button.textContent=label; button.onclick=()=>saveJourneyFinding(review.artifact_id,finding.finding_id,decision,button); actions.appendChild(button); }
+          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const value=window.prompt('Укажите понятную категорию', finding.category); if(value) saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value);}; actions.appendChild(category);
+          row.appendChild(actions);
+        }
+        side.appendChild(row);
+      }
+      const actions=document.createElement('div'); actions.className='journey-actions';
+      if (!review.confirmed) { const check=document.createElement('button'); check.type='button'; check.className='secondary'; check.textContent='Повторить локальную проверку'; check.onclick=()=>startJourneyCheck(review.artifact_id,check); actions.appendChild(check); const confirm=document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить актуальную версию'; confirm.disabled=review.state === 'not_started'; confirm.title=confirm.disabled ? 'Сначала завершите локальную проверку.' : ''; confirm.onclick=()=>confirmJourneyReview(review.artifact_id,confirm); actions.appendChild(confirm); }
+      if (review.confirmed) { const compile=document.createElement('button'); compile.type='button'; compile.textContent='Собрать проектный контекст'; compile.onclick=()=>compileJourneyContext(review.artifact_id,compile); actions.appendChild(compile); }
+      side.appendChild(actions); root.appendChild(side);
+    }
+    async function startJourneyCheck(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;renderJourneyReview(data); }
+    async function saveJourneyFinding(id, findingId, decision, button, category='') { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),finding_id:findingId,decision,category})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение.'),true);button.disabled=false;return;} if(data.new_version?.artifact_id){journeyMessage('Создана новая версия. Прежняя версия больше не действует.');await openJourneyReview(data.new_version.artifact_id);await loadJourneyMaterials();return;} await openJourneyReview(id); }
+    async function confirmJourneyReview(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Эта версия устарела. Откройте актуальную версию материала.'),true);button.disabled=false;return;} journeyMessage('Актуальная версия подтверждена. Следующее действие — собрать проектный контекст.');await openJourneyReview(id);await loadJourneyMaterials(); }
+    async function compileJourneyContext(id, button) { button.disabled=true; const response=await fetch(`/api/context/${encodeURIComponent(id)}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось собрать проектный контекст.'),true);button.disabled=false;return;} showScreen('context'); renderJourneyContext(data.candidates || []); }
+    async function loadJourneyContext() { const response=await fetch(`/api/context?project=${encodeURIComponent(journeyProject())}`); const data=await response.json(); if(response.ok) renderJourneyContext(data.candidates || []); }
+    function renderJourneyContext(candidates) { const root=document.getElementById('journeyContext'); root.innerHTML=''; if(!candidates.length){root.className='journey-empty';root.textContent='Контекст ещё не собран. Подтвердите материал и запустите сбор контекста.';return;} root.className=''; for(const [type,label] of Object.entries(journeyTypeLabels)){ const items=candidates.filter(item=>item.item_type===type); const group=document.createElement('section');group.className='candidate-group';group.innerHTML=`<h3>${label}</h3>`; if(!items.length){group.innerHTML += '<p class="journey-meta">Предложений пока нет.</p>';} for(const item of items) group.appendChild(journeyCandidateCard(item));root.appendChild(group);} }
+    function journeyCandidateCard(item) { const card=document.createElement('article');card.className='journey-card';const title=document.createElement('h3');title.textContent=item.title;card.appendChild(title);const statement=document.createElement('p');statement.textContent=item.statement;card.appendChild(statement);const meta=document.createElement('p');meta.className='journey-meta';meta.textContent=`${journeyConfidence[item.confidence] || 'Уверенность не определена'}. Подтверждающих источников: ${(item.source_links || []).length || 1}.`;card.appendChild(meta); if(item.status==='conflicted') {const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть противоречие: выберите вариант или оставьте вопрос открытым.';card.appendChild(flag);} if(item.status==='duplicate'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Возможный повтор: источники можно объединить.';card.appendChild(flag);} const actions=document.createElement('div');actions.className='journey-actions'; if(item.status!=='confirmed'&&item.status!=='rejected'){for(const [decision,label] of [['confirm','Подтвердить'],['edit','Уточнить'],['reject','Отклонить']]){const button=document.createElement('button');button.type='button';button.className=decision==='confirm'?'':'secondary';button.textContent=label;button.onclick=()=>journeyContextDecision(item,decision,button);actions.appendChild(button);}} if((item.relation_ids||[]).length){for(const [resolution,label] of [['keep_open','Оставить противоречие открытым'],['choose_current','Выбрать этот вариант'],['keep_both','Сохранить оба варианта']]){const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=label;button.onclick=()=>journeyConflictDecision(item.id,resolution,button);actions.appendChild(button);}} card.appendChild(actions);return card; }
+    async function journeyContextDecision(item, decision, button) { let title='',statement=''; if(decision==='edit'){title=window.prompt('Новый заголовок: будет создана новая версия',item.title)||'';statement=title ? window.prompt('Новое содержание',item.statement)||'' : '';if(!title||!statement)return;} if(decision==='reject'&&!window.confirm('Отклонить предложение? Это действие потребует отдельного решения для возврата.'))return;button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(item.id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),decision,title,statement})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по предложению.'),true);button.disabled=false;return;}await loadJourneyContext(); }
+    async function journeyConflictDecision(id,resolution,button) {button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(id)}/conflict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),resolution})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по противоречию.'),true);button.disabled=false;return;}await loadJourneyContext();}
+    async function loadJourneySummary() { const root=document.getElementById('journeySummary');root.className='journey-empty';root.textContent='Загружаем сводку…';const query=new URLSearchParams({project:journeyProject()});for(const [key,id] of Object.entries({type:'summaryType',conflict:'summaryConflict',deadline:'summaryDeadline',actor:'summaryActor'})){const value=document.getElementById(id).value;if(value)query.set(key,value);}const response=await fetch(`/api/context/summary?${query}`);const data=await response.json();if(!response.ok){root.textContent=journeyError(data,'Не удалось загрузить сводку.');return;}const items=Object.entries(journeyTypeLabels).flatMap(([type])=>data[type]||[]);root.innerHTML='';if(!items.length){root.className='journey-empty';root.textContent='Подтверждённых элементов по выбранным условиям нет.';return;}root.className='journey-grid';for(const item of items){const card=document.createElement('article');card.className='journey-card';card.innerHTML=`<h3>${item.title}</h3><p>${item.statement}</p><p class="journey-meta">${journeyTypeLabels[item.item_type]||'Элемент'} · источников: ${(item.source_links||[]).length||1}${item.actor_ref ? ` · ответственный: ${item.actor_ref}`:''}${item.deadline ? ` · срок: ${item.deadline}`:''}</p>`;if(item.status==='conflicted'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть открытое противоречие.';card.appendChild(flag);}root.appendChild(card);} }
 
     function showScreen(name) {
       for (const screen of document.querySelectorAll('.screen')) {
@@ -1416,6 +1614,9 @@
       if (name === 'scribe') {
         loadScribeInbox();
       }
+      if (name === 'materials') loadJourneyMaterials();
+      if (name === 'context') loadJourneyContext();
+      if (name === 'summary') loadJourneySummary();
     }
 
     function toggleInspector() {
@@ -1717,7 +1918,10 @@
         loadConversations();
         loadScribeInbox();
         invalidatePreparedPackage('Пространство памяти изменено. Пересобери контекст перед локальным ответом.');
+        syncJourneyWorkspace();
+        loadJourneyMaterials();
       };
+      syncJourneyWorkspace();
       syncProjectManagementForm();
       renderProjectList();
       renderProjectDetails();
