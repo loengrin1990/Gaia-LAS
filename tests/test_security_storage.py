@@ -11,6 +11,7 @@ from gaia.archive import apply_retention, cleanup_run_temporary_artifacts, write
 from gaia.conversations import add_user_turn, create_conversation
 from gaia.masking import mask_with_review
 from gaia.models import AnalysisPackage
+from gaia.jobs import _run_analyze_job
 
 
 RAW_MARKER = "СекретныйПроект-123"
@@ -87,6 +88,17 @@ class SecurityStorageTests(unittest.TestCase):
                 report = apply_retention(now=time.time())
             self.assertFalse((expired / "uploads").exists())
             self.assertEqual(report.removed_temporary, ["20260102-120000/uploads"])
+
+    def test_processing_error_keeps_raw_text_out_of_job_metadata(self) -> None:
+        updates = []
+        with (
+            patch("gaia.jobs.cancel_event_for", return_value=SimpleNamespace(is_set=lambda: False)),
+            patch("gaia.jobs.update_job", side_effect=lambda *args, **kwargs: updates.append(kwargs)),
+            patch("gaia.jobs.create_package", side_effect=RuntimeError(RAW_MARKER)),
+        ):
+            _run_analyze_job("job", "synthetic-project", RAW_MARKER, [], None)
+        self.assertNotIn(RAW_MARKER, str(updates))
+        self.assertEqual(updates[-1]["error"], "Ошибка локальной обработки. Подробности не сохраняются.")
 
 
 if __name__ == "__main__":

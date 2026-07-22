@@ -72,7 +72,7 @@ class JobQueueTests(unittest.TestCase):
 
         self.assertEqual(final.status, "failed")
         self.assertEqual(final.progress, 100)
-        self.assertIn("boom", final.error)
+        self.assertEqual(final.error, "Ошибка локальной обработки. Подробности не сохраняются.")
 
     def test_stale_running_job_is_failed_by_watchdog(self) -> None:
         job = JobRecord(

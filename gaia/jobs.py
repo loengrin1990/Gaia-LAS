@@ -76,8 +76,8 @@ def _run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple
     except PackageCancelledError:
         cancel_job(job_id, "timeout" if cancel_event.is_set() else "cancelled")
         return
-    except Exception as exc:
-        update_job(job_id, status="failed", message="Задача завершилась ошибкой.", progress=100, error=str(exc))
+    except Exception:
+        update_job(job_id, status="failed", message="Задача завершилась ошибкой.", progress=100, error="Ошибка локальной обработки. Подробности не сохраняются.")
         return
     finally:
         timeout_timer.cancel()
