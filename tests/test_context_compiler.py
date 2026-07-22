@@ -70,6 +70,7 @@ class ContextCompilerTests(unittest.TestCase):
             with self.assertRaises(ContextCompileError) as invalid: local_context_model("[Сотрудник-01]")
         self.assertEqual(invalid.exception.code, "local_model_invalid")
         self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
+        self.assertEqual(call.call_args.args[1], 45)
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()

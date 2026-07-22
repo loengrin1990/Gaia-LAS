@@ -23,8 +23,15 @@ class ContextCompileError(ProvenanceError):
 
 def local_context_model(text: str) -> dict[str, Any]:
     from .module_assist import call_lm_studio_with_deadline
-    prompt = "Верни только JSON {\"candidates\":[]}. Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста.\n\n" + text
-    result = call_lm_studio_with_deadline(prompt, 12, "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER)
+    prompt = (
+        "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
+        "Каждый элемент candidates обязан иметь ровно поля type, title, statement, block, confidence, requires_review; "
+        "type только requirement, decision, risk, open_question или action; block имеет только start и end с координатами очищенного текста. "
+        "Не используй ключи requirement, solution, risk, question или action как замену структуры кандидата. "
+        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
+        "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста.\n\n" + text
+    )
+    result = call_lm_studio_with_deadline(prompt, 45, "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER)
     if not result.get("ok"): raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.")
     try: return json.loads(str(result.get("answer") or ""))
     except json.JSONDecodeError as exc: raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул некорректный ответ.") from exc

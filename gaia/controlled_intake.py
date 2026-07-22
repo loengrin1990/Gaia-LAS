@@ -169,7 +169,7 @@ class ControlledIntake:
         dictionary = self.dictionary(project); dictionary.setdefault(category, [])
         if value not in dictionary[category]:
             source_text = (self.store.root / "artifacts" / workspace_id / f"{parent}.txt").read_text(encoding="utf-8")
-            if value not in source_text:
+            if value not in source_text or not _is_complete_source_fragment(source_text, value):
                 raise ProvenanceError("Находка не относится к исходному материалу этой версии.")
             dictionary[category].append(value)
         self.set_dictionary(project, dictionary)
@@ -200,3 +200,11 @@ class ControlledIntake:
 
     def _read(self) -> dict[str, Any]:
         return json.loads(self.path.read_text(encoding="utf-8"))
+
+def _is_complete_source_fragment(text: str, value: str) -> bool:
+    for match in re.finditer(re.escape(value), text):
+        before = text[match.start() - 1] if match.start() else ""
+        after = text[match.end()] if match.end() < len(text) else ""
+        if (not before or not re.match(r"[\w-]", before)) and (not after or not re.match(r"[\w-]", after)):
+            return True
+    return False

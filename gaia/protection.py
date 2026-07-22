@@ -39,7 +39,9 @@ def protect(store: ProvenanceStore, workspace_id: str, extraction_id: str, dicti
     mapping = _mapping(store, workspace_id)
     counts: Counter[str] = Counter(); findings: list[dict[str, Any]] = []
     rules = [(category, pattern, category in REQUIRED_CATEGORIES) for category, pattern in RULES]
-    rules += [(category, re.escape(value), True) for category, values in (dictionary or {}).items() for value in values if value]
+    # Dictionary values must match complete lexical fragments.  A partial model
+    # span such as one letter must never rewrite ordinary words or identifiers.
+    rules += [(category, _dictionary_pattern(value), True) for category, values in (dictionary or {}).items() for value in values if value]
     rules += extra_rules or []
     failed_optional: list[str] = []
     # Find every replacement against the immutable extraction first.  Applying
@@ -88,6 +90,9 @@ def _replacement(category: str, mapping: dict[str, str], counts: Counter[str], f
         findings.append({"finding_id": f"finding-{len(findings)+1}", "category": category, "count": 1, "pseudonym": token, "safe_location": f"block-{len(findings)+1}", "status": "requires_review" if category in {"Адрес", "Сотрудник"} else "ready_for_review", "confidence": "high", "requires_review": category in {"Адрес", "Сотрудник"}, "rule_version": version})
         return token
     return replace
+
+def _dictionary_pattern(value: str) -> str:
+    return r"(?<![\w-])" + re.escape(value) + r"(?![\w-])"
 
 
 def _mapping(store: ProvenanceStore, workspace_id: str) -> dict[str, str]:

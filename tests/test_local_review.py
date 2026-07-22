@@ -83,3 +83,28 @@ class LocalReviewTests(unittest.TestCase):
             self.assertNotIn("Сотрудник-02отрудник",text)
             self.assertNotIn("Альфа Бета",text)
         finally: tmp.cleanup()
+
+    def test_rejects_partial_word_finding_and_preserves_exact_synthetic_text(self):
+        source = "Протокол по проекту «Сфера». Подразделение: Департамент. Сетевой адрес: 10.2.3.4. СНИЛС: 112-233-445 95. Договор № ТЕСТ-2026-0042."
+        with self.assertRaises(ProvenanceError):
+            validate_model_payload({"findings":[{"category":"Сотрудник","start":0,"end":1,"confidence":"high","reason_code":"residual","requires_review":True}]}, source)
+        tmp,s,w,_,_,_=self.setup_review()
+        try:
+            src=s.accept_bytes(w,source.encode(),"text/plain"); ext=s.create_extraction(w,src["source_id"],"v1")
+            san=protect(s,w,ext["artifact_id"],{"Сотрудник":["Сфера"]})["sanitized"]
+            text=(s.root / "sanitized" / w / f"{san['artifact_id']}.txt").read_text(encoding="utf-8")
+            for fragment in ("Протокол", "Подразделение", "Сетевой адрес", "СНИЛС", "Договор № ТЕСТ-2026-0042"):
+                self.assertIn(fragment,text)
+        finally: tmp.cleanup()
+
+    def test_category_change_is_persisted_and_completes_review(self):
+        tmp,s,w,_,_,san=self.setup_review()
+        try:
+            review=ReviewService(s,w,lambda value:{"findings":[{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]})
+            review.start(san["artifact_id"])
+            result=review.decide(san["artifact_id"],"model-1","change_category","Организация")
+            self.assertEqual(result["findings"][0]["category"],"Организация")
+            self.assertEqual(result["state"],"ready_for_confirmation")
+            self.assertEqual(ReviewService(ProvenanceStore(Path(tmp.name)),w).get(san["artifact_id"])["findings"][0]["category"],"Организация")
+            self.assertEqual(review.confirm(san["artifact_id"]),"Clean Person-01 remains")
+        finally: tmp.cleanup()

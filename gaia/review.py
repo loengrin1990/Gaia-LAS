@@ -37,7 +37,7 @@ class ReviewService:
         text = self._text(artifact_id)
         try:
             findings = validate_model_payload(self.model(text), text)
-            state = "requires_review"
+            state = "requires_review" if findings else "ready_for_confirmation"
         except Exception:
             findings = []; state = "requires_review"
         record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "created_at": now()}
@@ -86,9 +86,16 @@ class ReviewService:
         text = self._text(artifact_id)
         if _fingerprint(text[finding["start"]:finding["end"]]) != finding["expected_fingerprint"]:
             raise ProvenanceError("Находка относится к другой версии очищенного текста.")
-        if category and category not in ALLOWED_CATEGORIES: raise ProvenanceError("Некорректная категория проверки.")
-        record["decisions"].append({"finding_id": finding_id, "decision": decision, "category": category or finding["category"], "created_at": now()})
-        record["state"] = "review_in_progress"; self._write(artifact_id, record); return self.safe(record)
+        if decision == "change_category" and not category:
+            raise ProvenanceError("Выберите новую категорию для находки.")
+        if category and category not in ALLOWED_CATEGORIES: raise ProvenanceError("Выбранная категория недопустима.")
+        selected_category = category or finding["category"]
+        if decision == "change_category":
+            finding["category"] = selected_category
+        record["decisions"].append({"finding_id": finding_id, "decision": decision, "category": selected_category, "created_at": now()})
+        unresolved = [item for item in record["findings"] if not any(saved["finding_id"] == item["finding_id"] for saved in record["decisions"])]
+        record["state"] = "review_in_progress" if unresolved else "ready_for_confirmation"
+        self._write(artifact_id, record); return self.safe(record)
 
     def confirm(self, artifact_id: str) -> str:
         record = self._read().get(artifact_id)
@@ -122,6 +129,8 @@ def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]
         if item["category"] not in ALLOWED_CATEGORIES or not isinstance(start,int) or not isinstance(end,int) or not 0 <= start < end <= text_length or any(start < b and end > a for a,b in used): raise ProvenanceError("Некорректные координаты локальной проверки.")
         if item["confidence"] not in {"low","medium","high"} or not isinstance(item["reason_code"],str) or len(item["reason_code"]) > 48 or item["requires_review"] is not True: raise ProvenanceError("Некорректный ответ локальной проверки.")
         expected_text = text[start:end] if isinstance(text, str) else ""
+        if isinstance(text, str) and (not _is_complete_fragment(text, start, end) or _overlaps_pseudonym(text, start, end)):
+            raise ProvenanceError("Координаты локальной проверки указывают не на самостоятельную находку.")
         if _is_pseudonym_fragment(expected_text):
             raise ProvenanceError("Локальная проверка не может предлагать уже созданный псевдоним.")
         used.append((start,end)); result.append({**item,"finding_id":f"model-{index}","expected_fingerprint":_fingerprint(expected_text)})
@@ -129,6 +138,16 @@ def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]
 
 def _is_pseudonym_fragment(value: str) -> bool:
     return bool(re.fullmatch(r"(?:" + "|".join(re.escape(category) for category in ALLOWED_CATEGORIES) + r")-\d{2,}", value))
+
+def _is_complete_fragment(text: str, start: int, end: int) -> bool:
+    return (start == 0 or not _is_word_char(text[start - 1])) and (end == len(text) or not _is_word_char(text[end]))
+
+def _is_word_char(value: str) -> bool:
+    return bool(re.match(r"\w", value)) or value == "-"
+
+def _overlaps_pseudonym(text: str, start: int, end: int) -> bool:
+    pattern = r"(?:" + "|".join(re.escape(category) for category in ALLOWED_CATEGORIES) + r")-\d{2,}"
+    return any(start < match.end() and end > match.start() for match in re.finditer(pattern, text))
 
 def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

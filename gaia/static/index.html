@@ -1471,6 +1471,7 @@
       accepted: { label: 'Добавляется', detail: 'Материал принят и готовится к обработке.', tone: 'warn', next: 'Откройте материал позже.' },
       ready: { label: 'Готово к подтверждению', detail: 'Очищенная версия готова к проверке.', tone: 'warn', next: 'Откройте проверку материала.' },
       requires_review: { label: 'Требуется проверка', detail: 'Нужно принять решения по найденным местам.', tone: 'danger', next: 'Откройте проверку материала.' },
+      ready_for_confirmation: { label: 'Готово к подтверждению', detail: 'Все найденные места обработаны.', tone: 'ok', next: 'Подтвердите актуальную очищенную версию.' },
       review_in_progress: { label: 'Проверка продолжается', detail: 'Часть решений уже сохранена.', tone: 'warn', next: 'Завершите проверку и подтвердите актуальную версию.' },
       confirmed: { label: 'Подтверждено', detail: 'Актуальная очищенная версия подтверждена.', tone: 'ok', next: 'Соберите проектный контекст.' },
       superseded: { label: 'Создана новая версия', detail: 'Прежняя версия больше не является актуальной.', tone: 'warn', next: 'Откройте актуальную версию материала.' },
@@ -1574,11 +1575,11 @@
         const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);
         const name=document.createElement('b'); name.textContent=`Предложение: ${finding.category}`; row.appendChild(name);
         const confidence=document.createElement('p'); confidence.className='journey-meta'; confidence.textContent=journeyConfidence[finding.confidence] || 'Уверенность не определена'; row.appendChild(confidence);
-        if (saved) { const done=document.createElement('p'); done.textContent=`Решение сохранено: ${saved.decision === 'keep' ? 'оставить без изменения' : saved.decision === 'replace' ? 'заменить псевдонимом' : 'изменить категорию'}.`; row.appendChild(done); }
+        if (saved) { const done=document.createElement('p'); done.textContent=`Решение сохранено: ${saved.decision === 'keep' ? 'оставить без изменения' : saved.decision === 'replace' ? 'заменить псевдонимом' : `изменить категорию на «${saved.category}»`}.`; row.appendChild(done); }
         else if (!review.confirmed) {
           const actions=document.createElement('div'); actions.className='journey-actions';
           for (const [decision,label] of [['replace','Заменить псевдонимом'],['keep','Оставить без изменения']]) { const button=document.createElement('button'); button.type='button'; button.textContent=label; button.onclick=()=>saveJourneyFinding(review.artifact_id,finding.finding_id,decision,button); actions.appendChild(button); }
-          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const value=window.prompt('Укажите понятную категорию', finding.category); if(value) saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value);}; actions.appendChild(category);
+          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const choices=['Сотрудник','Организация','Подразделение','Проект','Система','Адрес','Идентификатор','Другое'];const value=window.prompt(`Выберите категорию: ${choices.join(', ')}`, finding.category); if(!value){journeyMessage('Категория не выбрана. Данные не изменены. Выберите допустимую категорию и повторите действие.',true);return;} saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value.trim());}; actions.appendChild(category);
           row.appendChild(actions);
         }
         side.appendChild(row);
