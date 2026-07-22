@@ -18,6 +18,7 @@ from .storage import atomic_write_text, path_lock
 from .protection import protect
 from .protection import safe_report
 from .review import ReviewService
+from .context_compiler import ContextCompiler, ContextService
 
 
 class ControlledIntake:
@@ -94,6 +95,12 @@ class ControlledIntake:
 
     def review(self, project: str) -> ReviewService:
         return ReviewService(self.store, self._workspace_for(project))
+
+    def compiler(self, project: str) -> ContextCompiler:
+        return ContextCompiler(self.store, self._workspace_for(project))
+
+    def context(self, project: str) -> ContextService:
+        return ContextService(self.store, self._workspace_for(project))
 
     def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)

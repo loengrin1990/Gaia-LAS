@@ -43,6 +43,13 @@ class ServerContractTests(unittest.TestCase):
         with (patch("gaia.server.ControlledIntake", return_value=intake), patch("gaia.server.json_response") as response): Handler.handle_review_action(handler)
         intake.add_dictionary_value.assert_called_once_with("synthetic", "san_1", "Сотрудник", "Residual")
         self.assertEqual(response.call_args.args[1]["new_version"]["artifact_id"], "san_2")
+
+    def test_context_compile_uses_existing_local_api(self) -> None:
+        compiler=Mock(); compiler.compile.return_value=[{"id":"ctx_1","item_type":"requirement"}]
+        intake=Mock(); intake.compiler.return_value=compiler
+        handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
+        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.json_response") as response): Handler.handle_context_action(handler)
+        compiler.compile.assert_called_once_with("san_1"); self.assertEqual(response.call_args.args[1]["candidates"][0]["id"],"ctx_1")
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (

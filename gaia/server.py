@@ -215,6 +215,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/reviews/"):
             self.handle_review_get()
             return
+        if self.path.startswith("/api/context"):
+            self.handle_context_get()
+            return
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
@@ -236,6 +239,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.startswith("/api/reviews/"):
             self.handle_review_action()
+            return
+        if route.startswith("/api/context/"):
+            self.handle_context_action()
             return
         if route.startswith("/api/jobs/"):
             self.handle_job_action()
@@ -486,10 +492,34 @@ class Handler(BaseHTTPRequestHandler):
             if action == "confirm":
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
-                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
+                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
         except ProvenanceError:
             error_response(self, "review_failed", "Не удалось завершить локальную проверку материала.", 400); return
         error_response(self, "not_found", "not found", 404)
+
+    def handle_context_get(self) -> None:
+        route = urlparse(self.path); parts=route.path.split("/"); project=parse_qs(route.query).get("project",[""])[0]
+        try:
+            service=ControlledIntake().context(project)
+            if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
+            if len(parts) >= 5 and parts[4] == "status":
+                candidates = [item for item in service.list() if parts[3] in item.get("parents", [])]
+                json_response(self, {"status": "ready" if candidates else "not_started", "candidate_count": len(candidates)}); return
+            if len(parts) >= 4: json_response(self, service.get(parts[3])); return
+            json_response(self, {"candidates": service.list()})
+        except ProvenanceError: error_response(self,"context_not_found","Контекст недоступен в этом рабочем пространстве.",404)
+
+    def handle_context_action(self) -> None:
+        parts=urlparse(self.path).path.split("/"); object_id=parts[3] if len(parts)>=4 else ""; action=parts[4] if len(parts)>=5 else ""; payload=self.read_json(); project=str(payload.get("project") or "")
+        try:
+            intake=ControlledIntake()
+            if action == "compile": json_response(self,{"candidates":intake.compiler(project).compile(object_id)},202); return
+            if action == "decision": json_response(self,intake.context(project).decide(object_id,str(payload.get("decision") or ""),str(payload.get("title") or ""),str(payload.get("statement") or ""))); return
+            if action == "duplicate": json_response(self, intake.context(project).mark_duplicate(object_id, str(payload.get("target_id") or ""))); return
+            if action == "conflict": json_response(self, intake.context(project).resolve_conflict(object_id, str(payload.get("resolution") or ""))); return
+        except ProvenanceError:
+            error_response(self,"context_failed","Не удалось обработать проектный контекст.",400); return
+        error_response(self,"not_found","not found",404)
 
     def handle_job_action(self) -> None:
         parts = urlparse(self.path).path.split("/")

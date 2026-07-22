@@ -1773,8 +1773,51 @@
         actions.appendChild(dictionary);
       }
       const confirm = document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить очищенный материал';
-      confirm.onclick=async()=>{ const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,query,profile})}); const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось подтвердить материал.'),data);return;} currentJobId=data.job_id; pollJob(currentJobId); };
+      confirm.onclick=async()=>{ const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,query,profile})}); const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось подтвердить материал.'),data);return;} currentJobId=data.job_id; window.currentConfirmedArtifact=data.artifact_id; pollJob(currentJobId); };
       actions.appendChild(confirm);
+      const compile = document.createElement('button'); compile.type='button'; compile.textContent='Собрать кандидаты контекста';
+      compile.onclick=async()=>{ const id=window.currentConfirmedArtifact||review.artifact_id; const res=await fetch(`/api/context/${encodeURIComponent(id)}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value})}); const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось собрать контекст.'),data);return;} renderContextCandidates(data.candidates||[],actions); };
+      actions.appendChild(compile);
+    }
+
+    const contextTypeLabel={requirement:'Требование',decision:'Решение',risk:'Риск',open_question:'Открытый вопрос',action:'Действие'};
+    function renderContextCandidates(candidates, actions) {
+      setOutput('Кандидаты проектного контекста подготовлены для проверки.');
+      setSummaryDetails(candidates.map(item=>`${contextTypeLabel[item.item_type]||'Элемент'}: ${item.title}. ${item.statement} Уверенность: ${item.confidence==='high'?'высокая':item.confidence==='medium'?'средняя':'низкая'}.`));
+      for (const item of candidates) {
+        const confirm=document.createElement('button'); confirm.type='button'; confirm.className='secondary'; confirm.textContent=`Подтвердить: ${item.title}`;
+        confirm.onclick=()=>saveContextDecision(item.id,'confirm'); actions.appendChild(confirm);
+        const edit=document.createElement('button'); edit.type='button'; edit.className='secondary'; edit.textContent=`Уточнить: ${item.title}`;
+        edit.onclick=()=>{const title=window.prompt('Краткий заголовок',item.title); const statement=window.prompt('Содержание',item.statement); if(title&&statement) saveContextDecision(item.id,'edit',title,statement);}; actions.appendChild(edit);
+        const reject=document.createElement('button'); reject.type='button'; reject.className='secondary'; reject.textContent=`Отклонить: ${item.title}`;
+        reject.onclick=()=>saveContextDecision(item.id,'reject'); actions.appendChild(reject);
+        if ((item.relation_ids||[]).length) {
+          const leave=document.createElement('button'); leave.type='button'; leave.className='secondary'; leave.textContent=`Оставить противоречие: ${item.title}`;
+          leave.onclick=()=>saveContextConflict(item.id,'keep_open'); actions.appendChild(leave);
+          const choose=document.createElement('button'); choose.type='button'; choose.className='secondary'; choose.textContent=`Выбрать этот вариант: ${item.title}`;
+          choose.onclick=()=>saveContextConflict(item.id,'choose_current'); actions.appendChild(choose);
+          const both=document.createElement('button'); both.type='button'; both.className='secondary'; both.textContent=`Сохранить оба варианта: ${item.title}`;
+          both.onclick=()=>saveContextConflict(item.id,'keep_both'); actions.appendChild(both);
+          const duplicate=document.createElement('button'); duplicate.type='button'; duplicate.className='secondary'; duplicate.textContent=`Отметить повтором: ${item.title}`;
+          duplicate.onclick=()=>{const choices=candidates.filter(other=>other.id!==item.id&&other.item_type===item.item_type); const position=window.prompt(`Номер исходного ${contextTypeLabel[item.item_type].toLowerCase()}: ${choices.map((other,index)=>`${index+1}. ${other.title}`).join('; ')}`); const target=choices[Number(position)-1]; if(target) saveContextDuplicate(item.id,target.id);}; actions.appendChild(duplicate);
+        }
+      }
+    }
+    async function saveContextDecision(id, decision, title='', statement='') {
+      const res=await fetch(`/api/context/${encodeURIComponent(id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,decision,title,statement})});
+      const data=await res.json();
+      if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось сохранить решение по кандидату.'),data);return;}
+      setOutput(decision==='confirm'?'Кандидат подтверждён.':decision==='reject'?'Кандидат отклонён.':'Создана новая версия кандидата.');
+    }
+    async function saveContextConflict(id, resolution) {
+      const res=await fetch(`/api/context/${encodeURIComponent(id)}/conflict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,resolution})});
+      const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось сохранить решение по противоречию.'),data);return;}
+      setOutput(resolution==='keep_open'?'Противоречие оставлено для дальнейшей проверки.':resolution==='keep_both'?'Оба варианта сохранены.':'Выбран актуальный вариант.');
+    }
+    async function saveContextDuplicate(id, target_id) {
+      const res=await fetch(`/api/context/${encodeURIComponent(id)}/duplicate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,target_id})});
+      const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось отметить повтор.'),data);return;}
+      setOutput('Повтор отмечен; ссылки на подтверждённые источники объединены.');
     }
 
     function renderConversationList() {
