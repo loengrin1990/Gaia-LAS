@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .storage import atomic_write_text, path_lock
+from .storage import atomic_write_bytes, atomic_write_text, path_lock
 from .config import SETTINGS
 
 
@@ -60,7 +60,7 @@ class ProvenanceStore:
             source_id = self._id("src")
             path = self.source_path(workspace_id, source_id)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            atomic_write_bytes(path, content)
             record = self._record(source_id, workspace_id, "source", checksum=checksum, media_type=media_type, integrity_status="intact", current=True)
             registry["objects"][source_id] = record
             try:
@@ -80,6 +80,13 @@ class ProvenanceStore:
 
     def source_metadata(self, workspace_id: str, source_id: str) -> dict[str, Any]:
         return self._object(workspace_id, source_id, "source")
+
+    def supersede_source(self, workspace_id: str, source_id: str, previous_id: str) -> None:
+        """Record a new immutable source version without altering its parent."""
+        self._object(workspace_id, source_id, "source")
+        self._object(workspace_id, previous_id, "source")
+        self._update(previous_id, current=False, status="superseded")
+        self._update(source_id, previous_id=previous_id, current=True, status="ready")
 
     def create_extraction(self, workspace_id: str, source_id: str, processor_version: str) -> dict[str, Any]:
         source = self._object(workspace_id, source_id, "source")

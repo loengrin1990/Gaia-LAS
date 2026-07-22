@@ -2331,10 +2331,17 @@
         renderReadableError(errorMessage(job.error, 'Не удалось получить статус обработки.'), job);
         return;
       }
-      document.getElementById('route').textContent = `${job.status} ${job.progress}%`;
+      const readableStatus = {
+        created: 'Материал добавляется',
+        running: 'Материал добавляется',
+        done: 'Обработка завершена',
+        failed: 'Не удалось завершить обработку, данные не изменены',
+        cancelled: 'Обработка отменена'
+      }[job.status] || 'Обработка выполняется';
+      document.getElementById('route').textContent = `${readableStatus} ${job.progress}%`;
       setProcessingSummary({
-        badge: `${job.status} ${job.progress}%`,
-        state: 'Gaia обрабатывает задачу.',
+        badge: `${readableStatus} ${job.progress}%`,
+        state: readableStatus,
         context: currentContextLabel(),
         external: 'Еще не определен.',
         next: 'Дождись результата обработки.'

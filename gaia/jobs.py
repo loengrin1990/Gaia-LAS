@@ -9,6 +9,7 @@ from typing import Any
 
 from .models import JobRecord
 from .orchestrator import PackageCancelledError, create_package
+from .controlled_intake import ControlledIntake
 
 
 JOBS: dict[str, JobRecord] = {}
@@ -30,7 +31,7 @@ def local_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None = None) -> JobRecord:
+def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None = None, intake: dict[str, Any] | None = None) -> JobRecord:
     if not JOB_CAPACITY.acquire(blocking=False):
         raise JobQueueFullError("Очередь обработки занята. Дождись завершения текущих задач и повтори запрос.")
     job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:8]
@@ -49,21 +50,21 @@ def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes
         JOBS[job_id] = job
         JOB_CANCEL_EVENTS[job_id] = threading.Event()
     try:
-        JOB_EXECUTOR.submit(run_analyze_job, job_id, project, query, uploaded, profile_id)
+        JOB_EXECUTOR.submit(run_analyze_job, job_id, project, query, uploaded, profile_id, intake)
     except Exception:
         JOB_CAPACITY.release()
         raise
     return job
 
 
-def run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None) -> None:
+def run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None, intake: dict[str, Any] | None = None) -> None:
     try:
-        _run_analyze_job(job_id, project, query, uploaded, profile_id)
+        _run_analyze_job(job_id, project, query, uploaded, profile_id, intake)
     finally:
         JOB_CAPACITY.release()
 
 
-def _run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None) -> None:
+def _run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None, intake: dict[str, Any] | None = None) -> None:
     cancel_event = cancel_event_for(job_id)
     if cancel_event.is_set():
         return
@@ -77,6 +78,8 @@ def _run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple
         cancel_job(job_id, "timeout" if cancel_event.is_set() else "cancelled")
         return
     except Exception:
+        if intake:
+            ControlledIntake().finish(intake["operation_id"], "failed")
         update_job(job_id, status="failed", message="Задача завершилась ошибкой.", progress=100, error="Ошибка локальной обработки. Подробности не сохраняются.")
         return
     finally:
@@ -89,8 +92,10 @@ def _run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple
         status="done",
         message="Пакет готов.",
         progress=100,
-        result=asdict(package),
+        result={**asdict(package), "controlled_intake": intake or {}},
     )
+    if intake:
+        ControlledIntake().finish(intake["operation_id"], "done")
 
 
 def cancel_event_for(job_id: str) -> threading.Event:
