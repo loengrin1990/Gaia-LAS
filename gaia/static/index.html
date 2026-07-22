@@ -1491,8 +1491,7 @@
     function journeyError(data, fallback) {
       if (data?.error?.code === 'material_not_available') return 'Материал недоступен в выбранном рабочем пространстве. Данные не изменены.';
       if (data?.error?.code === 'review_temporarily_unavailable') return 'Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.';
-      const message = errorMessage(data?.error, fallback);
-      return `${message} Данные не изменены. Проверьте рабочее пространство и повторите действие.`;
+      return errorMessage(data?.error, fallback);
     }
     function journeyStateFor(material) {
       if (!material.current) return journeyState.superseded;

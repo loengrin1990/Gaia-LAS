@@ -56,3 +56,30 @@ class LocalReviewTests(unittest.TestCase):
             self.assertEqual(review.get(newer["artifact_id"])["artifact_id"], newer["artifact_id"])
             with self.assertRaises(ProvenanceError): review.confirm(san["artifact_id"])
         finally: tmp.cleanup()
+
+    def test_rejects_pseudonym_findings_stale_coordinates_and_repeated_decisions(self):
+        tmp,s,w,src,ext,san=self.setup_review()
+        try:
+            text=(s.root / "sanitized" / w / f"{san['artifact_id']}.txt").read_text(encoding="utf-8")
+            with self.assertRaises(ProvenanceError):
+                validate_model_payload({"findings":[{"category":"Сотрудник","start":7,"end":19,"confidence":"medium","reason_code":"residual","requires_review":True}]}, "prefix Сотрудник-01 suffix")
+            review=ReviewService(s,w,lambda value:{"findings":[{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]})
+            review.start(san["artifact_id"])
+            review.decide(san["artifact_id"],"model-1","keep")
+            with self.assertRaises(ProvenanceError): review.decide(san["artifact_id"],"model-1","keep")
+            record=review._read()[san["artifact_id"]]; record["decisions"]=[]; record["findings"][0]["expected_fingerprint"]="other"; review._write(san["artifact_id"],record)
+            with self.assertRaises(ProvenanceError): review.decide(san["artifact_id"],"model-1","replace")
+            self.assertEqual((s.root / "sanitized" / w / f"{san['artifact_id']}.txt").read_text(encoding="utf-8"), text)
+        finally: tmp.cleanup()
+
+    def test_multiple_dictionary_replacements_keep_words_and_tokens_intact(self):
+        tmp,s,w,src,ext,san=self.setup_review()
+        try:
+            source=s.accept_bytes(w, "Электронная почта: alpha@example.test. Сетевой адрес стенда: 10.1.2.3. Сотрудник Альфа Бета.".encode(), "text/plain")
+            extraction=s.create_extraction(w,source["source_id"],"v1")
+            cleaned=protect(s,w,extraction["artifact_id"],{"Сотрудник":["Альфа Бета"],"Другое":["стенда"]})["sanitized"]
+            text=(s.root / "sanitized" / w / f"{cleaned['artifact_id']}.txt").read_text(encoding="utf-8")
+            self.assertIn("Электронная почта",text); self.assertIn("Сетевой адрес",text)
+            self.assertNotIn("Сотрудник-02отрудник",text)
+            self.assertNotIn("Альфа Бета",text)
+        finally: tmp.cleanup()

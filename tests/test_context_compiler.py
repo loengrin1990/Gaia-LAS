@@ -12,6 +12,7 @@ from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
 from gaia.review import ReviewService
 from gaia.context_compiler import ContextCompiler, ContextService, validate_candidates
+from gaia.context_compiler import ContextCompileError, local_context_model
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 
@@ -60,6 +61,15 @@ class ContextCompilerTests(unittest.TestCase):
             with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v2")
             self.assertEqual(ContextService(s,w).get(existing["id"])["status"],"confirmed")
         finally: tmp.cleanup()
+
+    def test_context_model_uses_dedicated_route_and_classifies_bad_response(self):
+        with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":False}):
+            with self.assertRaises(ContextCompileError) as unavailable: local_context_model("[Сотрудник-01]")
+        self.assertEqual(unavailable.exception.code, "local_model_unavailable")
+        with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":"not json"}) as call:
+            with self.assertRaises(ContextCompileError) as invalid: local_context_model("[Сотрудник-01]")
+        self.assertEqual(invalid.exception.code, "local_model_invalid")
+        self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()

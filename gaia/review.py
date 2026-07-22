@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 from datetime import datetime
 from typing import Any, Callable
 
@@ -34,7 +36,7 @@ class ReviewService:
             raise ProvenanceError("Для проверки доступна только актуальная очищенная версия.")
         text = self._text(artifact_id)
         try:
-            findings = validate_model_payload(self.model(text), len(text))
+            findings = validate_model_payload(self.model(text), text)
             state = "requires_review"
         except Exception:
             findings = []; state = "requires_review"
@@ -79,6 +81,11 @@ class ReviewService:
         if not record or record["workspace_id"] != self.workspace_id or record["confirmed"]: raise ProvenanceError("Решение недоступно для этой версии.")
         finding = next((f for f in record["findings"] if f["finding_id"] == finding_id), None)
         if not finding: raise ProvenanceError("Находка проверки не найдена.")
+        if any(item["finding_id"] == finding_id for item in record["decisions"]):
+            raise ProvenanceError("Решение по этой находке уже сохранено.")
+        text = self._text(artifact_id)
+        if _fingerprint(text[finding["start"]:finding["end"]]) != finding["expected_fingerprint"]:
+            raise ProvenanceError("Находка относится к другой версии очищенного текста.")
         if category and category not in ALLOWED_CATEGORIES: raise ProvenanceError("Некорректная категория проверки.")
         record["decisions"].append({"finding_id": finding_id, "decision": decision, "category": category or finding["category"], "created_at": now()})
         record["state"] = "review_in_progress"; self._write(artifact_id, record); return self.safe(record)
@@ -104,7 +111,8 @@ class ReviewService:
         with path_lock(self.path):
             payload = self._read(); payload[artifact_id] = record; atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
-def validate_model_payload(payload: Any, text_length: int) -> list[dict[str, Any]]:
+def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]]:
+    text_length = len(text) if isinstance(text, str) else text
     if not isinstance(payload, dict) or set(payload) != {"findings"} or not isinstance(payload["findings"], list) or len(payload["findings"]) > MAX_FINDINGS:
         raise ProvenanceError("Некорректный ответ локальной проверки.")
     result=[]; used=[]
@@ -113,6 +121,15 @@ def validate_model_payload(payload: Any, text_length: int) -> list[dict[str, Any
         start,end=item["start"],item["end"]
         if item["category"] not in ALLOWED_CATEGORIES or not isinstance(start,int) or not isinstance(end,int) or not 0 <= start < end <= text_length or any(start < b and end > a for a,b in used): raise ProvenanceError("Некорректные координаты локальной проверки.")
         if item["confidence"] not in {"low","medium","high"} or not isinstance(item["reason_code"],str) or len(item["reason_code"]) > 48 or item["requires_review"] is not True: raise ProvenanceError("Некорректный ответ локальной проверки.")
-        used.append((start,end)); result.append({**item,"finding_id":f"model-{index}"})
+        expected_text = text[start:end] if isinstance(text, str) else ""
+        if _is_pseudonym_fragment(expected_text):
+            raise ProvenanceError("Локальная проверка не может предлагать уже созданный псевдоним.")
+        used.append((start,end)); result.append({**item,"finding_id":f"model-{index}","expected_fingerprint":_fingerprint(expected_text)})
     return result
+
+def _is_pseudonym_fragment(value: str) -> bool:
+    return bool(re.fullmatch(r"(?:" + "|".join(re.escape(category) for category in ALLOWED_CATEGORIES) + r")-\d{2,}", value))
+
+def _fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 def now() -> str: return datetime.now().isoformat(timespec="seconds")

@@ -7,6 +7,7 @@ from email.message import Message
 from types import SimpleNamespace
 
 from gaia.server import Handler, MAX_JSON_BODY_SIZE, MAX_MULTIPART_BODY_SIZE, MAX_UPLOAD_FILE_SIZE, MAX_UPLOAD_FILES, MULTIPART_READ_CHUNK_SIZE, SESSION_COOKIE_NAME, SESSION_TOKEN, multipart_files, multipart_value, mutation_is_authorized, parse_multipart
+from gaia.context_compiler import ContextCompileError
 
 
 class ServerContractTests(unittest.TestCase):
@@ -59,6 +60,18 @@ class ServerContractTests(unittest.TestCase):
         handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
         with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.json_response") as response): Handler.handle_context_action(handler)
         compiler.compile.assert_called_once_with("san_1"); self.assertEqual(response.call_args.args[1]["candidates"][0]["id"],"ctx_1")
+
+    def test_context_compile_reports_safe_specific_error(self) -> None:
+        compiler=Mock(); compiler.compile.side_effect=ContextCompileError("local_model_invalid", "synthetic")
+        intake=Mock(); intake.compiler.return_value=compiler; intake.store.root=Mock()
+        handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
+        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.context_compile_failure") as diagnostic,patch("gaia.server.json_response") as response):
+            Handler.handle_context_action(handler)
+        diagnostic.assert_called_once()
+        error=response.call_args.args[1]["error"]
+        self.assertEqual(error["code"],"local_model_invalid")
+        self.assertIn("не прошёл проверку",error["message"])
+        self.assertNotIn("synthetic",error["message"])
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (

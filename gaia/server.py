@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from http.cookies import SimpleCookie
 from ipaddress import ip_address
 import secrets
@@ -28,6 +29,7 @@ from .conversations import (
 )
 from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
 from .controlled_intake import ControlledIntake
+from .context_compiler import ContextCompileError
 from .provenance import ProvenanceError
 from .launchers import launch_gaia_window, launch_module
 from .local_llm import check_local_llm, run_lm_studio
@@ -110,6 +112,26 @@ def error_response(
     details: dict[str, Any] | None = None,
 ) -> None:
     json_response(handler, api_error_payload(code, message, details), status)
+
+
+def context_compile_failure(intake: ControlledIntake, project: str, artifact_id: str, trace_id: str, exc: Exception) -> None:
+    """Persist safe local diagnostics without material content or user paths."""
+    path = intake.store.root / "metadata" / "context_compile_diagnostics.json"
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        existing.append({
+            "trace_id": trace_id,
+            "stage": "compile",
+            "exception_type": type(exc).__name__,
+            "reason": getattr(exc, "code", "unexpected"),
+            "route": "context_compiler",
+            "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
+            "artifact_id": artifact_id,
+        })
+        path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        # Diagnostics must never affect the protected material or its API result.
+        pass
 
 
 def text_response(
@@ -538,8 +560,21 @@ class Handler(BaseHTTPRequestHandler):
             if action == "decision": json_response(self,intake.context(project).decide(object_id,str(payload.get("decision") or ""),str(payload.get("title") or ""),str(payload.get("statement") or ""))); return
             if action == "duplicate": json_response(self, intake.context(project).mark_duplicate(object_id, str(payload.get("target_id") or ""))); return
             if action == "conflict": json_response(self, intake.context(project).resolve_conflict(object_id, str(payload.get("resolution") or ""))); return
-        except ProvenanceError:
-            error_response(self,"context_failed","Не удалось обработать проектный контекст.",400); return
+        except ContextCompileError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            context_compile_failure(intake, project, object_id, trace_id, exc)
+            messages = {
+                "local_model_unavailable": "Локальная модель для сборки контекста недоступна. Данные не изменены. Убедитесь, что она запущена, и повторите попытку.",
+                "local_model_invalid": "Ответ локальной модели не прошёл проверку. Данные не изменены. Повторите сборку позже.",
+                "material_not_confirmed": "Материал ещё не подтверждён. Данные не изменены. Подтвердите актуальную очищенную версию и повторите сборку.",
+                "stale_version": "Эта версия материала устарела. Данные не изменены. Откройте актуальную версию и повторите сборку.",
+                "material_unavailable": "Материал недоступен в выбранном рабочем пространстве. Данные не изменены. Проверьте выбранное пространство и повторите действие.",
+            }
+            json_response(self, api_error_payload(exc.code, messages.get(exc.code, "Не удалось собрать проектный контекст. Данные не изменены. Повторите попытку."), trace_id=trace_id), 400); return
+        except ProvenanceError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            context_compile_failure(intake, project, object_id, trace_id, exc)
+            json_response(self, api_error_payload("context_internal_error", "Внутренняя ошибка сборки контекста. Данные не изменены. Повторите попытку.", trace_id=trace_id), 400); return
         error_response(self,"not_found","not found",404)
 
     def handle_job_action(self) -> None:
