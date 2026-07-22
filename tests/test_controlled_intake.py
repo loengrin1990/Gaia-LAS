@@ -25,6 +25,10 @@ class ControlledIntakeTests(unittest.TestCase):
             changed = intake.admit("synthetic-first", [("brief.txt", b"synthetic revision")])
             self.assertEqual(changed["materials"][0]["status"], "new_version")
             self.assertEqual(ControlledIntake(ProvenanceStore(root)).operation("synthetic-first", first["operation_id"])["status"], "accepted")
+            reprocessed = intake.reprocess_protection("synthetic-first", source["artifact_id"], "deterministic-v2")
+            self.assertFalse(intake.store.object_metadata(intake._workspace_for("synthetic-first"), source["sanitized_id"])["current"])
+            self.assertTrue(intake.store.object_metadata(intake._workspace_for("synthetic-first"), reprocessed["artifact_id"])["current"])
+            self.assertFalse(reprocessed["export_allowed"])
             with self.assertRaises(ProvenanceError):
                 intake.metadata("synthetic-second", source["source_id"])
 
