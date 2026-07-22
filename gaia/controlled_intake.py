@@ -48,7 +48,7 @@ class ControlledIntake:
                     material["status"] = "new_version"
                 extraction = self.store.create_extraction(workspace_id, source["source_id"], "gaia-extractor-v1")
                 material["artifact_id"] = extraction["artifact_id"]
-                outcome = protect(self.store, workspace_id, extraction["artifact_id"])
+                outcome = protect(self.store, workspace_id, extraction["artifact_id"], self.dictionary(project))
                 material["sanitized_id"] = outcome["sanitized"]["artifact_id"]
                 material["protection"] = {"status": outcome["report"]["status"], "counts": outcome["report"]["counts"]}
                 cleaned = (self.store.root / "sanitized" / workspace_id / f"{material['sanitized_id']}.txt").read_text(encoding="utf-8")
@@ -84,8 +84,18 @@ class ControlledIntake:
 
     def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)
-        outcome = protect(self.store, workspace_id, extraction_id, rules_version=rules_version)
+        outcome = protect(self.store, workspace_id, extraction_id, self.dictionary(project), rules_version)
         return {"artifact_id": outcome["sanitized"]["artifact_id"], "status": outcome["report"]["status"], "export_allowed": False}
+
+    def set_dictionary(self, project: str, dictionary: dict[str, list[str]]) -> None:
+        workspace_id = self._workspace_for(project)
+        safe = {str(category): [str(value) for value in values if str(value).strip()] for category, values in dictionary.items() if isinstance(values, list)}
+        atomic_write_text(self.store.root / "pseudonyms" / f"{workspace_id}.dictionary.json", json.dumps(safe, ensure_ascii=False, indent=2) + "\n")
+
+    def dictionary(self, project: str) -> dict[str, list[str]]:
+        workspace_id = self._workspace_for(project)
+        path = self.store.root / "pseudonyms" / f"{workspace_id}.dictionary.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
     def _workspace_for(self, project: str) -> str:
         key = hashlib.sha256(project.strip().encode("utf-8")).hexdigest()

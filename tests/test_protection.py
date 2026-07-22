@@ -32,3 +32,13 @@ class ProtectionTests(unittest.TestCase):
             other=s.create_workspace(); src=s.accept_bytes(other,b"test.person@example.invalid 2026-07-22 42 1000 RUB Stolitsa 127.0.0.1", "text/plain"); art=s.create_extraction(other,src["source_id"],"v1"); out=protect(s,other,art["artifact_id"]); body=(s.root/"sanitized"/other/f"{out['sanitized']['artifact_id']}.txt").read_text()
             self.assertIn("2026-07-22",body); self.assertIn("42",body); self.assertIn("127.0.0.1",body); self.assertIn("ЭлектроннаяПочта-01",body)
         finally: tmp.cleanup()
+    def test_required_error_blocks_and_optional_error_requires_review(self):
+        tmp,s,w,source,extraction=self.make()
+        try:
+            with self.assertRaises(ProvenanceError):
+                protect(s,w,extraction["artifact_id"], extra_rules=[("ЭлектроннаяПочта", "(", True)])
+            result=protect(s,w,extraction["artifact_id"], extra_rules=[("Дополнительный", "(", False)])
+            self.assertEqual(result["report"]["status"], "requires_review")
+            self.assertEqual(result["report"]["failed_optional_rules"], ["Дополнительный"])
+            self.assertFalse(result["sanitized"]["export_allowed"])
+        finally: tmp.cleanup()

@@ -31,22 +31,27 @@ RULES = (
 )
 
 
-def protect(store: ProvenanceStore, workspace_id: str, extraction_id: str, dictionary: dict[str, list[str]] | None = None, rules_version: str = RULES_VERSION) -> dict[str, Any]:
+def protect(store: ProvenanceStore, workspace_id: str, extraction_id: str, dictionary: dict[str, list[str]] | None = None, rules_version: str = RULES_VERSION, extra_rules: list[tuple[str, str, bool]] | None = None) -> dict[str, Any]:
     if store.object_metadata(workspace_id, extraction_id).get("kind") != "extraction":
         raise ProvenanceError("Управляемый результат извлечения не найден.")
     source = store.root / "artifacts" / workspace_id / f"{extraction_id}.txt"
     text = source.read_text(encoding="utf-8")
     mapping = _mapping(store, workspace_id)
     counts: Counter[str] = Counter(); findings: list[dict[str, Any]] = []
-    rules = list(RULES) + [(category, re.escape(value)) for category, values in (dictionary or {}).items() for value in values if value]
-    try:
-        for category, pattern in rules:
+    rules = [(category, pattern, category in REQUIRED_CATEGORIES) for category, pattern in RULES]
+    rules += [(category, re.escape(value), True) for category, values in (dictionary or {}).items() for value in values if value]
+    rules += extra_rules or []
+    failed_optional: list[str] = []
+    for category, pattern, required in rules:
+        try:
             text = re.sub(pattern, _replacement(category, mapping, counts, findings, rules_version), text, flags=re.IGNORECASE if category in {"Секрет", "Реквизит", "Адрес"} else 0)
-    except re.error as exc:
-        raise ProvenanceError("Не удалось выполнить обязательную локальную очистку.") from exc
+        except re.error as exc:
+            if required:
+                raise ProvenanceError("Не удалось выполнить обязательную локальную очистку.") from exc
+            failed_optional.append(category)
     _save_mapping(store, workspace_id, mapping)
     sanitized = store.create_sanitized(workspace_id, extraction_id, rules_version, text)
-    report = {"artifact_id": sanitized["artifact_id"], "status": "requires_review" if findings else "ready_for_review", "counts": dict(counts), "findings": findings, "rule_version": rules_version, "export_allowed": False}
+    report = {"artifact_id": sanitized["artifact_id"], "status": "requires_review" if findings or failed_optional else "ready_for_review", "counts": dict(counts), "findings": findings, "rule_version": rules_version, "export_allowed": False, "failed_optional_rules": failed_optional}
     _save_report(store, report)
     return {"sanitized": sanitized, "report": report}
 

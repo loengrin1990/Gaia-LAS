@@ -13,10 +13,12 @@ class ControlledIntakeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "storage"
             intake = ControlledIntake(ProvenanceStore(root))
+            intake.set_dictionary("synthetic-first", {"Организация": ["Организация Альфа"]})
             first = intake.admit("synthetic-first", [("brief.txt", b"synthetic material")])
             source = first["materials"][0]
             self.assertFalse(source["duplicate"])
             self.assertTrue(source["artifact_id"].startswith("art_"))
+            self.assertEqual(intake.dictionary("synthetic-first")["Организация"], ["Организация Альфа"])
             self.assertEqual(intake.lineage("synthetic-first", source["artifact_id"])["source_id"], source["source_id"])
             with self.assertRaises(ProvenanceError):
                 intake.admit("synthetic-first", [("brief.txt", b"synthetic material")])
