@@ -51,7 +51,7 @@ def protect(store: ProvenanceStore, workspace_id: str, extraction_id: str, dicti
             failed_optional.append(category)
     _save_mapping(store, workspace_id, mapping)
     sanitized = store.create_sanitized(workspace_id, extraction_id, rules_version, text)
-    report = {"artifact_id": sanitized["artifact_id"], "status": "requires_review" if findings or failed_optional else "ready_for_review", "counts": dict(counts), "findings": findings, "rule_version": rules_version, "export_allowed": False, "failed_optional_rules": failed_optional}
+    report = {"artifact_id": sanitized["artifact_id"], "status": "requires_review" if findings or failed_optional else "ready_for_review", "counts": dict(counts), "findings": findings, "rule_version": rules_version, "export_allowed": False}
     _save_report(store, report)
     return {"sanitized": sanitized, "report": report}
 

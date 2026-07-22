@@ -39,6 +39,6 @@ class ProtectionTests(unittest.TestCase):
                 protect(s,w,extraction["artifact_id"], extra_rules=[("ЭлектроннаяПочта", "(", True)])
             result=protect(s,w,extraction["artifact_id"], extra_rules=[("Дополнительный", "(", False)])
             self.assertEqual(result["report"]["status"], "requires_review")
-            self.assertEqual(result["report"]["failed_optional_rules"], ["Дополнительный"])
+            self.assertNotIn("failed_optional_rules", result["report"])
             self.assertFalse(result["sanitized"]["export_allowed"])
         finally: tmp.cleanup()
