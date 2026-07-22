@@ -70,8 +70,6 @@ def write_run_journal(package: AnalysisPackage) -> None:
             f"- Категории: {format_counts(package.query_mask_review.counts)}",
             f"- Неподтвержденный риск ПД: {'да' if package.query_mask_review.unresolved_pii else 'нет'}",
         ])
-        if package.query_mask_review.unresolved_reason:
-            parts.append(f"- Причина: {package.query_mask_review.unresolved_reason}")
     if package.prompt_mask_review:
         parts.extend([
             "",
@@ -83,8 +81,6 @@ def write_run_journal(package: AnalysisPackage) -> None:
             f"- Неподтвержденный риск ПД: {'да' if package.prompt_mask_review.unresolved_pii else 'нет'}",
             f"- Ручное подтверждение: {'да' if package.prompt_mask_review.manual_confirmation_required else 'нет'}",
         ])
-        if package.prompt_mask_review.unresolved_reason:
-            parts.append(f"- Причина: {package.prompt_mask_review.unresolved_reason}")
     parts.extend(["", "## Выбор контекста", "", f"- Выбрано разделов: {len(package.memory_sources)} из {package.memory_total_sections}"])
     parts.extend(["", "## Файлы", ""])
     if package.files:
@@ -93,7 +89,7 @@ def write_run_journal(package: AnalysisPackage) -> None:
             if item.mask_review:
                 parts.append(f"  - Категории: {format_counts(item.mask_review.counts)}")
                 if item.mask_review.unresolved_pii:
-                    parts.append(f"  - Неподтвержденный риск ПД: {item.mask_review.unresolved_reason}")
+                    parts.append("  - Неподтвержденный риск ПД: да")
     else:
         parts.append("- Файлы не приложены.")
     parts.extend(["", "## Пакет", "", "- Содержимое пакета в технический журнал не записывается.", ""])

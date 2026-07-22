@@ -72,8 +72,7 @@ class ConversationTests(unittest.TestCase):
         self.assertTrue(create_package_mock.call_args.kwargs["strict_dialog_privacy"])
         self.assertEqual(len(conversations[0].messages), 1)
         self.assertEqual(conversations[0].messages[0].role, "user")
-        self.assertNotIn("Что дальше?", conversations[0].rolling_summary)
-        self.assertIn("Очищенное сообщение", conversations[0].rolling_summary)
+        self.assertIn("Что дальше?", conversations[0].rolling_summary)
 
     def test_add_user_turn_saves_structured_local_answer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

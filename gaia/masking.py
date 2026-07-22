@@ -50,6 +50,7 @@ GAIA_RULES = [
     MaskRule("PERSON", re.compile(r"\b[А-ЯЁ][а-яё]{2,}\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.", re.IGNORECASE)),
     MaskRule("ID", re.compile(r"\b(?:КПП|ОГРН|СНИЛС)\s*[:№#-]?\s*[0-9\- ]{6,24}\b", re.IGNORECASE)),
     MaskRule("CONTRACT", re.compile(r"\b(?:договор|контракт|доп\.?\s*соглашение)\s*(?:№|N|#)?\s*[A-Za-zА-Яа-я0-9_./\\-]*\d[A-Za-zА-Яа-я0-9_./\\-]*\b", re.IGNORECASE)),
+    MaskRule("INTERNAL_ID", re.compile(r"\b[A-Za-zА-Яа-яЁё]{4,}[-_]\d{2,}\b")),
 ]
 
 

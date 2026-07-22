@@ -127,7 +127,7 @@ def _add_user_turn_locked(
         strict_dialog_privacy=True,
     )
     user_mask = mask_with_review("Диалог: сообщение пользователя", query, strict_dialog_privacy=True)
-    safe_user_text = f"Очищенное сообщение: {len(query)} символов; замен: {user_mask.review.total_replacements}."
+    safe_user_text = user_mask.masked_text.strip() or "Очищенное сообщение не содержит сохраняемого текста."
     user_message = ConversationMessage(
         id=uuid.uuid4().hex[:12],
         role="user",

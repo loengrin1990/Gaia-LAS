@@ -13,8 +13,8 @@ from gaia.masking import mask_with_review
 from gaia.models import AnalysisPackage
 
 
-RAW_MARKER = "SyntheticSecret-123"
-MASKED_MARKER = "[PROJECT_01]"
+RAW_MARKER = "СекретныйПроект-123"
+MASKED_MARKER = "[INTERNAL_ID_01]"
 
 
 def package_fixture(root: Path) -> AnalysisPackage:
@@ -56,10 +56,12 @@ class SecurityStorageTests(unittest.TestCase):
                 patch("gaia.conversations.create_package", return_value=package),
             ):
                 conversation = create_conversation("synthetic-project")
-                add_user_turn(conversation.id, "test.person@example.invalid " + RAW_MARKER)
+                add_user_turn(conversation.id, "Проверь статус " + RAW_MARKER + " для test.person@example.invalid")
                 stored = next((settings.service_docs / "Диалоги").glob("*/*.json")).read_text(encoding="utf-8")
         self.assertNotIn("test.person@example.invalid", stored)
         self.assertNotIn(RAW_MARKER, stored)
+        self.assertIn("Проверь статус", stored)
+        self.assertIn("[INTERNAL_ID_", stored)
 
     def test_successful_and_expired_temporary_artifacts_are_removed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
