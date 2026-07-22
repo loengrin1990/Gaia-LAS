@@ -475,7 +475,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             review = ControlledIntake().review(project)
             if action == "check": json_response(self, review.start(artifact_id), 202); return
-            if action == "decision": json_response(self, review.decide(artifact_id, str(payload.get("finding_id") or ""), str(payload.get("decision") or ""), str(payload.get("category") or ""))); return
+            if action == "decision":
+                decision = str(payload.get("decision") or ""); result = review.decide(artifact_id, str(payload.get("finding_id") or ""), decision, str(payload.get("category") or ""))
+                if decision == "replace":
+                    current = review.get(artifact_id, include_text=True); finding = next(item for item in current["findings"] if item["finding_id"] == str(payload.get("finding_id") or ""))
+                    result["new_version"] = ControlledIntake().add_dictionary_value(project, artifact_id, finding["category"], current["cleaned_text"][finding["start"]:finding["end"]])
+                json_response(self, result); return
             if action == "dictionary":
                 json_response(self, ControlledIntake().add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or "")), 202); return
             if action == "confirm":
