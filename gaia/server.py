@@ -212,6 +212,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/protection/"):
             self.handle_protection_get()
             return
+        if self.path.startswith("/api/reviews/"):
+            self.handle_review_get()
+            return
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
@@ -230,6 +233,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.startswith("/api/protection/") and route.endswith("/reprocess"):
             self.handle_protection_reprocess()
+            return
+        if route.startswith("/api/reviews/"):
+            self.handle_review_action()
             return
         if route.startswith("/api/jobs/"):
             self.handle_job_action()
@@ -397,7 +403,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             intake = ControlledIntake().admit(project, uploaded) if uploaded else None
-            job = submit_analyze_job(project, query, intake["protected_uploads"] if intake else uploaded, profile, intake)
+            if intake:
+                material = intake["materials"][0]
+                review = ControlledIntake().review(project).start(material["sanitized_id"])
+                json_response(self, {"status": "requires_review", "message": "Материал требует проверки.", "review": review}, 202)
+                return
+            job = submit_analyze_job(project, query, uploaded, profile, None)
         except ProvenanceError as exc:
             error_response(self, "material_intake_failed", str(exc), 400)
             return
@@ -453,6 +464,25 @@ class Handler(BaseHTTPRequestHandler):
         except ProvenanceError:
             error_response(self, "protection_reprocess_failed", "Не удалось повторно выполнить очистку материала.", 400); return
         json_response(self, result, 202)
+
+    def handle_review_get(self) -> None:
+        route = urlparse(self.path); parts = route.path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
+        try: json_response(self, ControlledIntake().review(project).get(artifact_id, include_text=True))
+        except ProvenanceError: error_response(self, "review_not_found", "Проверка недоступна в этом рабочем пространстве.", 404)
+
+    def handle_review_action(self) -> None:
+        parts = urlparse(self.path).path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; action = parts[4] if len(parts) >= 5 else ""; payload = self.read_json(); project = str(payload.get("project") or "")
+        try:
+            review = ControlledIntake().review(project)
+            if action == "check": json_response(self, review.start(artifact_id), 202); return
+            if action == "decision": json_response(self, review.decide(artifact_id, str(payload.get("finding_id") or ""), str(payload.get("decision") or ""), str(payload.get("category") or ""))); return
+            if action == "confirm":
+                cleaned = review.confirm(artifact_id)
+                job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
+                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
+        except ProvenanceError:
+            error_response(self, "review_failed", "Не удалось завершить локальную проверку материала.", 400); return
+        error_response(self, "not_found", "not found", 404)
 
     def handle_job_action(self) -> None:
         parts = urlparse(self.path).path.split("/")

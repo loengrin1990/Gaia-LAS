@@ -17,6 +17,7 @@ from .provenance import ProvenanceError, ProvenanceStore, default_store
 from .storage import atomic_write_text, path_lock
 from .protection import protect
 from .protection import safe_report
+from .review import ReviewService
 
 
 class ControlledIntake:
@@ -90,6 +91,9 @@ class ControlledIntake:
 
     def protection_lineage(self, project: str, artifact_id: str) -> dict[str, Any]:
         return self.store.lineage(self._workspace_for(project), artifact_id)
+
+    def review(self, project: str) -> ReviewService:
+        return ReviewService(self.store, self._workspace_for(project))
 
     def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import unittest
+from unittest.mock import Mock, patch
 from email.message import Message
 from types import SimpleNamespace
 
@@ -9,6 +10,31 @@ from gaia.server import Handler, MAX_JSON_BODY_SIZE, MAX_MULTIPART_BODY_SIZE, MA
 
 
 class ServerContractTests(unittest.TestCase):
+    def test_review_check_does_not_submit_analysis_before_confirmation(self) -> None:
+        service = Mock(); service.start.return_value = {"artifact_id": "san_1", "state": "requires_review", "cleaned_text": "[PERSON_1]"}
+        intake = Mock(); intake.review.return_value = service
+        handler = SimpleNamespace(path="/api/reviews/san_1/check", read_json=lambda: {"project": "synthetic"})
+        with (
+            patch("gaia.server.ControlledIntake", return_value=intake),
+            patch("gaia.server.json_response") as response,
+            patch("gaia.server.submit_analyze_job") as submit,
+        ):
+            Handler.handle_review_action(handler)
+        service.start.assert_called_once_with("san_1")
+        submit.assert_not_called(); response.assert_called_once()
+
+    def test_review_confirmation_submits_only_cleaned_text(self) -> None:
+        service = Mock(); service.confirm.return_value = "[PERSON_1]"
+        intake = Mock(); intake.review.return_value = service
+        handler = SimpleNamespace(path="/api/reviews/san_1/confirm", read_json=lambda: {"project": "synthetic", "query": "q", "profile": ""})
+        job = SimpleNamespace(id="job_1")
+        with (
+            patch("gaia.server.ControlledIntake", return_value=intake),
+            patch("gaia.server.json_response"),
+            patch("gaia.server.submit_analyze_job", return_value=job) as submit,
+        ):
+            Handler.handle_review_action(handler)
+        self.assertEqual(submit.call_args.args[2], [("cleaned.txt", b"[PERSON_1]")])
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (

@@ -1736,6 +1736,11 @@
         root.appendChild(emptyCard('Разговоры', errorMessage(data.error, 'Не удалось загрузить разговоры.')));
         return;
       }
+      if (data.status === 'requires_review' && data.review) {
+        renderLocalMaterialReview(data.review, queryInput.value, document.getElementById('profile').value);
+        setOutput('Материал требует локальной проверки перед анализом.');
+        return;
+      }
       conversations = data.conversations || [];
       if (!currentConversation || currentConversation.project !== project) {
         currentConversation = conversations[0] || null;
@@ -1744,6 +1749,26 @@
       }
       renderConversationList();
       renderCurrentConversation();
+    }
+
+    function renderLocalMaterialReview(review, query, profile) {
+      const panel = document.getElementById('reviewPanel');
+      panel.hidden = false;
+      document.getElementById('promptPreview').value = review.cleaned_text || '';
+      const state = document.getElementById('reviewState');
+      state.textContent = 'Материал требует проверки'; state.className = 'review-state danger';
+      const actions = panel.querySelector('.review-actions');
+      actions.innerHTML = '';
+      for (const finding of review.findings || []) {
+        for (const decision of [['replace', 'Заменить'], ['keep', 'Оставить']]) {
+          const button = document.createElement('button'); button.type='button'; button.className='secondary'; button.textContent=`${decision[1]}: ${finding.category}`;
+          button.onclick=async()=>{ await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/decision`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,finding_id:finding.finding_id,decision:decision[0]})}); button.disabled=true; };
+          actions.appendChild(button);
+        }
+      }
+      const confirm = document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить очищенный материал';
+      confirm.onclick=async()=>{ const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,query,profile})}); const data=await res.json(); if(!res.ok){renderReadableError(errorMessage(data.error,'Не удалось подтвердить материал.'),data);return;} currentJobId=data.job_id; pollJob(currentJobId); };
+      actions.appendChild(confirm);
     }
 
     function renderConversationList() {
