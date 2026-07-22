@@ -82,6 +82,15 @@ class ControlledIntake:
     def protection_report(self, project: str, artifact_id: str) -> dict[str, Any]:
         return safe_report(self.store, self._workspace_for(project), artifact_id)
 
+    def protection_metadata(self, project: str, artifact_id: str) -> dict[str, Any]:
+        item = self.store.object_metadata(self._workspace_for(project), artifact_id)
+        if item.get("kind") != "sanitized":
+            raise ProvenanceError("Очищенное представление недоступно в этом рабочем пространстве.")
+        return {key: item[key] for key in ("artifact_id", "workspace_id", "status", "processor_version", "rules_version", "current", "previous_id", "export_allowed", "created_at", "checksum", "parents") if key in item}
+
+    def protection_lineage(self, project: str, artifact_id: str) -> dict[str, Any]:
+        return self.store.lineage(self._workspace_for(project), artifact_id)
+
     def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)
         outcome = protect(self.store, workspace_id, extraction_id, self.dictionary(project), rules_version)

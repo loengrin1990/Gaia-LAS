@@ -433,9 +433,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_protection_get(self) -> None:
         route = urlparse(self.path); parts = route.path.split("/")
-        artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
+        artifact_id = parts[3] if len(parts) >= 4 else ""; action = parts[4] if len(parts) >= 5 else ""; project = parse_qs(route.query).get("project", [""])[0]
         try:
-            json_response(self, ControlledIntake().protection_report(project, artifact_id))
+            intake = ControlledIntake()
+            if action == "metadata":
+                json_response(self, intake.protection_metadata(project, artifact_id))
+            elif action == "lineage":
+                json_response(self, intake.protection_lineage(project, artifact_id))
+            else:
+                json_response(self, intake.protection_report(project, artifact_id))
         except (ProvenanceError, ValueError):
             error_response(self, "protection_report_not_found", "Отчёт очистки недоступен в этом рабочем пространстве.", 404)
 
