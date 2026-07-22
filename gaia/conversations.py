@@ -127,11 +127,12 @@ def _add_user_turn_locked(
         strict_dialog_privacy=True,
     )
     user_mask = mask_with_review("Диалог: сообщение пользователя", query, strict_dialog_privacy=True)
+    safe_user_text = f"Очищенное сообщение: {len(query)} символов; замен: {user_mask.review.total_replacements}."
     user_message = ConversationMessage(
         id=uuid.uuid4().hex[:12],
         role="user",
-        text=query,
-        masked_text=user_mask.masked_text,
+        text="",
+        masked_text=safe_user_text,
         created_at=local_now(),
         job_id=package.run_id,
         route=package.route,
@@ -145,11 +146,12 @@ def _add_user_turn_locked(
         local_result = run_lm_studio(package.prompt)
         answer = str(local_result.get("answer") or local_result.get("error") or "")
         if answer:
+            answer_mask = mask_with_review("Диалог: ответ локальной модели", answer, strict_dialog_privacy=True)
             conversation.messages.append(ConversationMessage(
                 id=uuid.uuid4().hex[:12],
                 role="assistant",
-                text=answer,
-                masked_text=answer,
+                text="",
+                masked_text=answer_mask.masked_text,
                 created_at=local_now(),
                 job_id=package.run_id,
                 route="local",
@@ -159,7 +161,7 @@ def _add_user_turn_locked(
 
     conversation.rolling_summary = update_summary(conversation)
     if conversation.title == "Новый диалог" and query:
-        conversation.title = query[:80]
+        conversation.title = safe_user_text[:80]
     conversation.updated_at = local_now()
     write_conversation(conversation)
     return {

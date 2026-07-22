@@ -2,6 +2,7 @@
 config.json
 runs/
 outputs/
+exports/
 backups/
 tmp/
 
@@ -29,4 +30,3 @@ venv/
 .DS_Store
 .idea/
 .vscode/
-

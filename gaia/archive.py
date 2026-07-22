@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -23,6 +24,7 @@ class RetentionReport:
     removed_runs: list[str]
     removed_journals: list[str]
     removed_audits: list[str]
+    removed_temporary: list[str]
     skipped: list[str]
 
 
@@ -41,17 +43,23 @@ def write_run_journal(package: AnalysisPackage) -> None:
         f"# Запрос {package.run_id}",
         "",
         f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Проект: {package.project}",
+        f"Рабочее пространство: {safe_identifier(package.project)}",
         f"Профиль: {package.profile_title} (`{package.profile_id}`)",
         f"Маршрут: {package.route}",
         f"Можно готовить для Codex после подтверждения: {package.safe_for_codex_after_confirmation}",
         f"Требуется локальный fallback: {package.local_fallback_required}",
         f"Lore выбрал разделов: {len(package.memory_sources)} из {package.memory_total_sections}",
         "",
-        "## Политика",
+        f"Входных файлов: {len(package.files)}",
+        f"Всего замен: {sum(item.mask_replacements for item in package.files) + package.query_mask_replacements}",
+        "",
+        "## Технический результат",
         "",
     ]
-    parts.extend(f"- {note}" for note in package.policy_notes)
+    parts.extend([
+        f"- Статус маскирования запроса: {package.query_mask_status}",
+        f"- Внешний маршрут после подтверждения: {'разрешён' if package.safe_for_codex_after_confirmation else 'заблокирован'}",
+    ])
     if package.query_mask_review:
         parts.extend([
             "",
@@ -77,36 +85,18 @@ def write_run_journal(package: AnalysisPackage) -> None:
         ])
         if package.prompt_mask_review.unresolved_reason:
             parts.append(f"- Причина: {package.prompt_mask_review.unresolved_reason}")
-    parts.extend(["", "## Lore: выбранные разделы памяти", ""])
-    if package.memory_sources:
-        for source in package.memory_sources:
-            terms = ", ".join(source.matched_terms) if source.matched_terms else "нет"
-            parts.append(
-                f"- {source.heading}: строки {source.line_start}-{source.line_end}, "
-                f"score {source.score}, совпадения: {terms}"
-            )
-    else:
-        parts.append("- Разделы памяти не выбраны.")
-    parts.extend(["", "## Lore: evidence plan", ""])
-    if package.evidence_plan:
-        for item in package.evidence_plan:
-            parts.append(
-                f"- {item.status}: {item.heading or '-'} ({item.scope}, {item.source_path or '-'}). "
-                f"{item.reason}"
-            )
-    else:
-        parts.append("- Evidence drill-down не запускался или не нашел подтверждений.")
+    parts.extend(["", "## Выбор контекста", "", f"- Выбрано разделов: {len(package.memory_sources)} из {package.memory_total_sections}"])
     parts.extend(["", "## Файлы", ""])
     if package.files:
         for item in package.files:
-            parts.append(f"- {item.name}: {item.mask_status}, замен {item.mask_replacements}, {item.extraction_note}")
+            parts.append(f"- Тип: {item.kind}; статус: {item.mask_status}; замен: {item.mask_replacements}")
             if item.mask_review:
                 parts.append(f"  - Категории: {format_counts(item.mask_review.counts)}")
                 if item.mask_review.unresolved_pii:
                     parts.append(f"  - Неподтвержденный риск ПД: {item.mask_review.unresolved_reason}")
     else:
         parts.append("- Файлы не приложены.")
-    parts.extend(["", "## Безопасный пакет", "", "```text", package.prompt[:100000], "```", ""])
+    parts.extend(["", "## Пакет", "", "- Содержимое пакета в технический журнал не записывается.", ""])
     path.write_text("\n".join(parts), encoding="utf-8")
     write_safety_audit(package)
 
@@ -118,7 +108,7 @@ def write_safety_audit(package: AnalysisPackage) -> None:
         f"# Safety audit {package.run_id}",
         "",
         f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Проект: {package.project}",
+        f"Рабочее пространство: {safe_identifier(package.project)}",
         f"Профиль: {package.profile_title} (`{package.profile_id}`)",
         f"Маршрут: {package.route}",
         f"Внешний маршрут после подтверждения: {package.safe_for_codex_after_confirmation}",
@@ -144,17 +134,10 @@ def write_safety_audit(package: AnalysisPackage) -> None:
     if package.files:
         for item in package.files:
             categories = format_counts(item.mask_review.counts) if item.mask_review else "нет"
-            parts.append(f"- {item.name}: {item.kind}, {item.mask_status}, замен {item.mask_replacements}, категории: {categories}")
+            parts.append(f"- Тип: {item.kind}; статус: {item.mask_status}; замен: {item.mask_replacements}; категории: {categories}")
     else:
         parts.append("- Файлы не приложены.")
-    parts.extend(["", "## Policy notes", ""])
-    parts.extend(f"- {note}" for note in package.policy_notes)
-    parts.extend(["", "## Lore evidence summary", ""])
-    if package.evidence_plan:
-        for item in package.evidence_plan:
-            parts.append(f"- {item.status}: {item.heading or '-'}; {item.reason}")
-    else:
-        parts.append("- Evidence drill-down не запускался или не нашел подтверждений.")
+    parts.extend(["", "## Технические сведения", "", f"- Выбрано разделов памяти: {len(package.memory_sources)} из {package.memory_total_sections}"])
     parts.extend([
         "",
         "## Retention class",
@@ -170,13 +153,36 @@ def apply_retention(dry_run: bool = False, now: float | None = None) -> Retentio
     if SETTINGS is None:
         raise ConfigError("Settings are unavailable.")
     current = time.time() if now is None else now
-    report = RetentionReport(dry_run=dry_run, removed_runs=[], removed_journals=[], removed_audits=[], skipped=[])
+    report = RetentionReport(dry_run=dry_run, removed_runs=[], removed_journals=[], removed_audits=[], removed_temporary=[], skipped=[])
+    prune_temporary_artifacts(SETTINGS.runs_dir, SETTINGS.retention_temporary_hours, current, report, dry_run)
     prune_run_dirs(SETTINGS.runs_dir, SETTINGS.retention_runs_days, current, report, dry_run)
     prune_markdown_files(SETTINGS.run_journal_dir, SETTINGS.retention_journals_days, current, report.removed_journals, report, dry_run)
     prune_markdown_files(SETTINGS.safety_audit_dir, SETTINGS.retention_audit_days, current, report.removed_audits, report, dry_run)
     if not dry_run:
         write_retention_status(report)
     return report
+
+
+def cleanup_run_temporary_artifacts(run_dir: Path) -> None:
+    for name in ("uploads", "transcripts"):
+        path = run_dir / name
+        if path.exists() and path.is_dir():
+            shutil.rmtree(path)
+
+
+def prune_temporary_artifacts(root: Path, hours: int, now: float, report: RetentionReport, dry_run: bool) -> None:
+    if hours == 0 or not safe_retention_root(root) or not root.exists():
+        return
+    cutoff = now - hours * 3600
+    for run_dir in sorted(root.iterdir()):
+        if not run_dir.is_dir() or not RUN_ID_RE.match(run_dir.name) or run_dir.stat().st_mtime >= cutoff:
+            continue
+        for name in ("uploads", "transcripts"):
+            path = run_dir / name
+            if path.is_dir():
+                report.removed_temporary.append(f"{run_dir.name}/{name}")
+                if not dry_run:
+                    shutil.rmtree(path)
 
 
 def retention_status_path() -> Path:
@@ -264,6 +270,10 @@ def format_counts(counts: dict[str, int]) -> str:
     if not counts:
         return "нет"
     return ", ".join(f"{category}: {count}" for category, count in sorted(counts.items()))
+
+
+def safe_identifier(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16] if value else "без-рабочего-пространства"
 
 
 def main() -> int:

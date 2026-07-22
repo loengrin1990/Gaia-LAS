@@ -28,6 +28,7 @@ class Settings:
     safety_audit_dir: Path
     runs_dir: Path
     uploads_dir: Path
+    exports_dir: Path
     obsidian_work: Path
     transcriber_path: Path
     lm_studio_launcher: Path
@@ -43,6 +44,9 @@ class Settings:
     retention_runs_days: int
     retention_journals_days: int
     retention_audit_days: int
+    retention_conversations_days: int
+    retention_temporary_hours: int
+    retention_operation_metadata_days: int
     retention_cleanup_on_startup: bool
     lore_semantic_rerank: bool
     lore_rerank_candidates: int
@@ -117,6 +121,13 @@ def optional_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ConfigError(f"Config value `{key}` must be an object.")
+    return value
+
+
+def optional_str(payload: dict[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"Config value `{key}` must be a non-empty string.")
     return value
 
 
@@ -281,6 +292,7 @@ def load_settings(validate: bool = True) -> Settings:
     projects = expand_path(require_str(paths, "projects"), tokens)
     service_docs = expand_path(require_str(paths, "service_docs"), tokens)
     runs_dir = expand_path(require_str(paths, "runs"), tokens)
+    exports_dir = expand_path(optional_str(paths, "exports", "${APP_DIR}/exports"), tokens)
     obsidian_work = expand_path(require_str(paths, "obsidian_work"), tokens)
     transcriber = expand_path(require_str(paths, "transcriber"), tokens)
     lm_studio_launcher = expand_path(require_str(paths, "lm_studio_launcher"), tokens)
@@ -309,6 +321,7 @@ def load_settings(validate: bool = True) -> Settings:
         safety_audit_dir=service_docs / "Аудит безопасности",
         runs_dir=runs_dir,
         uploads_dir=runs_dir / "uploads",
+        exports_dir=exports_dir,
         obsidian_work=obsidian_work,
         transcriber_path=transcriber,
         lm_studio_launcher=lm_studio_launcher,
@@ -323,7 +336,10 @@ def load_settings(validate: bool = True) -> Settings:
         port=port_value,
         retention_runs_days=optional_int(retention, "runs_days", 7),
         retention_journals_days=optional_int(retention, "journals_days", 30),
-        retention_audit_days=optional_int(retention, "audit_days", 365),
+        retention_audit_days=optional_int(retention, "audit_days", 30),
+        retention_conversations_days=optional_int(retention, "conversations_days", 90),
+        retention_temporary_hours=optional_int(retention, "temporary_hours", 24),
+        retention_operation_metadata_days=optional_int(retention, "operation_metadata_days", 180),
         retention_cleanup_on_startup=optional_bool(retention, "cleanup_on_startup", False),
         lore_semantic_rerank=optional_bool(lore, "semantic_rerank", False),
         lore_rerank_candidates=optional_int(lore, "rerank_candidates", 24),
@@ -384,6 +400,7 @@ def ensure_dirs() -> None:
     validate_settings(SETTINGS)
     SETTINGS.runs_dir.mkdir(parents=True, exist_ok=True)
     SETTINGS.uploads_dir.mkdir(parents=True, exist_ok=True)
+    SETTINGS.exports_dir.mkdir(parents=True, exist_ok=True)
     SETTINGS.service_docs.mkdir(parents=True, exist_ok=True)
     (SETTINGS.vault / "Контексты" / "Группы").mkdir(parents=True, exist_ok=True)
     SETTINGS.run_journal_dir.mkdir(parents=True, exist_ok=True)

@@ -213,7 +213,7 @@ def apply_base_masker(privacy_masker: Any, text: str) -> tuple[str, Counter, lis
     for category, samples in sorted(result.samples.items()):
         for sample in samples:
             token, _, value = sample.partition(" <- ")
-            findings.append(MaskFinding(category=category, token=token.strip(), sample=value.strip(), source="privacy_masker"))
+            findings.append(MaskFinding(category=category, token=token.strip(), sample="", source="privacy_masker"))
     return result.text, Counter(result.counts), findings
 
 
@@ -228,7 +228,7 @@ def apply_gaia_rules(text: str, existing_counts: Counter, rules: list[MaskRule])
             counters[category] += 1
             replacements[category] += 1
             token = f"[{category}_{counters[category]}]"
-            findings.append(MaskFinding(category=category, token=token, sample=clean_sample(match.group(0)), source=source))
+            findings.append(MaskFinding(category=category, token=token, sample="", source=source))
             return token
 
         masked = rule.pattern.sub(repl, masked)
@@ -270,7 +270,7 @@ def build_review_markdown(
             parts.append(f"| `{category}` | {count} |")
     else:
         parts.append("| нет находок | 0 |")
-    parts.extend(["", "## Примеры", ""])
+    parts.extend(["", "## Идентификаторы замен", ""])
     if findings:
         by_category: dict[str, list[MaskFinding]] = {}
         for finding in findings:
@@ -278,10 +278,10 @@ def build_review_markdown(
         for category, items in sorted(by_category.items()):
             parts.extend([f"### {category}", ""])
             for finding in items[:12]:
-                parts.append(f"- `{finding.token} <- {finding.sample}` ({finding.source})")
+                parts.append(f"- `{finding.token}` ({finding.source})")
             parts.append("")
     else:
-        parts.append("Чувствительные данные по текущим правилам не найдены.")
+        parts.append("Замен по текущим правилам не найдено.")
         parts.append("")
     parts.extend([
         "## Важно",

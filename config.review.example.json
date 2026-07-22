@@ -9,6 +9,7 @@
     "projects": "${VAULT}/Проекты",
     "service_docs": "${HOME}/Documents/Obsidian Gaia",
     "runs": "${APP_DIR}/runs",
+    "exports": "${APP_DIR}/exports",
     "obsidian_work": "${WORKSPACE}/Obsidian_System_Work",
     "transcriber": "${HOME}/path/to/transcribe",
     "lm_studio_launcher": "${HOME}/path/to/launch-lm-studio.command",
@@ -56,7 +57,10 @@
   "retention": {
     "runs_days": 7,
     "journals_days": 30,
-    "audit_days": 365,
+    "audit_days": 30,
+    "conversations_days": 90,
+    "temporary_hours": 24,
+    "operation_metadata_days": 180,
     "cleanup_on_startup": false
   },
   "lore": {

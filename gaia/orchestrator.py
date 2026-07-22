@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import threading
 
-from .archive import journal_path, safety_audit_path, write_run_journal
+from .archive import cleanup_run_temporary_artifacts, journal_path, safety_audit_path, write_run_journal
 from .config import SETTINGS
 from .extraction import extract_upload_text, safe_filename
 from .masking import mask_with_review
@@ -164,4 +164,6 @@ def create_package(
         write_run_journal(package)
     except Exception as exc:
         package.policy_notes.append(f"Журнал Obsidian не записан: {exc}")
+    else:
+        cleanup_run_temporary_artifacts(run_dir)
     return package
