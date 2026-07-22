@@ -22,6 +22,8 @@ class LauncherTests(unittest.TestCase):
         script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
         self.assertIn("runOpenPanelWithParameters", script)
         self.assertIn("NSOpenPanel.openPanel", script)
+        self.assertIn("$.GaiaFilePanelDelegate.alloc.init", script)
+        self.assertNotIn("const FilePanelDelegate", script)
         self.assertIn("webView.setUIDelegate(filePanelDelegate)", script)
 
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})

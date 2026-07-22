@@ -34,13 +34,25 @@ class ReviewService:
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if item.get("kind") != "sanitized" or not item.get("current"):
             raise ProvenanceError("Для проверки доступна только актуальная очищенная версия.")
+        existing = self._read().get(artifact_id)
+        if existing and existing.get("workspace_id") == self.workspace_id and existing.get("state") in {"requires_review", "review_in_progress", "ready_for_confirmation", "confirmed"}:
+            return self.safe(existing, include_text=True)
         text = self._text(artifact_id)
         try:
             findings = validate_model_payload(self.model(text), text)
             state = "requires_review" if findings else "ready_for_confirmation"
+            error_code = ""
         except Exception:
-            findings = []; state = "requires_review"
-        record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "created_at": now()}
+            findings = []; state = "review_error"; error_code = "local_check_failed"
+        record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "error_code": error_code, "created_at": now()}
+        self._write(artifact_id, record); return self.safe(record, include_text=True)
+
+    def prepare(self, artifact_id: str) -> dict[str, Any]:
+        """Persist the unambiguous pre-check state without calling the model."""
+        item = self.store.object_metadata(self.workspace_id, artifact_id)
+        if item.get("kind") != "sanitized" or not item.get("current"):
+            raise ProvenanceError("Для проверки доступна только актуальная очищенная версия.")
+        record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": "not_started", "findings": [], "decisions": [], "confirmed": False, "error_code": "", "created_at": now()}
         self._write(artifact_id, record); return self.safe(record, include_text=True)
 
     def get(self, artifact_id: str, include_text: bool = False) -> dict[str, Any]:
@@ -56,7 +68,7 @@ class ReviewService:
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if item.get("kind") != "sanitized" or not item.get("current"):
             raise ProvenanceError("Проверка недоступна для этой версии.")
-        return self.start(artifact_id)
+        return self.prepare(artifact_id)
 
     def create_successor(self, previous_id: str, artifact_id: str) -> dict[str, Any]:
         """Create the review state before exposing a newly sanitized version.
@@ -68,7 +80,7 @@ class ReviewService:
         previous = self._read().get(previous_id)
         if not previous or previous.get("workspace_id") != self.workspace_id:
             raise ProvenanceError("Предыдущее состояние проверки недоступно.")
-        self.start(artifact_id)
+        self.prepare(artifact_id)
         record = self._read()[artifact_id]
         record["carried_decisions"] = list(previous.get("decisions") or [])
         record["replaces_review"] = previous_id
@@ -78,7 +90,7 @@ class ReviewService:
     def decide(self, artifact_id: str, finding_id: str, decision: str, category: str = "") -> dict[str, Any]:
         if decision not in {"replace", "keep", "change_category"}: raise ProvenanceError("Некорректное решение проверки.")
         record = self._read().get(artifact_id)
-        if not record or record["workspace_id"] != self.workspace_id or record["confirmed"]: raise ProvenanceError("Решение недоступно для этой версии.")
+        if not record or record["workspace_id"] != self.workspace_id or record["confirmed"] or record.get("state") not in {"requires_review", "review_in_progress"}: raise ProvenanceError("Решения доступны только для завершённой проверки с находками.")
         finding = next((f for f in record["findings"] if f["finding_id"] == finding_id), None)
         if not finding: raise ProvenanceError("Находка проверки не найдена.")
         if any(item["finding_id"] == finding_id for item in record["decisions"]):
@@ -102,11 +114,14 @@ class ReviewService:
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if not record or record["workspace_id"] != self.workspace_id or not item.get("current"):
             raise ProvenanceError("Нельзя подтвердить неактуальную версию.")
+        if record.get("state") != "ready_for_confirmation":
+            raise ProvenanceError("Подтверждение доступно только после завершения локальной проверки.")
         record["confirmed"] = True; record["state"] = "confirmed"; record["confirmed_at"] = now(); self._write(artifact_id, record)
         return self._text(artifact_id)
 
     def safe(self, record: dict[str, Any], include_text: bool = False) -> dict[str, Any]:
         result = {k: record[k] for k in ("artifact_id", "state", "findings", "decisions", "confirmed")}
+        result["error_code"] = record.get("error_code", "")
         result["carried_decisions"] = list(record.get("carried_decisions") or [])
         if include_text: result["cleaned_text"] = self._text(record["artifact_id"])
         return result

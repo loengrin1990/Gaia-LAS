@@ -33,10 +33,33 @@ class LocalReviewTests(unittest.TestCase):
         tmp,s,w,src,ext,san=self.setup_review()
         try:
             state=ReviewService(s,w,lambda text: (_ for _ in ()).throw(TimeoutError("synthetic timeout"))).start(san["artifact_id"])
-            self.assertEqual(state["state"],"requires_review")
+            self.assertEqual(state["state"],"review_error")
             self.assertEqual(state["findings"],[])
             self.assertFalse(state["confirmed"])
             self.assertTrue(s.object_metadata(w,san["artifact_id"])["current"])
+        finally: tmp.cleanup()
+
+    def test_confirmation_is_blocked_until_a_successful_check_finishes(self):
+        tmp,s,w,_,_,san=self.setup_review()
+        try:
+            review=ReviewService(s,w,lambda text:{"findings":[]})
+            self.assertEqual(review.prepare(san["artifact_id"])["state"], "not_started")
+            with self.assertRaises(ProvenanceError): review.confirm(san["artifact_id"])
+            self.assertEqual(review.start(san["artifact_id"])["state"], "ready_for_confirmation")
+            self.assertEqual(review.confirm(san["artifact_id"]), "Clean Person-01 remains")
+        finally: tmp.cleanup()
+
+    def test_check_is_idempotent_after_a_terminal_result(self):
+        tmp,s,w,_,_,san=self.setup_review(); calls=[]
+        try:
+            def model(text):
+                calls.append(text)
+                return {"findings":[]}
+            review=ReviewService(s,w,model)
+            review.prepare(san["artifact_id"])
+            self.assertEqual(review.start(san["artifact_id"])["state"], "ready_for_confirmation")
+            self.assertEqual(review.start(san["artifact_id"])["state"], "ready_for_confirmation")
+            self.assertEqual(calls, ["Clean Person-01 remains"])
         finally: tmp.cleanup()
 
     def test_successor_review_is_available_without_confirming_the_new_version(self):

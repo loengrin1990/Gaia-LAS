@@ -134,6 +134,32 @@ def context_compile_failure(intake: ControlledIntake, project: str, artifact_id:
         pass
 
 
+def review_action_failure(intake: ControlledIntake, project: str, artifact_id: str, action: str, trace_id: str, exc: Exception) -> None:
+    """Persist only safe review diagnostics; never store material or model output."""
+    try:
+        path = intake.store.root / "metadata" / "review_diagnostics.json"
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        state = "unknown"
+        try:
+            state = str(intake.review(project).get(artifact_id).get("state") or "unknown")
+        except Exception:
+            pass
+        existing.append({
+            "trace_id": trace_id,
+            "stage": "review",
+            "action": action,
+            "exception_type": type(exc).__name__,
+            "reason": getattr(exc, "code", "review_failed"),
+            "route": "review",
+            "review_state": state,
+            "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
+            "artifact_id": artifact_id,
+        })
+        path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def text_response(
     handler: BaseHTTPRequestHandler,
     body: str,
@@ -436,8 +462,8 @@ class Handler(BaseHTTPRequestHandler):
             intake = ControlledIntake().admit(project, uploaded) if uploaded else None
             if intake:
                 material = intake["materials"][0]
-                review = ControlledIntake().review(project).start(material["sanitized_id"])
-                json_response(self, {"status": "requires_review", "message": "Материал требует проверки.", "review": review}, 202)
+                review = ControlledIntake().review(project).prepare(material["sanitized_id"])
+                json_response(self, {"status": "not_started", "message": "Материал добавлен. Запустите локальную проверку.", "review": review}, 202)
                 return
             job = submit_analyze_job(project, query, uploaded, profile, None)
         except ProvenanceError as exc:
@@ -518,9 +544,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_review_action(self) -> None:
         parts = urlparse(self.path).path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; action = parts[4] if len(parts) >= 5 else ""; payload = self.read_json(); project = str(payload.get("project") or "")
+        intake: ControlledIntake | None = None
         try:
             intake = ControlledIntake(); review = intake.review(project)
-            if action == "check": json_response(self, review.start(artifact_id), 202); return
+            if action == "check": json_response(self, review.start(artifact_id)); return
             if action == "decision":
                 decision = str(payload.get("decision") or ""); result = review.decide(artifact_id, str(payload.get("finding_id") or ""), decision, str(payload.get("category") or ""))
                 if decision == "replace":
@@ -536,8 +563,11 @@ class Handler(BaseHTTPRequestHandler):
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
                 json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
-        except ProvenanceError:
-            error_response(self, "review_failed", "Не удалось завершить локальную проверку материала.", 400); return
+        except ProvenanceError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            if intake is not None:
+                review_action_failure(intake, project, artifact_id, action, trace_id, exc)
+            json_response(self, api_error_payload("review_failed", "Не удалось завершить локальную проверку материала. Данные не изменены.", trace_id=trace_id), 400); return
         error_response(self, "not_found", "not found", 404)
 
     def handle_context_get(self) -> None:

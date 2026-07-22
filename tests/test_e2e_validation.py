@@ -100,7 +100,7 @@ class EndToEndValidationTests(unittest.TestCase):
                 status, materials = request("GET", f"/api/materials?project={project}")
                 self.assertEqual(status, 200)
                 self.assertEqual(len(materials["materials"]), 1)
-                self.assertEqual(materials["materials"][0]["review_state"], "requires_review")
+                self.assertEqual(materials["materials"][0]["review_state"], "not_started")
                 self.assertNotIn(email, json.dumps(materials, ensure_ascii=False))
                 self.assertNotIn(secret, json.dumps(materials, ensure_ascii=False))
                 self.assertEqual(request("POST", f"/api/context/{old_sanitized}/compile", {"project": project})[0], 400)
@@ -112,6 +112,10 @@ class EndToEndValidationTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 source_id = str(lineage["source_id"])
                 self.assertEqual(request("GET", f"/api/materials/{source_id}?project={project}")[0], 200)
+                status, review = request("POST", f"/api/reviews/{old_sanitized}/check", {"project": project})
+                self.assertEqual(status, 200)
+                self.assertEqual(review["state"], "requires_review")
+                self.assertEqual(request("POST", f"/api/reviews/{old_sanitized}/check", {"project": project})[0], 200)
                 first_finding = review["findings"][0]
                 second_finding = review["findings"][1]
                 self.assertEqual(request("POST", f"/api/reviews/{old_sanitized}/decision", {"project": project, "finding_id": second_finding["finding_id"], "decision": "keep"})[0], 200)
@@ -126,6 +130,9 @@ class EndToEndValidationTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(new_review["artifact_id"], new_sanitized)
                 self.assertEqual(len(new_review["carried_decisions"]), 2)
+                status, new_review = request("POST", f"/api/reviews/{new_sanitized}/check", {"project": project})
+                self.assertEqual(status, 200)
+                self.assertEqual(new_review["state"], "ready_for_confirmation")
                 status, listed_after_replace = request("GET", f"/api/materials?project={project}")
                 self.assertEqual(status, 200)
                 self.assertEqual(listed_after_replace["materials"][0]["sanitized_id"], new_sanitized)
@@ -152,6 +159,7 @@ class EndToEndValidationTests(unittest.TestCase):
 
                 second_review = upload(second_text)["review"]
                 second_sanitized = str(second_review["artifact_id"])
+                self.assertEqual(request("POST", f"/api/reviews/{second_sanitized}/check", {"project": project})[0], 200)
                 self.assertEqual(request("POST", f"/api/reviews/{second_sanitized}/confirm", {"project": project})[0], 202)
                 status, second_context = request("POST", f"/api/context/{second_sanitized}/compile", {"project": project})
                 self.assertEqual(status, 202)
