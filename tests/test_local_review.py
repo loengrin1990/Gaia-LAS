@@ -28,3 +28,13 @@ class LocalReviewTests(unittest.TestCase):
             state=review.start(san["artifact_id"]); self.assertEqual(state["findings"],[]); self.assertFalse(state["confirmed"])
             with self.assertRaises(ProvenanceError): validate_model_payload({"findings":[{"category":"Сотрудник","start":5,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]}, 10)
         finally: tmp.cleanup()
+
+    def test_unexpected_model_failure_keeps_material_available_for_review(self):
+        tmp,s,w,src,ext,san=self.setup_review()
+        try:
+            state=ReviewService(s,w,lambda text: (_ for _ in ()).throw(TimeoutError("synthetic timeout"))).start(san["artifact_id"])
+            self.assertEqual(state["state"],"requires_review")
+            self.assertEqual(state["findings"],[])
+            self.assertFalse(state["confirmed"])
+            self.assertTrue(s.object_metadata(w,san["artifact_id"])["current"])
+        finally: tmp.cleanup()

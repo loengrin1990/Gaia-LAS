@@ -23,8 +23,8 @@ def local_model_review(text: str) -> dict[str, Any]:
         raise ProvenanceError("Локальная дополнительная проверка вернула некорректный ответ.") from exc
 
 class ReviewService:
-    def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] = local_model_review) -> None:
-        self.store, self.workspace_id, self.model = store, workspace_id, model
+    def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
+        self.store, self.workspace_id, self.model = store, workspace_id, model or local_model_review
         self.path = store.root / "metadata" / "review_state.json"
         if not self.path.exists(): atomic_write_text(self.path, "{}\n")
 
@@ -36,7 +36,7 @@ class ReviewService:
         try:
             findings = validate_model_payload(self.model(text), len(text))
             state = "requires_review"
-        except ProvenanceError:
+        except Exception:
             findings = []; state = "requires_review"
         record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "created_at": now()}
         self._write(artifact_id, record); return self.safe(record, include_text=True)
