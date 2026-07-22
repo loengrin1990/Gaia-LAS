@@ -15,6 +15,8 @@ from typing import Any
 
 from .provenance import ProvenanceError, ProvenanceStore, default_store
 from .storage import atomic_write_text, path_lock
+from .protection import protect
+from .protection import safe_report
 
 
 class ControlledIntake:
@@ -30,9 +32,14 @@ class ControlledIntake:
         workspace_id = self._workspace_for(project)
         operation_id = f"op_{uuid.uuid4().hex}"
         materials: list[dict[str, Any]] = []
+        protected_uploads: list[tuple[str, bytes]] = []
         for filename, content in uploaded:
             source = self.store.accept_bytes(workspace_id, content, "application/octet-stream")
             material = {"source_id": source["source_id"], "duplicate": source["duplicate"], "status": "duplicate" if source["duplicate"] else "accepted"}
+            if source["duplicate"]:
+                # Never fall back to raw bytes for an already admitted source.
+                # Reprocessing is a later explicit, managed operation.
+                raise ProvenanceError("Такой материал уже добавлен в это рабочее пространство.")
             if not source["duplicate"]:
                 source_key = hashlib.sha256(filename.encode("utf-8")).hexdigest()
                 prior_id = self._read().get("source_keys", {}).get(f"{workspace_id}:{source_key}")
@@ -41,10 +48,15 @@ class ControlledIntake:
                     material["status"] = "new_version"
                 extraction = self.store.create_extraction(workspace_id, source["source_id"], "gaia-extractor-v1")
                 material["artifact_id"] = extraction["artifact_id"]
+                outcome = protect(self.store, workspace_id, extraction["artifact_id"])
+                material["sanitized_id"] = outcome["sanitized"]["artifact_id"]
+                material["protection"] = {"status": outcome["report"]["status"], "counts": outcome["report"]["counts"]}
+                cleaned = (self.store.root / "sanitized" / workspace_id / f"{material['sanitized_id']}.txt").read_text(encoding="utf-8")
+                protected_uploads.append((filename, cleaned.encode("utf-8")))
                 self._remember_source_key(workspace_id, source_key, source["source_id"])
             materials.append(material)
         self._save_operation(operation_id, workspace_id, materials, "accepted")
-        return {"operation_id": operation_id, "workspace_id": workspace_id, "materials": materials}
+        return {"operation_id": operation_id, "workspace_id": workspace_id, "materials": materials, "protected_uploads": protected_uploads}
 
     def finish(self, operation_id: str, status: str) -> None:
         with path_lock(self.path):
@@ -66,6 +78,14 @@ class ControlledIntake:
 
     def lineage(self, project: str, object_id: str) -> dict[str, Any]:
         return self.store.lineage(self._workspace_for(project), object_id)
+
+    def protection_report(self, project: str, artifact_id: str) -> dict[str, Any]:
+        return safe_report(self.store, self._workspace_for(project), artifact_id)
+
+    def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
+        workspace_id = self._workspace_for(project)
+        outcome = protect(self.store, workspace_id, extraction_id, rules_version=rules_version)
+        return {"artifact_id": outcome["sanitized"]["artifact_id"], "status": outcome["report"]["status"], "export_allowed": False}
 
     def _workspace_for(self, project: str) -> str:
         key = hashlib.sha256(project.strip().encode("utf-8")).hexdigest()

@@ -18,8 +18,8 @@ class ControlledIntakeTests(unittest.TestCase):
             self.assertFalse(source["duplicate"])
             self.assertTrue(source["artifact_id"].startswith("art_"))
             self.assertEqual(intake.lineage("synthetic-first", source["artifact_id"])["source_id"], source["source_id"])
-            duplicate = intake.admit("synthetic-first", [("brief.txt", b"synthetic material")])
-            self.assertTrue(duplicate["materials"][0]["duplicate"])
+            with self.assertRaises(ProvenanceError):
+                intake.admit("synthetic-first", [("brief.txt", b"synthetic material")])
             isolated = intake.admit("synthetic-second", [("brief.txt", b"synthetic material")])
             self.assertNotEqual(source["source_id"], isolated["materials"][0]["source_id"])
             changed = intake.admit("synthetic-first", [("brief.txt", b"synthetic revision")])

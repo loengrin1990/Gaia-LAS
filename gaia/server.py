@@ -209,6 +209,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/materials/"):
             self.handle_material_get()
             return
+        if self.path.startswith("/api/protection/"):
+            self.handle_protection_get()
+            return
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
@@ -224,6 +227,9 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path).path
         if route == "/api/analyze":
             self.handle_analyze()
+            return
+        if route.startswith("/api/protection/") and route.endswith("/reprocess"):
+            self.handle_protection_reprocess()
             return
         if route.startswith("/api/jobs/"):
             self.handle_job_action()
@@ -391,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             intake = ControlledIntake().admit(project, uploaded) if uploaded else None
-            job = submit_analyze_job(project, query, uploaded, profile, intake)
+            job = submit_analyze_job(project, query, intake["protected_uploads"] if intake else uploaded, profile, intake)
         except ProvenanceError as exc:
             error_response(self, "material_intake_failed", str(exc), 400)
             return
@@ -424,6 +430,23 @@ class Handler(BaseHTTPRequestHandler):
             error_response(self, "material_not_found", str(exc), 404)
             return
         json_response(self, payload)
+
+    def handle_protection_get(self) -> None:
+        route = urlparse(self.path); parts = route.path.split("/")
+        artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
+        try:
+            json_response(self, ControlledIntake().protection_report(project, artifact_id))
+        except (ProvenanceError, ValueError):
+            error_response(self, "protection_report_not_found", "Отчёт очистки недоступен в этом рабочем пространстве.", 404)
+
+    def handle_protection_reprocess(self) -> None:
+        parts = urlparse(self.path).path.split("/"); extraction_id = parts[3] if len(parts) >= 4 else ""
+        payload = self.read_json()
+        try:
+            result = ControlledIntake().reprocess_protection(str(payload.get("project") or ""), extraction_id, str(payload.get("rules_version") or "deterministic-v2"))
+        except ProvenanceError:
+            error_response(self, "protection_reprocess_failed", "Не удалось повторно выполнить очистку материала.", 400); return
+        json_response(self, result, 202)
 
     def handle_job_action(self) -> None:
         parts = urlparse(self.path).path.split("/")
