@@ -10,6 +10,7 @@
     "service_docs": "${HOME}/Documents/Obsidian Gaia",
     "runs": "${APP_DIR}/runs",
     "exports": "${APP_DIR}/exports",
+    "storage": "${APP_DIR}/storage",
     "obsidian_work": "${WORKSPACE}/Obsidian_System_Work",
     "transcriber": "${HOME}/path/to/transcribe",
     "lm_studio_launcher": "${HOME}/path/to/launch-lm-studio.command",

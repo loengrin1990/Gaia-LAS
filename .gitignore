@@ -3,6 +3,7 @@ config.json
 runs/
 outputs/
 exports/
+storage/
 backups/
 tmp/
 

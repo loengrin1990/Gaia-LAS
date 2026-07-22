@@ -29,6 +29,7 @@ class Settings:
     runs_dir: Path
     uploads_dir: Path
     exports_dir: Path
+    storage_dir: Path
     obsidian_work: Path
     transcriber_path: Path
     lm_studio_launcher: Path
@@ -293,6 +294,7 @@ def load_settings(validate: bool = True) -> Settings:
     service_docs = expand_path(require_str(paths, "service_docs"), tokens)
     runs_dir = expand_path(require_str(paths, "runs"), tokens)
     exports_dir = expand_path(optional_str(paths, "exports", "${APP_DIR}/exports"), tokens)
+    storage_dir = expand_path(optional_str(paths, "storage", "${APP_DIR}/storage"), tokens)
     obsidian_work = expand_path(require_str(paths, "obsidian_work"), tokens)
     transcriber = expand_path(require_str(paths, "transcriber"), tokens)
     lm_studio_launcher = expand_path(require_str(paths, "lm_studio_launcher"), tokens)
@@ -322,6 +324,7 @@ def load_settings(validate: bool = True) -> Settings:
         runs_dir=runs_dir,
         uploads_dir=runs_dir / "uploads",
         exports_dir=exports_dir,
+        storage_dir=storage_dir,
         obsidian_work=obsidian_work,
         transcriber_path=transcriber,
         lm_studio_launcher=lm_studio_launcher,
@@ -401,6 +404,7 @@ def ensure_dirs() -> None:
     SETTINGS.runs_dir.mkdir(parents=True, exist_ok=True)
     SETTINGS.uploads_dir.mkdir(parents=True, exist_ok=True)
     SETTINGS.exports_dir.mkdir(parents=True, exist_ok=True)
+    SETTINGS.storage_dir.mkdir(parents=True, exist_ok=True)
     SETTINGS.service_docs.mkdir(parents=True, exist_ok=True)
     (SETTINGS.vault / "Контексты" / "Группы").mkdir(parents=True, exist_ok=True)
     SETTINGS.run_journal_dir.mkdir(parents=True, exist_ok=True)
