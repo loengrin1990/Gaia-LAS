@@ -1467,6 +1467,34 @@
     let journeyMaterials = [];
     let journeyReview = null;
 
+    const expectedRuntimeId = new URLSearchParams(window.location.search).get('runtime');
+    let runtimeUnavailable = false;
+
+    function stopForRuntimeLoss(message) {
+      if (runtimeUnavailable) return;
+      runtimeUnavailable = true;
+      document.body.innerHTML = '';
+      const panel = document.createElement('main'); panel.className = 'journey-empty';
+      panel.style.cssText = 'margin:10vh auto;max-width:680px;padding:32px;text-align:center;display:block;';
+      const title = document.createElement('h1'); title.textContent = 'Связь с Gaia потеряна';
+      const detail = document.createElement('p'); detail.textContent = message || 'Данные в этом окне больше не обновляются. Работа остановлена; запустите Gaia заново.';
+      panel.append(title, detail); document.body.appendChild(panel);
+    }
+
+    async function verifyRuntime() {
+      if (runtimeUnavailable) return;
+      try {
+        const response = await fetch('/api/runtime', {cache:'no-store'});
+        const runtime = await response.json();
+        if (!response.ok || runtime.ready !== true || (expectedRuntimeId && runtime.runtime_id !== expectedRuntimeId)) {
+          stopForRuntimeLoss('Данные в этом окне больше не актуальны. Работа остановлена; запустите Gaia заново.');
+        }
+      } catch (_) {
+        stopForRuntimeLoss('Данные в этом окне больше не обновляются. Работа остановлена; запустите Gaia заново.');
+      }
+    }
+    verifyRuntime(); window.setInterval(verifyRuntime, 2000);
+
     const journeyState = {
       accepted: { label: 'Добавляется', detail: 'Материал принят и готовится к обработке.', tone: 'warn', next: 'Откройте материал позже.' },
       ready: { label: 'Готово к подтверждению', detail: 'Очищенная версия готова к проверке.', tone: 'warn', next: 'Откройте проверку материала.' },

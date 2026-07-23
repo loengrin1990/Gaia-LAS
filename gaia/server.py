@@ -31,7 +31,7 @@ from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_an
 from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError
 from .provenance import ProvenanceError
-from .launchers import launch_gaia_window, launch_module
+from .launchers import close_gaia_window, launch_gaia_window, launch_module
 from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
 from .profiles import profile_payloads
@@ -58,6 +58,7 @@ from .scribe_inbox import (
     preview_inbox_item,
 )
 from .ui import INDEX_HTML
+from .runtime import RUNTIME_ID, runtime_fingerprint
 
 
 MAX_JSON_BODY_SIZE = 1_000_000
@@ -242,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/local-status":
             json_response(self, check_local_llm())
+            return
+        if self.path == "/api/runtime":
+            json_response(self, runtime_fingerprint())
             return
         if self.path == "/api/retention-status":
             json_response(self, retention_status())
@@ -1026,12 +1030,24 @@ def main(open_window: bool = False) -> int:
         print(f"Gaia server error: cannot bind http://{SETTINGS.host}:{SETTINGS.port}: {exc}")
         return 2
     print(f"Gaia Local Analytics: http://{SETTINGS.host}:{SETTINGS.port}")
+    server_thread: threading.Thread | None = None
     if open_window:
-        result = launch_gaia_window()
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        result = launch_gaia_window(RUNTIME_ID)
         if not result.get("ok"):
-            print(f"Gaia window warning: {result.get('error')}")
+            print(f"Gaia startup error: {result.get('error')}")
+            server.shutdown()
+            server.server_close()
+            return 2
     try:
-        server.serve_forever()
+        if server_thread:
+            server_thread.join()
+        else:
+            server.serve_forever()
     except KeyboardInterrupt:
         print("\nОстановлено.")
+    finally:
+        close_gaia_window()
+        server.server_close()
     return 0
