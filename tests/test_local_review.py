@@ -1,10 +1,11 @@
 from __future__ import annotations
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
-from gaia.review import ReviewService, validate_model_payload
+from gaia.review import LocalReviewError, ReviewService, extract_unique_json_object, validate_model_payload
 
 class LocalReviewTests(unittest.TestCase):
     def setup_review(self):
@@ -38,6 +39,25 @@ class LocalReviewTests(unittest.TestCase):
             self.assertFalse(state["confirmed"])
             self.assertTrue(s.object_metadata(w,san["artifact_id"])["current"])
         finally: tmp.cleanup()
+
+    def test_local_model_error_code_and_safe_trace_are_persisted(self):
+        tmp,s,w,_,_,san=self.setup_review()
+        try:
+            def model(_):
+                raise LocalReviewError("local_model_timeout", "synthetic timeout", {"trace_id":"gaia-test", "stage":"local_review", "provider":"synthetic", "response_chars":0})
+            state=ReviewService(s,w,model).start(san["artifact_id"])
+            self.assertEqual(state["state"], "review_error")
+            self.assertEqual(state["error_code"], "local_model_timeout")
+            self.assertEqual(state["trace_id"], "gaia-test")
+            diagnostics=json.loads((s.root / "metadata" / "review_diagnostics.json").read_text(encoding="utf-8"))
+            self.assertEqual(diagnostics[-1]["error_code"], "local_model_timeout")
+            self.assertNotIn("Clean Person-01 remains", json.dumps(diagnostics, ensure_ascii=False))
+        finally: tmp.cleanup()
+
+    def test_unique_json_extraction_accepts_one_fence_only(self):
+        self.assertEqual(extract_unique_json_object("```json\n{\"findings\":[]}\n```"), {"findings": []})
+        with self.assertRaises(json.JSONDecodeError):
+            extract_unique_json_object("{\"findings\":[]} and {\"findings\":[]}")
 
     def test_confirmation_is_blocked_until_a_successful_check_finishes(self):
         tmp,s,w,_,_,san=self.setup_review()

@@ -1,6 +1,8 @@
 ObjC.import("Cocoa");
 ObjC.import("WebKit");
 
+let filePanelDelegate = null;
+
 ObjC.registerSubclass({
   name: "GaiaFilePanelDelegate",
   methods: [{
@@ -11,9 +13,8 @@ ObjC.registerSubclass({
       panel.setCanChooseFiles(true);
       panel.setCanChooseDirectories(false);
       panel.setAllowsMultipleSelection(ObjC.unwrap(parameters.allowsMultipleSelection));
-      panel.beginSheetModalForWindowCompletionHandler(webView.window, function(result) {
-        completionHandler(result === $.NSModalResponseOK ? panel.URLs : null);
-      });
+      const result = panel.runModal();
+      completionHandler(result === $.NSModalResponseOK ? panel.URLs : null);
     }
   }]
 });
@@ -30,7 +31,7 @@ function run(argv) {
   const frame = $.NSMakeRect(0, 0, 1360, 900);
   const configuration = $.WKWebViewConfiguration.alloc.init;
   const webView = $.WKWebView.alloc.initWithFrameConfiguration(frame, configuration);
-  const filePanelDelegate = $.GaiaFilePanelDelegate.alloc.init;
+  filePanelDelegate = $.GaiaFilePanelDelegate.alloc.init;
   webView.setUIDelegate(filePanelDelegate);
   const style = $.NSWindowStyleMaskTitled
     | $.NSWindowStyleMaskClosable

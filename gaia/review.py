@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import time
+import uuid
 from datetime import datetime
 from typing import Any, Callable
 
@@ -13,16 +15,91 @@ from .storage import atomic_write_text, path_lock
 ALLOWED_CATEGORIES = {"Сотрудник", "Организация", "Подразделение", "Проект", "Система", "Адрес", "Идентификатор", "Другое"}
 MAX_FINDINGS = 24
 
+
+class LocalReviewError(ProvenanceError):
+    def __init__(self, code: str, message: str, diagnostics: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.code = code
+        self.diagnostics = diagnostics
+
+
 def local_model_review(text: str) -> dict[str, Any]:
     from .module_assist import call_lm_studio_with_deadline
-    prompt = "Верни только JSON: {\"findings\":[{\"category\":\"Сотрудник\",\"start\":0,\"end\":1,\"confidence\":\"medium\",\"reason_code\":\"residual_candidate\",\"requires_review\":true}]}. Анализируй только очищенный текст.\n\n" + text
-    result = call_lm_studio_with_deadline(prompt, 8, "Ты локальный проверяющий Gaia.", task="veil_review")
+    prompt = "\n".join([
+        "Проверь только переданный очищенный текст на остаточные сущности, которые требуют ручной проверки.",
+        "Верни ровно один JSON-объект без Markdown и без пояснений.",
+        "Верхний уровень содержит только ключ findings.",
+        "Если находок нет, верни точно {\"findings\":[]}.",
+        "Каждая находка содержит ровно category, start, end, confidence, reason_code, requires_review.",
+        "start и end — реальные нулевые позиции начала и конца самостоятельного фрагмента в очищенном тексте.",
+        "Не копируй примеры из этой инструкции и не создавай находки, если координаты не проверены по тексту.",
+        "Слова названий категорий и псевдонимы Gaia вида «Категория-01» уже очищены и не являются находками.",
+        "Находкой может быть только конкретное остаточное значение, а не заголовок, метка поля или тестовый идентификатор.",
+        "category: Сотрудник, Организация, Подразделение, Проект, Система, Адрес, Идентификатор или Другое.",
+        "confidence: low, medium или high. requires_review всегда true.",
+        "",
+        "# Очищенный текст",
+        text,
+    ])
+    started = time.monotonic()
+    result = call_lm_studio_with_deadline(prompt, 20, "Ты локальный проверяющий Gaia.", task="veil_review")
+    diagnostics = local_review_diagnostics(result, time.monotonic() - started)
     if not result.get("ok"):
-        raise ProvenanceError("Локальная дополнительная проверка не завершена.")
+        raise LocalReviewError(local_review_transport_code(str(result.get("status") or "")), "Локальная дополнительная проверка не завершена.", diagnostics)
+    answer = str(result.get("answer") or "")
+    if not answer.strip():
+        raise LocalReviewError("local_model_empty_response", "Локальная дополнительная проверка вернула пустой ответ.", diagnostics)
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    if raw.get("done") is False or raw.get("done_reason") in {"length", "max_tokens"}:
+        raise LocalReviewError("local_model_truncated_response", "Локальная дополнительная проверка вернула неполный ответ.", diagnostics)
     try:
-        return json.loads(str(result.get("answer") or ""))
+        payload = extract_unique_json_object(answer)
     except json.JSONDecodeError as exc:
-        raise ProvenanceError("Локальная дополнительная проверка вернула некорректный ответ.") from exc
+        raise LocalReviewError("local_model_invalid_json", "Локальная дополнительная проверка вернула некорректный ответ.", diagnostics) from exc
+    if not isinstance(payload, dict) or set(payload) != {"findings"} or not isinstance(payload.get("findings"), list) or len(payload["findings"]) > MAX_FINDINGS:
+        raise LocalReviewError("local_model_schema_failed", "Локальная дополнительная проверка вернула ответ неподходящей структуры.", diagnostics)
+    try:
+        validate_model_payload(payload, text)
+    except ProvenanceError as exc:
+        raise LocalReviewError("local_model_invalid_findings", "Локальная дополнительная проверка вернула непригодные находки.", diagnostics) from exc
+    return payload
+
+
+def extract_unique_json_object(answer: str) -> dict[str, Any]:
+    stripped = answer.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, count=1, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped, count=1).strip()
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        candidates: list[dict[str, Any]] = []
+        for index, char in enumerate(stripped):
+            if char != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(stripped[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            raise
+        payload = candidates[0]
+    if not isinstance(payload, dict):
+        raise json.JSONDecodeError("Expected a JSON object", stripped, 0)
+    return payload
+
+
+def local_review_transport_code(status: str) -> str:
+    return {"timeout": "local_model_timeout", "unavailable": "local_model_unavailable", "bad_request": "local_model_request_failed", "http_error": "local_model_request_failed"}.get(status, "local_model_request_failed")
+
+
+def local_review_diagnostics(result: dict[str, Any], duration_seconds: float) -> dict[str, Any]:
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
+    return {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "provider": str(result.get("provider") or ""), "model": str(result.get("model") or ""), "route": str(result.get("route") or "veil_review"), "request_status": str(result.get("status") or "ok"), "duration_ms": round(duration_seconds * 1000), "prompt_chars_sent": int(result.get("prompt_chars_sent") or 0), "response_chars": len(str(result.get("answer") or "")), "http_status": 200 if result.get("ok") else None, "done": raw.get("done"), "finish_reason": raw.get("done_reason") or raw.get("finish_reason"), "prompt_tokens": raw.get("prompt_eval_count"), "response_tokens": raw.get("eval_count"), "reasoning_present": bool(message.get("thinking") or message.get("reasoning_content"))}
 
 class ReviewService:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
@@ -42,9 +119,16 @@ class ReviewService:
             findings = validate_model_payload(self.model(text), text)
             state = "requires_review" if findings else "ready_for_confirmation"
             error_code = ""
-        except Exception:
-            findings = []; state = "review_error"; error_code = "local_check_failed"
+        except LocalReviewError as exc:
+            findings = []; state = "review_error"; error_code = exc.code; diagnostics = exc.diagnostics
+        except ProvenanceError:
+            findings = []; state = "review_error"; error_code = "local_model_invalid_findings"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review"}
+        except Exception as exc:
+            findings = []; state = "review_error"; error_code = "local_check_internal_error"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "exception_type": type(exc).__name__}
         record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "error_code": error_code, "created_at": now()}
+        if state == "review_error":
+            record["trace_id"] = diagnostics["trace_id"]
+            self._write_diagnostics(artifact_id, error_code, diagnostics)
         self._write(artifact_id, record); return self.safe(record, include_text=True)
 
     def prepare(self, artifact_id: str) -> dict[str, Any]:
@@ -122,6 +206,7 @@ class ReviewService:
     def safe(self, record: dict[str, Any], include_text: bool = False) -> dict[str, Any]:
         result = {k: record[k] for k in ("artifact_id", "state", "findings", "decisions", "confirmed")}
         result["error_code"] = record.get("error_code", "")
+        result["trace_id"] = record.get("trace_id", "")
         result["carried_decisions"] = list(record.get("carried_decisions") or [])
         if include_text: result["cleaned_text"] = self._text(record["artifact_id"])
         return result
@@ -132,6 +217,13 @@ class ReviewService:
     def _write(self, artifact_id: str, record: dict[str, Any]) -> None:
         with path_lock(self.path):
             payload = self._read(); payload[artifact_id] = record; atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+    def _write_diagnostics(self, artifact_id: str, error_code: str, diagnostics: dict[str, Any]) -> None:
+        path = self.store.root / "metadata" / "review_diagnostics.json"
+        with path_lock(path):
+            existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            existing.append({**diagnostics, "artifact_id": artifact_id, "workspace": hashlib.sha256(self.workspace_id.encode("utf-8")).hexdigest()[:12], "error_code": error_code})
+            atomic_write_text(path, json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n")
 
 def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]]:
     text_length = len(text) if isinstance(text, str) else text

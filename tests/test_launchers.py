@@ -52,6 +52,8 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("NSOpenPanel.openPanel", script)
         self.assertIn("$.GaiaFilePanelDelegate.alloc.init", script)
         self.assertNotIn("const FilePanelDelegate", script)
+        self.assertIn("let filePanelDelegate = null", script)
+        self.assertIn("panel.runModal()", script)
         self.assertIn("webView.setUIDelegate(filePanelDelegate)", script)
 
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})
