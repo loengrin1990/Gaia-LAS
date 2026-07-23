@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from .provenance import ProvenanceError, ProvenanceStore
 from .review import ReviewService
+from .local_llm import TASK_CONTEXT_COMPILER
 
 COMPILER_VERSION = "context-v1"
 PROMPT_SCHEMA_VERSION = "context-schema-v1"
@@ -16,13 +17,24 @@ MAX_CANDIDATES = 32
 MAX_RESULT_SIZE = 48_000
 MAX_INPUT_SIZE = 120_000
 
+class ContextCompileError(ProvenanceError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message); self.code = code
+
 def local_context_model(text: str) -> dict[str, Any]:
     from .module_assist import call_lm_studio_with_deadline
-    prompt = "Верни только JSON {\"candidates\":[]}. Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста.\n\n" + text
-    result = call_lm_studio_with_deadline(prompt, 12, "Ты локальный компилятор проектного контекста Gaia.", task="veil_review")
-    if not result.get("ok"): raise ProvenanceError("Локальный компилятор контекста недоступен.")
+    prompt = (
+        "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
+        "Каждый элемент candidates обязан иметь ровно поля type, title, statement, block, confidence, requires_review; "
+        "type только requirement, decision, risk, open_question или action; block имеет только start и end с координатами очищенного текста. "
+        "Не используй ключи requirement, solution, risk, question или action как замену структуры кандидата. "
+        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
+        "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста.\n\n" + text
+    )
+    result = call_lm_studio_with_deadline(prompt, 45, "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER)
+    if not result.get("ok"): raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.")
     try: return json.loads(str(result.get("answer") or ""))
-    except json.JSONDecodeError as exc: raise ProvenanceError("Локальный компилятор вернул некорректный ответ.") from exc
+    except json.JSONDecodeError as exc: raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул некорректный ответ.") from exc
 
 class ContextCompiler:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
@@ -30,9 +42,10 @@ class ContextCompiler:
 
     def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION) -> list[dict[str, Any]]:
         item = self.store.object_metadata(self.workspace_id, sanitized_id)
-        if item.get("kind") != "sanitized" or not item.get("current"): raise ProvenanceError("Компиляция доступна только для актуального очищенного представления.")
+        if item.get("kind") != "sanitized": raise ContextCompileError("material_unavailable", "Очищенный материал недоступен в выбранном рабочем пространстве.")
+        if not item.get("current"): raise ContextCompileError("stale_version", "Эта версия больше не актуальна.")
         review = ReviewService(self.store, self.workspace_id).get(sanitized_id)
-        if not review.get("confirmed"): raise ProvenanceError("Сначала подтвердите очищенный материал.")
+        if not review.get("confirmed"): raise ContextCompileError("material_not_confirmed", "Сначала подтвердите очищенный материал.")
         extraction_id = (item.get("parents") or [""])[0]
         extraction = self.store.object_metadata(self.workspace_id, extraction_id)
         self.store.source_metadata(self.workspace_id, (extraction.get("parents") or [""])[0])
@@ -43,10 +56,12 @@ class ContextCompiler:
             raise ProvenanceError("Подтверждённый материал превышает допустимый объём компиляции.")
         try:
             candidates = validate_candidates(self.model(text), len(text))
-        except ProvenanceError:
+        except ContextCompileError:
             raise
+        except ProvenanceError:
+            raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул результат, который не прошёл проверку.")
         except Exception as exc:
-            raise ProvenanceError("Локальный компилятор контекста недоступен.") from exc
+            raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.") from exc
         result=[]
         for candidate in candidates:
             duplicate = self._exact_duplicate(candidate)

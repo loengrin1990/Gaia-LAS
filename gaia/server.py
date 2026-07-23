@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from http.cookies import SimpleCookie
 from ipaddress import ip_address
 import secrets
@@ -28,8 +29,9 @@ from .conversations import (
 )
 from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
 from .controlled_intake import ControlledIntake
+from .context_compiler import ContextCompileError
 from .provenance import ProvenanceError
-from .launchers import launch_gaia_window, launch_module
+from .launchers import close_gaia_window, launch_gaia_window, launch_module
 from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
 from .profiles import profile_payloads
@@ -56,6 +58,7 @@ from .scribe_inbox import (
     preview_inbox_item,
 )
 from .ui import INDEX_HTML
+from .runtime import RUNTIME_ID, runtime_fingerprint
 
 
 MAX_JSON_BODY_SIZE = 1_000_000
@@ -110,6 +113,52 @@ def error_response(
     details: dict[str, Any] | None = None,
 ) -> None:
     json_response(handler, api_error_payload(code, message, details), status)
+
+
+def context_compile_failure(intake: ControlledIntake, project: str, artifact_id: str, trace_id: str, exc: Exception) -> None:
+    """Persist safe local diagnostics without material content or user paths."""
+    path = intake.store.root / "metadata" / "context_compile_diagnostics.json"
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        existing.append({
+            "trace_id": trace_id,
+            "stage": "compile",
+            "exception_type": type(exc).__name__,
+            "reason": getattr(exc, "code", "unexpected"),
+            "route": "context_compiler",
+            "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
+            "artifact_id": artifact_id,
+        })
+        path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        # Diagnostics must never affect the protected material or its API result.
+        pass
+
+
+def review_action_failure(intake: ControlledIntake, project: str, artifact_id: str, action: str, trace_id: str, exc: Exception) -> None:
+    """Persist only safe review diagnostics; never store material or model output."""
+    try:
+        path = intake.store.root / "metadata" / "review_diagnostics.json"
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        state = "unknown"
+        try:
+            state = str(intake.review(project).get(artifact_id).get("state") or "unknown")
+        except Exception:
+            pass
+        existing.append({
+            "trace_id": trace_id,
+            "stage": "review",
+            "action": action,
+            "exception_type": type(exc).__name__,
+            "reason": getattr(exc, "code", "review_failed"),
+            "route": "review",
+            "review_state": state,
+            "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
+            "artifact_id": artifact_id,
+        })
+        path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def text_response(
@@ -194,6 +243,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/local-status":
             json_response(self, check_local_llm())
+            return
+        if self.path == "/api/runtime":
+            json_response(self, runtime_fingerprint())
             return
         if self.path == "/api/retention-status":
             json_response(self, retention_status())
@@ -414,8 +466,8 @@ class Handler(BaseHTTPRequestHandler):
             intake = ControlledIntake().admit(project, uploaded) if uploaded else None
             if intake:
                 material = intake["materials"][0]
-                review = ControlledIntake().review(project).start(material["sanitized_id"])
-                json_response(self, {"status": "requires_review", "message": "Материал требует проверки.", "review": review}, 202)
+                review = ControlledIntake().review(project).prepare(material["sanitized_id"])
+                json_response(self, {"status": "not_started", "message": "Материал добавлен. Запустите локальную проверку.", "review": review}, 202)
                 return
             job = submit_analyze_job(project, query, uploaded, profile, None)
         except ProvenanceError as exc:
@@ -483,28 +535,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_review_get(self) -> None:
         route = urlparse(self.path); parts = route.path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
-        try: json_response(self, ControlledIntake().review(project).get(artifact_id, include_text=True))
-        except ProvenanceError: error_response(self, "review_not_found", "Проверка недоступна в этом рабочем пространстве.", 404)
+        intake = ControlledIntake()
+        try:
+            json_response(self, intake.review(project).get_or_start(artifact_id, include_text=True))
+        except ProvenanceError:
+            try:
+                intake.store.object_metadata(intake._workspace_for(project), artifact_id)
+            except ProvenanceError:
+                error_response(self, "material_not_available", "Материал недоступен в выбранном рабочем пространстве. Данные не изменены.", 404)
+            else:
+                error_response(self, "review_temporarily_unavailable", "Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.", 409)
 
     def handle_review_action(self) -> None:
         parts = urlparse(self.path).path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; action = parts[4] if len(parts) >= 5 else ""; payload = self.read_json(); project = str(payload.get("project") or "")
+        intake: ControlledIntake | None = None
         try:
-            review = ControlledIntake().review(project)
-            if action == "check": json_response(self, review.start(artifact_id), 202); return
+            intake = ControlledIntake(); review = intake.review(project)
+            if action == "check": json_response(self, review.start(artifact_id)); return
             if action == "decision":
                 decision = str(payload.get("decision") or ""); result = review.decide(artifact_id, str(payload.get("finding_id") or ""), decision, str(payload.get("category") or ""))
                 if decision == "replace":
                     current = review.get(artifact_id, include_text=True); finding = next(item for item in current["findings"] if item["finding_id"] == str(payload.get("finding_id") or ""))
-                    result["new_version"] = ControlledIntake().add_dictionary_value(project, artifact_id, finding["category"], current["cleaned_text"][finding["start"]:finding["end"]])
+                    result["new_version"] = intake.add_dictionary_value(project, artifact_id, finding["category"], current["cleaned_text"][finding["start"]:finding["end"]])
+                    result["review"] = review.create_successor(artifact_id, result["new_version"]["artifact_id"])
                 json_response(self, result); return
             if action == "dictionary":
-                json_response(self, ControlledIntake().add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or "")), 202); return
+                result = intake.add_dictionary_value(project, artifact_id, str(payload.get("category") or "Сотрудник"), str(payload.get("value") or ""))
+                result["review"] = review.create_successor(artifact_id, result["artifact_id"])
+                json_response(self, result, 202); return
             if action == "confirm":
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
                 json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
-        except ProvenanceError:
-            error_response(self, "review_failed", "Не удалось завершить локальную проверку материала.", 400); return
+        except ProvenanceError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            if intake is not None:
+                review_action_failure(intake, project, artifact_id, action, trace_id, exc)
+            json_response(self, api_error_payload("review_failed", "Не удалось завершить локальную проверку материала. Данные не изменены.", trace_id=trace_id), 400); return
         error_response(self, "not_found", "not found", 404)
 
     def handle_context_get(self) -> None:
@@ -527,8 +594,21 @@ class Handler(BaseHTTPRequestHandler):
             if action == "decision": json_response(self,intake.context(project).decide(object_id,str(payload.get("decision") or ""),str(payload.get("title") or ""),str(payload.get("statement") or ""))); return
             if action == "duplicate": json_response(self, intake.context(project).mark_duplicate(object_id, str(payload.get("target_id") or ""))); return
             if action == "conflict": json_response(self, intake.context(project).resolve_conflict(object_id, str(payload.get("resolution") or ""))); return
-        except ProvenanceError:
-            error_response(self,"context_failed","Не удалось обработать проектный контекст.",400); return
+        except ContextCompileError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            context_compile_failure(intake, project, object_id, trace_id, exc)
+            messages = {
+                "local_model_unavailable": "Локальная модель для сборки контекста недоступна. Данные не изменены. Убедитесь, что она запущена, и повторите попытку.",
+                "local_model_invalid": "Ответ локальной модели не прошёл проверку. Данные не изменены. Повторите сборку позже.",
+                "material_not_confirmed": "Материал ещё не подтверждён. Данные не изменены. Подтвердите актуальную очищенную версию и повторите сборку.",
+                "stale_version": "Эта версия материала устарела. Данные не изменены. Откройте актуальную версию и повторите сборку.",
+                "material_unavailable": "Материал недоступен в выбранном рабочем пространстве. Данные не изменены. Проверьте выбранное пространство и повторите действие.",
+            }
+            json_response(self, api_error_payload(exc.code, messages.get(exc.code, "Не удалось собрать проектный контекст. Данные не изменены. Повторите попытку."), trace_id=trace_id), 400); return
+        except ProvenanceError as exc:
+            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            context_compile_failure(intake, project, object_id, trace_id, exc)
+            json_response(self, api_error_payload("context_internal_error", "Внутренняя ошибка сборки контекста. Данные не изменены. Повторите попытку.", trace_id=trace_id), 400); return
         error_response(self,"not_found","not found",404)
 
     def handle_job_action(self) -> None:
@@ -950,12 +1030,24 @@ def main(open_window: bool = False) -> int:
         print(f"Gaia server error: cannot bind http://{SETTINGS.host}:{SETTINGS.port}: {exc}")
         return 2
     print(f"Gaia Local Analytics: http://{SETTINGS.host}:{SETTINGS.port}")
+    server_thread: threading.Thread | None = None
     if open_window:
-        result = launch_gaia_window()
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        result = launch_gaia_window(RUNTIME_ID)
         if not result.get("ok"):
-            print(f"Gaia window warning: {result.get('error')}")
+            print(f"Gaia startup error: {result.get('error')}")
+            server.shutdown()
+            server.server_close()
+            return 2
     try:
-        server.serve_forever()
+        if server_thread:
+            server_thread.join()
+        else:
+            server.serve_forever()
     except KeyboardInterrupt:
         print("\nОстановлено.")
+    finally:
+        close_gaia_window()
+        server.server_close()
     return 0

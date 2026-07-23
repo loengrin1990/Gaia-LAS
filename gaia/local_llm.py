@@ -20,6 +20,7 @@ TASK_LORE_GAP_DETECTOR = "lore_gap_detector"
 TASK_VEIL_REVIEW = "veil_review"
 TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
 TASK_PROJECT_HEALTH = "project_health"
+TASK_CONTEXT_COMPILER = "context_compiler"
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -268,6 +269,7 @@ def route_names_for_status() -> list[str]:
         TASK_VEIL_REVIEW,
         TASK_SCRIBE_CLASSIFIER,
         TASK_PROJECT_HEALTH,
+        TASK_CONTEXT_COMPILER,
     ]
     names: list[str] = []
     for name in [*defaults, *configured]:

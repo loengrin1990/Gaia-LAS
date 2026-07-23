@@ -1467,10 +1467,40 @@
     let journeyMaterials = [];
     let journeyReview = null;
 
+    const expectedRuntimeId = new URLSearchParams(window.location.search).get('runtime');
+    let runtimeUnavailable = false;
+
+    function stopForRuntimeLoss(message) {
+      if (runtimeUnavailable) return;
+      runtimeUnavailable = true;
+      document.body.innerHTML = '';
+      const panel = document.createElement('main'); panel.className = 'journey-empty';
+      panel.style.cssText = 'margin:10vh auto;max-width:680px;padding:32px;text-align:center;display:block;';
+      const title = document.createElement('h1'); title.textContent = 'Связь с Gaia потеряна';
+      const detail = document.createElement('p'); detail.textContent = message || 'Данные в этом окне больше не обновляются. Работа остановлена; запустите Gaia заново.';
+      panel.append(title, detail); document.body.appendChild(panel);
+    }
+
+    async function verifyRuntime() {
+      if (runtimeUnavailable) return;
+      try {
+        const response = await fetch('/api/runtime', {cache:'no-store'});
+        const runtime = await response.json();
+        if (!response.ok || runtime.ready !== true || (expectedRuntimeId && runtime.runtime_id !== expectedRuntimeId)) {
+          stopForRuntimeLoss('Данные в этом окне больше не актуальны. Работа остановлена; запустите Gaia заново.');
+        }
+      } catch (_) {
+        stopForRuntimeLoss('Данные в этом окне больше не обновляются. Работа остановлена; запустите Gaia заново.');
+      }
+    }
+    verifyRuntime(); window.setInterval(verifyRuntime, 2000);
+
     const journeyState = {
       accepted: { label: 'Добавляется', detail: 'Материал принят и готовится к обработке.', tone: 'warn', next: 'Откройте материал позже.' },
       ready: { label: 'Готово к подтверждению', detail: 'Очищенная версия готова к проверке.', tone: 'warn', next: 'Откройте проверку материала.' },
       requires_review: { label: 'Требуется проверка', detail: 'Нужно принять решения по найденным местам.', tone: 'danger', next: 'Откройте проверку материала.' },
+      ready_for_confirmation: { label: 'Готово к подтверждению', detail: 'Все найденные места обработаны.', tone: 'ok', next: 'Подтвердите актуальную очищенную версию.' },
+      review_error: { label: 'Локальная проверка не завершилась', detail: 'Данные не изменены.', tone: 'danger', next: 'Повторите локальную проверку.' },
       review_in_progress: { label: 'Проверка продолжается', detail: 'Часть решений уже сохранена.', tone: 'warn', next: 'Завершите проверку и подтвердите актуальную версию.' },
       confirmed: { label: 'Подтверждено', detail: 'Актуальная очищенная версия подтверждена.', tone: 'ok', next: 'Соберите проектный контекст.' },
       superseded: { label: 'Создана новая версия', detail: 'Прежняя версия больше не является актуальной.', tone: 'warn', next: 'Откройте актуальную версию материала.' },
@@ -1489,8 +1519,9 @@
       box.hidden = !message; box.textContent = message || ''; box.classList.toggle('error', error);
     }
     function journeyError(data, fallback) {
-      const message = errorMessage(data?.error, fallback);
-      return `${message} Данные не изменены. Проверьте рабочее пространство и повторите действие.`;
+      if (data?.error?.code === 'material_not_available') return 'Материал недоступен в выбранном рабочем пространстве. Данные не изменены.';
+      if (data?.error?.code === 'review_temporarily_unavailable') return 'Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.';
+      return errorMessage(data?.error, fallback);
     }
     function journeyStateFor(material) {
       if (!material.current) return journeyState.superseded;
@@ -1568,25 +1599,26 @@
       const side=document.createElement('section'); side.className='journey-card'; side.innerHTML='<h3>Результат проверки</h3>';
       const badge=document.createElement('span'); badge.className=`journey-status ${state.tone}`; badge.textContent=state.label; side.appendChild(badge);
       const explanation=document.createElement('p'); explanation.textContent=state.detail; side.appendChild(explanation);
+      if ((review.carried_decisions || []).length) { const carried=document.createElement('p'); carried.className='journey-meta'; carried.textContent=`Сохранены решения предыдущей версии: ${review.carried_decisions.length}. Новая версия требует отдельного подтверждения.`; side.appendChild(carried); }
       for (const finding of review.findings || []) {
         const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);
         const name=document.createElement('b'); name.textContent=`Предложение: ${finding.category}`; row.appendChild(name);
         const confidence=document.createElement('p'); confidence.className='journey-meta'; confidence.textContent=journeyConfidence[finding.confidence] || 'Уверенность не определена'; row.appendChild(confidence);
-        if (saved) { const done=document.createElement('p'); done.textContent=`Решение сохранено: ${saved.decision === 'keep' ? 'оставить без изменения' : saved.decision === 'replace' ? 'заменить псевдонимом' : 'изменить категорию'}.`; row.appendChild(done); }
+        if (saved) { const done=document.createElement('p'); done.textContent=`Решение сохранено: ${saved.decision === 'keep' ? 'оставить без изменения' : saved.decision === 'replace' ? 'заменить псевдонимом' : `изменить категорию на «${saved.category}»`}.`; row.appendChild(done); }
         else if (!review.confirmed) {
           const actions=document.createElement('div'); actions.className='journey-actions';
           for (const [decision,label] of [['replace','Заменить псевдонимом'],['keep','Оставить без изменения']]) { const button=document.createElement('button'); button.type='button'; button.textContent=label; button.onclick=()=>saveJourneyFinding(review.artifact_id,finding.finding_id,decision,button); actions.appendChild(button); }
-          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const value=window.prompt('Укажите понятную категорию', finding.category); if(value) saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value);}; actions.appendChild(category);
+          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const choices=['Сотрудник','Организация','Подразделение','Проект','Система','Адрес','Идентификатор','Другое'];const value=window.prompt(`Выберите категорию: ${choices.join(', ')}`, finding.category); if(!value){journeyMessage('Категория не выбрана. Данные не изменены. Выберите допустимую категорию и повторите действие.',true);return;} saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value.trim());}; actions.appendChild(category);
           row.appendChild(actions);
         }
         side.appendChild(row);
       }
       const actions=document.createElement('div'); actions.className='journey-actions';
-      if (!review.confirmed) { const check=document.createElement('button'); check.type='button'; check.className='secondary'; check.textContent='Повторить локальную проверку'; check.onclick=()=>startJourneyCheck(review.artifact_id,check); actions.appendChild(check); const confirm=document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить актуальную версию'; confirm.disabled=review.state === 'not_started'; confirm.title=confirm.disabled ? 'Сначала завершите локальную проверку.' : ''; confirm.onclick=()=>confirmJourneyReview(review.artifact_id,confirm); actions.appendChild(confirm); }
+      if (!review.confirmed) { if (['not_started','review_error'].includes(review.state)) { const check=document.createElement('button'); check.type='button'; check.className='secondary'; check.textContent=review.state==='review_error'?'Повторить локальную проверку':'Запустить локальную проверку'; check.onclick=()=>startJourneyCheck(review.artifact_id,check); actions.appendChild(check); } const confirm=document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить актуальную версию'; confirm.disabled=review.state !== 'ready_for_confirmation'; confirm.title=confirm.disabled ? 'Подтверждение станет доступно после завершения локальной проверки и решений по находкам.' : ''; confirm.onclick=()=>confirmJourneyReview(review.artifact_id,confirm); actions.appendChild(confirm); }
       if (review.confirmed) { const compile=document.createElement('button'); compile.type='button'; compile.textContent='Собрать проектный контекст'; compile.onclick=()=>compileJourneyContext(review.artifact_id,compile); actions.appendChild(compile); }
       side.appendChild(actions); root.appendChild(side);
     }
-    async function startJourneyCheck(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;renderJourneyReview(data); }
+    async function startJourneyCheck(id, button) { button.disabled=true; journeyMessage('Локальная проверка выполняется…'); const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;journeyMessage(data.state==='ready_for_confirmation'?'Новых находок нет. Версию можно подтвердить.':data.state==='requires_review'?'Найдены места, требующие решения.':'Локальная проверка не завершилась. Повторите попытку.',data.state==='review_error');renderJourneyReview(data); }
     async function saveJourneyFinding(id, findingId, decision, button, category='') { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),finding_id:findingId,decision,category})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение.'),true);button.disabled=false;return;} if(data.new_version?.artifact_id){journeyMessage('Создана новая версия. Прежняя версия больше не действует.');await openJourneyReview(data.new_version.artifact_id);await loadJourneyMaterials();return;} await openJourneyReview(id); }
     async function confirmJourneyReview(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Эта версия устарела. Откройте актуальную версию материала.'),true);button.disabled=false;return;} journeyMessage('Актуальная версия подтверждена. Следующее действие — собрать проектный контекст.');await openJourneyReview(id);await loadJourneyMaterials(); }
     async function compileJourneyContext(id, button) { button.disabled=true; const response=await fetch(`/api/context/${encodeURIComponent(id)}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось собрать проектный контекст.'),true);button.disabled=false;return;} showScreen('context'); renderJourneyContext(data.candidates || []); }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -160,12 +161,18 @@ class ControlledIntake:
     def add_dictionary_value(self, project: str, artifact_id: str, category: str, value: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)
         if not value.strip(): raise ProvenanceError("Не удалось добавить пустое значение в локальный словарь.")
-        dictionary = self.dictionary(project); dictionary.setdefault(category, [])
-        if value not in dictionary[category]: dictionary[category].append(value)
-        self.set_dictionary(project, dictionary)
         item = self.store.object_metadata(workspace_id, artifact_id)
         parent = (item.get("parents") or [""])[0]
-        if item.get("kind") != "sanitized" or not parent: raise ProvenanceError("Очищенная версия недоступна для повторной очистки.")
+        if item.get("kind") != "sanitized" or not item.get("current") or not parent: raise ProvenanceError("Очищенная версия недоступна для повторной очистки.")
+        if re.fullmatch(r"(?:Сотрудник|Организация|Подразделение|Проект|Система|Адрес|Идентификатор|Другое)-\d{2,}", value.strip()):
+            raise ProvenanceError("Нельзя добавить в словарь уже созданный псевдоним.")
+        dictionary = self.dictionary(project); dictionary.setdefault(category, [])
+        if value not in dictionary[category]:
+            source_text = (self.store.root / "artifacts" / workspace_id / f"{parent}.txt").read_text(encoding="utf-8")
+            if value not in source_text or not _is_complete_source_fragment(source_text, value):
+                raise ProvenanceError("Находка не относится к исходному материалу этой версии.")
+            dictionary[category].append(value)
+        self.set_dictionary(project, dictionary)
         return self.reprocess_protection(project, parent, "dictionary-v2")
 
     def _workspace_for(self, project: str) -> str:
@@ -193,3 +200,11 @@ class ControlledIntake:
 
     def _read(self) -> dict[str, Any]:
         return json.loads(self.path.read_text(encoding="utf-8"))
+
+def _is_complete_source_fragment(text: str, value: str) -> bool:
+    for match in re.finditer(re.escape(value), text):
+        before = text[match.start() - 1] if match.start() else ""
+        after = text[match.end()] if match.end() < len(text) else ""
+        if (not before or not re.match(r"[\w-]", before)) and (not after or not re.match(r"[\w-]", after)):
+            return True
+    return False

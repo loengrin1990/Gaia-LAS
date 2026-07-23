@@ -39,16 +39,32 @@ def protect(store: ProvenanceStore, workspace_id: str, extraction_id: str, dicti
     mapping = _mapping(store, workspace_id)
     counts: Counter[str] = Counter(); findings: list[dict[str, Any]] = []
     rules = [(category, pattern, category in REQUIRED_CATEGORIES) for category, pattern in RULES]
-    rules += [(category, re.escape(value), True) for category, values in (dictionary or {}).items() for value in values if value]
+    # Dictionary values must match complete lexical fragments.  A partial model
+    # span such as one letter must never rewrite ordinary words or identifiers.
+    rules += [(category, _dictionary_pattern(value), True) for category, values in (dictionary or {}).items() for value in values if value]
     rules += extra_rules or []
     failed_optional: list[str] = []
-    for category, pattern, required in rules:
+    # Find every replacement against the immutable extraction first.  Applying
+    # rules one by one to an already changed string allowed a later dictionary
+    # rule to match a token created by an earlier rule.
+    matches: list[tuple[int, int, int, str]] = []
+    for order, (category, pattern, required) in enumerate(rules):
         try:
-            text = re.sub(pattern, _replacement(category, mapping, counts, findings, rules_version), text, flags=re.IGNORECASE if category in {"Секрет", "Реквизит", "Адрес"} else 0)
+            flags = re.IGNORECASE if category in {"Секрет", "Реквизит", "Адрес"} else 0
+            matches.extend((match.start(), match.end(), order, category) for match in re.finditer(pattern, text, flags))
         except re.error as exc:
             if required:
                 raise ProvenanceError("Не удалось выполнить обязательную локальную очистку.") from exc
             failed_optional.append(category)
+    selected: list[tuple[int, int, int, str]] = []
+    for candidate in sorted(matches, key=lambda item: (item[0], item[2], -(item[1] - item[0]))):
+        start, end, _, _ = candidate
+        if any(start < selected_end and end > selected_start for selected_start, selected_end, _, _ in selected):
+            continue
+        selected.append(candidate)
+    for start, end, _, category in sorted(selected, reverse=True):
+        replacement = _replacement(category, mapping, counts, findings, rules_version)
+        text = text[:start] + replacement(re.match(r".*", text[start:end])) + text[end:]
     _save_mapping(store, workspace_id, mapping)
     sanitized = store.create_sanitized(workspace_id, extraction_id, rules_version, text)
     report = {"artifact_id": sanitized["artifact_id"], "status": "requires_review" if findings or failed_optional else "ready_for_review", "counts": dict(counts), "findings": findings, "rule_version": rules_version, "export_allowed": False}
@@ -74,6 +90,9 @@ def _replacement(category: str, mapping: dict[str, str], counts: Counter[str], f
         findings.append({"finding_id": f"finding-{len(findings)+1}", "category": category, "count": 1, "pseudonym": token, "safe_location": f"block-{len(findings)+1}", "status": "requires_review" if category in {"Адрес", "Сотрудник"} else "ready_for_review", "confidence": "high", "requires_review": category in {"Адрес", "Сотрудник"}, "rule_version": version})
         return token
     return replace
+
+def _dictionary_pattern(value: str) -> str:
+    return r"(?<![\w-])" + re.escape(value) + r"(?![\w-])"
 
 
 def _mapping(store: ProvenanceStore, workspace_id: str) -> dict[str, str]:

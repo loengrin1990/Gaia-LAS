@@ -1,6 +1,24 @@
 ObjC.import("Cocoa");
 ObjC.import("WebKit");
 
+let filePanelDelegate = null;
+
+ObjC.registerSubclass({
+  name: "GaiaFilePanelDelegate",
+  methods: [{
+    selector: "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:",
+    types: ["void", ["id", "id", "id", "id", "id"]],
+    implementation: function(webView, parameters, frameInfo, completionHandler) {
+      const panel = $.NSOpenPanel.openPanel;
+      panel.setCanChooseFiles(true);
+      panel.setCanChooseDirectories(false);
+      panel.setAllowsMultipleSelection(ObjC.unwrap(parameters.allowsMultipleSelection));
+      const result = panel.runModal();
+      completionHandler(result === $.NSModalResponseOK ? panel.URLs : null);
+    }
+  }]
+});
+
 function run(argv) {
   if (argv[0] === "--check") return "WebKit available";
 
@@ -13,6 +31,8 @@ function run(argv) {
   const frame = $.NSMakeRect(0, 0, 1360, 900);
   const configuration = $.WKWebViewConfiguration.alloc.init;
   const webView = $.WKWebView.alloc.initWithFrameConfiguration(frame, configuration);
+  filePanelDelegate = $.GaiaFilePanelDelegate.alloc.init;
+  webView.setUIDelegate(filePanelDelegate);
   const style = $.NSWindowStyleMaskTitled
     | $.NSWindowStyleMaskClosable
     | $.NSWindowStyleMaskMiniaturizable
