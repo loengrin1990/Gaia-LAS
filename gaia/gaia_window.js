@@ -57,18 +57,28 @@ ObjC.registerSubclass({
 
 ObjC.registerSubclass({
   name: "GaiaRuntimeDiagnosticsDelegate",
-  methods: [{
-    selector: "userContentController:didReceiveScriptMessage:",
-    types: ["void", ["id", "id", "id"]],
+  methods: {
+    "userContentController:didReceiveScriptMessage:": {
+    types: ["void", ["id", "id"]],
     implementation: function(controller, message) {
       const eventCode = ObjC.unwrap(message.name) === "gaiaStage6Diagnostics" ? "dom_file_input_click" : "unexpected_script_message";
       stage6Emit(eventCode, stage6CorrelationId(), { dom_click_registered: eventCode === "dom_file_input_click" });
     }
-  }]
+    }
+  }
 });
+
+function diagnosticsDelegateRespondsToMessageSelector() {
+  const delegate = $.GaiaRuntimeDiagnosticsDelegate.alloc.init;
+  return delegate.respondsToSelector("userContentController:didReceiveScriptMessage:");
+}
 
 function run(argv) {
   if (argv[0] === "--check") return "WebKit available";
+  if (argv[0] === "--diagnostics-delegate-smoke") {
+    if (!diagnosticsDelegateRespondsToMessageSelector()) throw new Error("WKScriptMessageHandler selector is unavailable");
+    return "WKScriptMessageHandler available";
+  }
 
   const address = argv[0] || "http://127.0.0.1:8787";
   const url = $.NSURL.URLWithString($(address));

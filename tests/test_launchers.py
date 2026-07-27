@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -64,6 +65,16 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("selected_url_count", script)
         self.assertNotIn("panel.URL.path", script)
         self.assertNotIn("panel.URLs.description", script)
+
+    def test_runtime_diagnostics_delegate_exports_wk_script_message_handler_selector(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--diagnostics-delegate-smoke"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "WKScriptMessageHandler available")
 
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})
     def test_gaia_module_opens_system_window(self, launch) -> None:
