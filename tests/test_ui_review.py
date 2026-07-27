@@ -22,6 +22,12 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("button.disabled=true", INDEX_HTML)
         self.assertNotIn(">requires_review<", INDEX_HTML)
 
+    def test_veil_result_messages_are_distinct_and_human_readable(self) -> None:
+        self.assertIn("Проверка завершена: дополнительных сведений не найдено", INDEX_HTML)
+        self.assertIn("Найдены сведения, требующие проверки", INDEX_HTML)
+        self.assertIn("Автоматическая проверка не завершена. Проверьте очищенный текст вручную", INDEX_HTML)
+        self.assertIn("Подтвердить после ручной проверки", INDEX_HTML)
+
     def test_journey_file_input_is_enabled_and_has_a_connected_label(self) -> None:
         self.assertEqual(INDEX_HTML.count('id="journeyFiles"'), 1)
         self.assertIn('<input id="journeyFiles" class="native-file-input" type="file" multiple', INDEX_HTML)

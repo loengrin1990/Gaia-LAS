@@ -16,6 +16,8 @@ from .storage import atomic_write_text, path_lock
 
 ALLOWED_CATEGORIES = {"Сотрудник", "Организация", "Подразделение", "Проект", "Система", "Адрес", "Идентификатор", "Другое"}
 MAX_FINDINGS = 24
+REVIEW_STATUS_COMPLETED = "completed"
+REVIEW_STATE_MANUAL_REVIEW_REQUIRED = "manual_review_required"
 
 
 class LocalReviewError(ProvenanceError):
@@ -30,8 +32,10 @@ def local_model_review(text: str) -> dict[str, Any]:
     prompt = "\n".join([
         "Проверь только переданный очищенный текст на остаточные сущности, которые требуют ручной проверки.",
         "Верни ровно один JSON-объект без Markdown и без пояснений.",
-        "Верхний уровень содержит только ключ findings.",
-        "Если находок нет, верни точно {\"findings\":[]}.",
+        "Верхний уровень содержит ровно ключи status и findings.",
+        "status всегда имеет значение completed только после завершения проверки.",
+        "Если находок нет, верни точно {\"status\":\"completed\",\"findings\":[]}.",
+        "Пустой список допустим только в полном ответе со status=completed.",
         "Каждая находка содержит ровно category, start, end, confidence, reason_code, requires_review.",
         "start и end — реальные нулевые позиции начала и конца самостоятельного фрагмента в очищенном тексте.",
         "Не копируй примеры из этой инструкции и не создавай находки, если координаты не проверены по тексту.",
@@ -62,7 +66,7 @@ def local_model_review(text: str) -> dict[str, Any]:
         payload = extract_unique_json_object(answer)
     except json.JSONDecodeError as exc:
         raise LocalReviewError("local_model_invalid_json", "Локальная дополнительная проверка вернула некорректный ответ.", diagnostics) from exc
-    if not isinstance(payload, dict) or set(payload) != {"findings"} or not isinstance(payload.get("findings"), list) or len(payload["findings"]) > MAX_FINDINGS:
+    if not is_completed_review_payload(payload):
         emit_runtime_diagnostic("veil", "payload_schema_failed", correlation_id, error_code="payload_schema_invalid")
         raise LocalReviewError("local_model_schema_failed", "Локальная дополнительная проверка вернула ответ неподходящей структуры.", diagnostics)
     emit_runtime_diagnostic("veil", "payload_received", correlation_id, findings_empty=not payload["findings"], findings_count=len(payload["findings"]))
@@ -137,14 +141,14 @@ class ReviewService:
             state = "requires_review" if findings else "ready_for_confirmation"
             error_code = ""
         except LocalReviewError as exc:
-            findings = []; state = "review_error"; error_code = exc.code; diagnostics = exc.diagnostics
+            findings = []; state = REVIEW_STATE_MANUAL_REVIEW_REQUIRED; error_code = exc.code; diagnostics = exc.diagnostics
         except ProvenanceError:
-            findings = []; state = "review_error"; error_code = "local_model_invalid_findings"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review"}
+            findings = []; state = REVIEW_STATE_MANUAL_REVIEW_REQUIRED; error_code = "local_model_invalid_findings"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review"}
             emit_runtime_diagnostic("review_service", "payload_validation_failed", correlation_id, validation_result="error", error_code="payload_validation_invalid")
         except Exception as exc:
-            findings = []; state = "review_error"; error_code = "local_check_internal_error"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "exception_type": type(exc).__name__}
+            findings = []; state = REVIEW_STATE_MANUAL_REVIEW_REQUIRED; error_code = "local_check_internal_error"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "exception_type": type(exc).__name__}
         record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "error_code": error_code, "created_at": now()}
-        if state == "review_error":
+        if state == REVIEW_STATE_MANUAL_REVIEW_REQUIRED:
             record["trace_id"] = diagnostics["trace_id"]
             self._write_diagnostics(artifact_id, error_code, diagnostics)
         emit_runtime_diagnostic("review_service", "review_final_state", correlation_id, final_state=state, findings_count=len(findings), error_code=error_code or None)
@@ -217,8 +221,9 @@ class ReviewService:
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if not record or record["workspace_id"] != self.workspace_id or not item.get("current"):
             raise ProvenanceError("Нельзя подтвердить неактуальную версию.")
-        if record.get("state") != "ready_for_confirmation":
+        if record.get("state") not in {"ready_for_confirmation", REVIEW_STATE_MANUAL_REVIEW_REQUIRED}:
             raise ProvenanceError("Подтверждение доступно только после завершения локальной проверки.")
+        record["confirmation_method"] = "manual" if record.get("state") == REVIEW_STATE_MANUAL_REVIEW_REQUIRED else "veil_review"
         record["confirmed"] = True; record["state"] = "confirmed"; record["confirmed_at"] = now(); self._write(artifact_id, record)
         return self._text(artifact_id)
 
@@ -226,6 +231,7 @@ class ReviewService:
         result = {k: record[k] for k in ("artifact_id", "state", "findings", "decisions", "confirmed")}
         result["error_code"] = record.get("error_code", "")
         result["trace_id"] = record.get("trace_id", "")
+        result["confirmation_method"] = record.get("confirmation_method", "")
         result["carried_decisions"] = list(record.get("carried_decisions") or [])
         if include_text: result["cleaned_text"] = self._text(record["artifact_id"])
         return result
@@ -246,7 +252,7 @@ class ReviewService:
 
 def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]]:
     text_length = len(text) if isinstance(text, str) else text
-    if not isinstance(payload, dict) or set(payload) != {"findings"} or not isinstance(payload["findings"], list) or len(payload["findings"]) > MAX_FINDINGS:
+    if not is_completed_review_payload(payload):
         raise ProvenanceError("Некорректный ответ локальной проверки.")
     result=[]; used=[]
     for index, item in enumerate(payload["findings"], 1):
@@ -261,6 +267,16 @@ def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]
             raise ProvenanceError("Локальная проверка не может предлагать уже созданный псевдоним.")
         used.append((start,end)); result.append({**item,"finding_id":f"model-{index}","expected_fingerprint":_fingerprint(expected_text)})
     return result
+
+
+def is_completed_review_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and set(payload) == {"status", "findings"}
+        and payload.get("status") == REVIEW_STATUS_COMPLETED
+        and isinstance(payload.get("findings"), list)
+        and len(payload["findings"]) <= MAX_FINDINGS
+    )
 
 
 def validation_error_code(exc: ProvenanceError) -> str:

@@ -24,6 +24,19 @@ class ServerContractTests(unittest.TestCase):
         service.start.assert_called_once_with("san_1")
         submit.assert_not_called(); response.assert_called_once()
 
+    def test_indeterminate_review_is_returned_without_submitting_analysis(self) -> None:
+        service = Mock(); service.start.return_value = {"artifact_id": "san_1", "state": "manual_review_required", "findings": [], "confirmed": False}
+        intake = Mock(); intake.review.return_value = service
+        handler = SimpleNamespace(path="/api/reviews/san_1/check", read_json=lambda: {"project": "synthetic"})
+        with (
+            patch("gaia.server.ControlledIntake", return_value=intake),
+            patch("gaia.server.json_response") as response,
+            patch("gaia.server.submit_analyze_job") as submit,
+        ):
+            Handler.handle_review_action(handler)
+        self.assertEqual(response.call_args.args[1]["state"], "manual_review_required")
+        submit.assert_not_called()
+
     def test_review_confirmation_submits_only_cleaned_text(self) -> None:
         service = Mock(); service.confirm.return_value = "[PERSON_1]"
         intake = Mock(); intake.review.return_value = service

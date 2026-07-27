@@ -4,9 +4,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
-from gaia.review import LocalReviewError, ReviewService, extract_unique_json_object, validate_model_payload
+from gaia.review import LocalReviewError, ReviewService, extract_unique_json_object, local_model_review, validate_model_payload
+
+
+def completed(findings):
+    return {"status": "completed", "findings": findings}
 
 class LocalReviewTests(unittest.TestCase):
     def setup_review(self):
@@ -15,7 +20,7 @@ class LocalReviewTests(unittest.TestCase):
     def test_model_only_receives_cleaned_text_and_confirmation_is_versioned(self):
         tmp,s,w,src,ext,san=self.setup_review(); seen=[]
         try:
-            def model(text): seen.append(text); return {"findings":[{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]}
+            def model(text): seen.append(text); return completed([{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}])
             review=ReviewService(s,w,model); state=review.start(san["artifact_id"])
             self.assertEqual(seen, ["Clean Person-01 remains"]); self.assertIn("cleaned_text",state); self.assertNotIn("source",str(state))
             review.decide(san["artifact_id"],"model-1","keep"); self.assertEqual(review.confirm(san["artifact_id"]),"Clean Person-01 remains")
@@ -26,20 +31,62 @@ class LocalReviewTests(unittest.TestCase):
     def test_rejects_invalid_model_payload_without_trusting_partial_result(self):
         tmp,s,w,src,ext,san=self.setup_review()
         try:
-            review=ReviewService(s,w,lambda text:{"findings":[{"category":"Unknown","start":0,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]})
-            state=review.start(san["artifact_id"]); self.assertEqual(state["findings"],[]); self.assertFalse(state["confirmed"])
-            with self.assertRaises(ProvenanceError): validate_model_payload({"findings":[{"category":"Сотрудник","start":5,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]}, 10)
+            review=ReviewService(s,w,lambda text:completed([{"category":"Unknown","start":0,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]))
+            state=review.start(san["artifact_id"]); self.assertEqual(state["state"], "manual_review_required"); self.assertEqual(state["findings"],[]); self.assertFalse(state["confirmed"])
+            with self.assertRaises(ProvenanceError): validate_model_payload(completed([{"category":"Сотрудник","start":5,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]), 10)
         finally: tmp.cleanup()
 
     def test_unexpected_model_failure_keeps_material_available_for_review(self):
         tmp,s,w,src,ext,san=self.setup_review()
         try:
             state=ReviewService(s,w,lambda text: (_ for _ in ()).throw(TimeoutError("synthetic timeout"))).start(san["artifact_id"])
-            self.assertEqual(state["state"],"review_error")
+            self.assertEqual(state["state"],"manual_review_required")
             self.assertEqual(state["findings"],[])
             self.assertFalse(state["confirmed"])
             self.assertTrue(s.object_metadata(w,san["artifact_id"])["current"])
         finally: tmp.cleanup()
+
+    def test_indeterminate_payloads_never_become_empty_success_or_block_manual_confirmation(self):
+        invalid_payloads = [
+            None, "", "   ", "not json", [], {}, {"status": "completed"},
+            {"status": "completed", "findings": None}, {"status": "completed", "findings": ""},
+            {"status": "completed", "findings": {}}, {"status": "unknown", "findings": []},
+            {"status": "failed", "findings": []}, {"status": "completed", "findings": [{}]},
+        ]
+        for payload in invalid_payloads:
+            with self.subTest(payload=repr(payload)):
+                tmp, s, w, _, _, san = self.setup_review()
+                try:
+                    review = ReviewService(s, w, lambda text, payload=payload: payload)
+                    state = review.start(san["artifact_id"])
+                    self.assertEqual(state["state"], "manual_review_required")
+                    self.assertEqual(state["findings"], [])
+                    self.assertFalse(state["confirmed"])
+                    self.assertEqual(review.confirm(san["artifact_id"]), "Clean Person-01 remains")
+                    confirmed = review.get(san["artifact_id"])
+                    self.assertEqual(confirmed["confirmation_method"], "manual")
+                finally: tmp.cleanup()
+
+    def test_timeout_is_indeterminate_and_safe_diagnostics_exclude_synthetic_marker(self):
+        marker = "SYNTHETIC_SECRET_MARKER_74291"
+        tmp, s, w, _, _, san = self.setup_review()
+        try:
+            def model(_):
+                raise LocalReviewError("local_model_timeout", marker, {"trace_id": "gaia-test", "stage": "local_review", "provider": "synthetic", "response_chars": 0})
+            state = ReviewService(s, w, model).start(san["artifact_id"])
+            self.assertEqual(state["state"], "manual_review_required")
+            diagnostic = (s.root / "metadata" / "review_diagnostics.json").read_text(encoding="utf-8")
+            self.assertNotIn(marker, diagnostic)
+        finally: tmp.cleanup()
+
+    def test_local_model_parser_rejects_empty_whitespace_and_invalid_json(self):
+        for answer in ("", "   ", "not json", "[]", "{}", '{"status":"completed"}', '{"status":"completed","findings":null}'):
+            with self.subTest(answer=repr(answer)):
+                with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok": True, "answer": answer, "raw": {"done": True}}):
+                    with self.assertRaises(LocalReviewError):
+                        local_model_review("SYNTHETIC_SECRET_MARKER_74291")
+        with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok": True, "answer": '{"status":"completed","findings":[]}', "raw": {"done": True}}):
+            self.assertEqual(local_model_review("SYNTHETIC_SECRET_MARKER_74291"), completed([]))
 
     def test_local_model_error_code_and_safe_trace_are_persisted(self):
         tmp,s,w,_,_,san=self.setup_review()
@@ -47,7 +94,7 @@ class LocalReviewTests(unittest.TestCase):
             def model(_):
                 raise LocalReviewError("local_model_timeout", "synthetic timeout", {"trace_id":"gaia-test", "stage":"local_review", "provider":"synthetic", "response_chars":0})
             state=ReviewService(s,w,model).start(san["artifact_id"])
-            self.assertEqual(state["state"], "review_error")
+            self.assertEqual(state["state"], "manual_review_required")
             self.assertEqual(state["error_code"], "local_model_timeout")
             self.assertEqual(state["trace_id"], "gaia-test")
             diagnostics=json.loads((s.root / "metadata" / "review_diagnostics.json").read_text(encoding="utf-8"))
@@ -63,7 +110,7 @@ class LocalReviewTests(unittest.TestCase):
             os.environ["GAIA_STAGE6_RUNTIME_DIAGNOSTICS"] = "1"
             os.environ["GAIA_STAGE6_DIAGNOSTICS_PATH"] = str(path)
             try:
-                state = ReviewService(s,w,lambda text:{"findings":[]}).start(san["artifact_id"])
+                state = ReviewService(s,w,lambda text:completed([])).start(san["artifact_id"])
             finally:
                 for key, value in original.items():
                     if value is None: os.environ.pop(key, None)
@@ -82,22 +129,22 @@ class LocalReviewTests(unittest.TestCase):
         with self.assertRaises(ProvenanceError) as schema:
             validate_model_payload({"other": []}, 10)
         with self.assertRaises(ProvenanceError) as coordinates:
-            validate_model_payload({"findings":[{"category":"Сотрудник","start":2,"end":1,"confidence":"high","reason_code":"x","requires_review":True}]}, 10)
+            validate_model_payload(completed([{"category":"Сотрудник","start":2,"end":1,"confidence":"high","reason_code":"x","requires_review":True}]), 10)
         with self.assertRaises(ProvenanceError) as fragment_coordinates:
-            validate_model_payload({"findings":[{"category":"Сотрудник","start":1,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]}, "word")
+            validate_model_payload(completed([{"category":"Сотрудник","start":1,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]), "word")
         self.assertEqual(validation_error_code(schema.exception), "payload_validation_invalid")
         self.assertEqual(validation_error_code(coordinates.exception), "payload_coordinates_invalid")
         self.assertEqual(validation_error_code(fragment_coordinates.exception), "payload_coordinates_invalid")
 
     def test_unique_json_extraction_accepts_one_fence_only(self):
-        self.assertEqual(extract_unique_json_object("```json\n{\"findings\":[]}\n```"), {"findings": []})
+        self.assertEqual(extract_unique_json_object("```json\n{\"status\":\"completed\",\"findings\":[]}\n```"), completed([]))
         with self.assertRaises(json.JSONDecodeError):
             extract_unique_json_object("{\"findings\":[]} and {\"findings\":[]}")
 
     def test_confirmation_is_blocked_until_a_successful_check_finishes(self):
         tmp,s,w,_,_,san=self.setup_review()
         try:
-            review=ReviewService(s,w,lambda text:{"findings":[]})
+            review=ReviewService(s,w,lambda text:completed([]))
             self.assertEqual(review.prepare(san["artifact_id"])["state"], "not_started")
             with self.assertRaises(ProvenanceError): review.confirm(san["artifact_id"])
             self.assertEqual(review.start(san["artifact_id"])["state"], "ready_for_confirmation")
@@ -109,7 +156,7 @@ class LocalReviewTests(unittest.TestCase):
         try:
             def model(text):
                 calls.append(text)
-                return {"findings":[]}
+                return completed([])
             review=ReviewService(s,w,model)
             review.prepare(san["artifact_id"])
             self.assertEqual(review.start(san["artifact_id"])["state"], "ready_for_confirmation")
@@ -120,7 +167,7 @@ class LocalReviewTests(unittest.TestCase):
     def test_successor_review_is_available_without_confirming_the_new_version(self):
         tmp,s,w,src,ext,san=self.setup_review()
         try:
-            model=lambda text:{"findings":[]}
+            model=lambda text:completed([])
             review=ReviewService(s,w,model)
             review.start(san["artifact_id"])
             old_record=review._read()[san["artifact_id"]]
@@ -140,8 +187,8 @@ class LocalReviewTests(unittest.TestCase):
         try:
             text=(s.root / "sanitized" / w / f"{san['artifact_id']}.txt").read_text(encoding="utf-8")
             with self.assertRaises(ProvenanceError):
-                validate_model_payload({"findings":[{"category":"Сотрудник","start":7,"end":19,"confidence":"medium","reason_code":"residual","requires_review":True}]}, "prefix Сотрудник-01 suffix")
-            review=ReviewService(s,w,lambda value:{"findings":[{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]})
+                validate_model_payload(completed([{"category":"Сотрудник","start":7,"end":19,"confidence":"medium","reason_code":"residual","requires_review":True}]), "prefix Сотрудник-01 suffix")
+            review=ReviewService(s,w,lambda value:completed([{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]))
             review.start(san["artifact_id"])
             review.decide(san["artifact_id"],"model-1","keep")
             with self.assertRaises(ProvenanceError): review.decide(san["artifact_id"],"model-1","keep")
@@ -165,7 +212,7 @@ class LocalReviewTests(unittest.TestCase):
     def test_rejects_partial_word_finding_and_preserves_exact_synthetic_text(self):
         source = "Протокол по проекту «Сфера». Подразделение: Департамент. Сетевой адрес: 10.2.3.4. СНИЛС: 112-233-445 95. Договор № ТЕСТ-2026-0042."
         with self.assertRaises(ProvenanceError):
-            validate_model_payload({"findings":[{"category":"Сотрудник","start":0,"end":1,"confidence":"high","reason_code":"residual","requires_review":True}]}, source)
+            validate_model_payload(completed([{"category":"Сотрудник","start":0,"end":1,"confidence":"high","reason_code":"residual","requires_review":True}]), source)
         tmp,s,w,_,_,_=self.setup_review()
         try:
             src=s.accept_bytes(w,source.encode(),"text/plain"); ext=s.create_extraction(w,src["source_id"],"v1")
@@ -178,7 +225,7 @@ class LocalReviewTests(unittest.TestCase):
     def test_category_change_is_persisted_and_completes_review(self):
         tmp,s,w,_,_,san=self.setup_review()
         try:
-            review=ReviewService(s,w,lambda value:{"findings":[{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]})
+            review=ReviewService(s,w,lambda value:completed([{"category":"Сотрудник","start":6,"end":15,"confidence":"medium","reason_code":"residual","requires_review":True}]))
             review.start(san["artifact_id"])
             result=review.decide(san["artifact_id"],"model-1","change_category","Организация")
             self.assertEqual(result["findings"][0]["category"],"Организация")

@@ -40,11 +40,11 @@ class EndToEndValidationTests(unittest.TestCase):
             if organization in text:
                 start = text.index(organization)
                 false_start = text.index("Риск")
-                return {"findings": [
+                return {"status": "completed", "findings": [
                     {"category": "Организация", "start": start, "end": start + len(organization), "confidence": "high", "reason_code": "residual", "requires_review": True},
                     {"category": "Другое", "start": false_start, "end": false_start + 4, "confidence": "low", "reason_code": "false_positive", "requires_review": True},
                 ]}
-            return {"findings": []}
+            return {"status": "completed", "findings": []}
 
         def context_model(text: str) -> dict[str, object]:
             conflict = "иной локальный" in text

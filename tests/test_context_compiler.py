@@ -19,7 +19,7 @@ from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 class ContextCompilerTests(unittest.TestCase):
     def setup(self):
         tmp=tempfile.TemporaryDirectory(); s=ProvenanceStore(Path(tmp.name)); w=s.create_workspace(); src=s.accept_bytes(w,b"[PERSON_1] decided: use local review. Risk: delay.","text/plain"); ext=s.create_extraction(w,src["source_id"],"v1"); san=protect(s,w,ext["artifact_id"])["sanitized"]
-        ReviewService(s,w,lambda text:{"findings":[]}).start(san["artifact_id"]); ReviewService(s,w).confirm(san["artifact_id"])
+        ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san["artifact_id"]); ReviewService(s,w).confirm(san["artifact_id"])
         return tmp,s,w,san
     def test_compiles_confirmed_only_idempotently_and_preserves_provenance(self):
         tmp,s,w,san=self.setup()
@@ -86,7 +86,7 @@ class ContextCompilerTests(unittest.TestCase):
             source_id=s.object_metadata(w,san["parents"][0])["parents"][0]
             ext=s.create_extraction(w,source_id,"v2")
             san2=protect(s,w,ext["artifact_id"],rules_version="v2")["sanitized"]
-            ReviewService(s,w,lambda text:{"findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
+            ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
             second=ContextCompiler(s,w,model).compile(san2["artifact_id"])
             action=next(x for x in second if x["item_type"]=="action")
             self.assertEqual(len(action["source_links"]),2)
