@@ -3,12 +3,19 @@ import WebKit
 
 final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
     private enum ProbeResult: Equatable { case gaia, otherService, unavailable }
-    private let diagnostics = NativeDiagnostics()
-    private let correlationID = UUID().uuidString
+    private let diagnostics: NativeDiagnostics
+    private let correlationID: String
     private var ownedBackend: Process?
     private var origin: GaiaOrigin?
-    private var window: NSWindow?
+    private let window: NSWindow
     private var webView: WKWebView?
+
+    init(window: NSWindow, diagnostics: NativeDiagnostics, correlationID: String) {
+        self.window = window
+        self.diagnostics = diagnostics
+        self.correlationID = correlationID
+        super.init()
+    }
 
     func start() {
         diagnostics.emit("native_host_started", fields: ["correlation_id": correlationID])
@@ -112,11 +119,8 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
             let view = WKWebView(frame: .zero)
             view.uiDelegate = self
             view.navigationDelegate = self
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 850), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "Gaia"
-            window.contentView = view
-            window.makeKeyAndOrderFront(nil)
-            self.window = window
+            self.window.contentView = view
+            self.window.makeKeyAndOrderFront(nil)
             self.webView = view
             self.diagnostics.emit("webview_load_started", fields: ["correlation_id": self.correlationID, "port": origin.port])
             view.load(URLRequest(url: origin.url))
@@ -149,13 +153,7 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
             completionHandler(urls)
             diagnostics.emit("completion_handler_called", fields: ["correlation_id": correlationID, "result": result, "selected_url_count": urls?.count ?? 0, "completion_call_count": callCount])
         }
-        let parent = window ?? webView.window
-        if let parent {
-            panel.beginSheetModal(for: parent) { response in
-                response == .OK ? finish(panel.urls, result: "accepted") : finish(nil, result: "cancelled")
-            }
-        } else {
-            let response = panel.runModal()
+        panel.beginSheetModal(for: window) { response in
             response == .OK ? finish(panel.urls, result: "accepted") : finish(nil, result: "cancelled")
         }
     }

@@ -9,23 +9,25 @@
  A00000000000000000000002 /* BackendSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* BackendSupport.swift */; };
  A00000000000000000000003 /* GaiaHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* GaiaHostController.swift */; };
  A00000000000000000000004 /* GaiaHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* GaiaHostTests.swift */; };
+ A00000000000000000000006 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000015 /* main.swift */; };
  A00000000000000000000005 /* GaiaHost.app in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000020 /* GaiaHost.app */; };
 
  A00000000000000000000011 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
  A00000000000000000000012 /* BackendSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendSupport.swift; sourceTree = "<group>"; };
  A00000000000000000000013 /* GaiaHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaiaHostController.swift; sourceTree = "<group>"; };
  A00000000000000000000014 /* GaiaHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaiaHostTests.swift; sourceTree = "<group>"; };
+ A00000000000000000000015 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
  A00000000000000000000020 /* GaiaHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Gaia.app; sourceTree = BUILT_PRODUCTS_DIR; };
  A00000000000000000000021 /* GaiaHostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GaiaHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 
- A00000000000000000000030 /* GaiaHost */ = {isa = PBXGroup; children = (A00000000000000000000011 /* AppDelegate.swift */, A00000000000000000000012 /* BackendSupport.swift */, A00000000000000000000013 /* GaiaHostController.swift */); path = GaiaHost; sourceTree = "<group>"; };
+ A00000000000000000000030 /* GaiaHost */ = {isa = PBXGroup; children = (A00000000000000000000015 /* main.swift */, A00000000000000000000011 /* AppDelegate.swift */, A00000000000000000000012 /* BackendSupport.swift */, A00000000000000000000013 /* GaiaHostController.swift */); path = GaiaHost; sourceTree = "<group>"; };
  A00000000000000000000031 /* GaiaHostTests */ = {isa = PBXGroup; children = (A00000000000000000000014 /* GaiaHostTests.swift */); path = GaiaHostTests; sourceTree = "<group>"; };
  A00000000000000000000032 /* Products */ = {isa = PBXGroup; children = (A00000000000000000000020 /* GaiaHost.app */, A00000000000000000000021 /* GaiaHostTests.xctest */); name = Products; sourceTree = "<group>"; };
  A00000000000000000000033 = {isa = PBXGroup; children = (A00000000000000000000030 /* GaiaHost */, A00000000000000000000031 /* GaiaHostTests */, A00000000000000000000032 /* Products */); sourceTree = "<group>"; };
 
  A00000000000000000000040 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
  A00000000000000000000041 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000005 /* GaiaHost.app in Frameworks */); runOnlyForDeploymentPostprocessing = 0; };
- A00000000000000000000042 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001 /* AppDelegate.swift in Sources */, A00000000000000000000002 /* BackendSupport.swift in Sources */, A00000000000000000000003 /* GaiaHostController.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+ A00000000000000000000042 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000006 /* main.swift in Sources */, A00000000000000000000001 /* AppDelegate.swift in Sources */, A00000000000000000000002 /* BackendSupport.swift in Sources */, A00000000000000000000003 /* GaiaHostController.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
  A00000000000000000000043 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000004 /* GaiaHostTests.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 
  A00000000000000000000050 /* GaiaHost */ = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000060 /* Build configuration list for PBXNativeTarget "GaiaHost" */; buildPhases = (A00000000000000000000042 /* Sources */, A00000000000000000000040 /* Frameworks */); buildRules = (); dependencies = (); name = GaiaHost; productName = GaiaHost; productReference = A00000000000000000000020 /* GaiaHost.app */; productType = "com.apple.product-type.application"; };

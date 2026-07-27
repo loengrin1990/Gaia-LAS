@@ -206,3 +206,7 @@ Stop-condition JXA выполнен. Безопасного способа вы�
 # Нативный host этапа 6.3
 
 Для `Gaia.app` диагностика включается только через `GAIA_NATIVE_HOST_DIAGNOSTICS=1` и явный JSONL-путь. Она фиксирует только код события, correlation id, ownership, port, HTTP status, результат, счётчики URL/completion, безопасный error code и длительность. Имена, пути и содержимое файлов, DOM, рабочие данные, environment и указатели не пишутся.
+
+Этап 6.3a добавил раннюю последовательность до backend: `native_entry_reached`, `app_delegate_created`, `app_delegate_assigned`, `application_will_finish_launching`, `application_did_finish_launching`, `loading_window_created`, `loading_window_shown`, `backend_coordinator_started`. Она отделяет проблему AppKit lifecycle от Python, WebKit и file picker.
+
+Launch-smoke 6.3a подтвердил обязательные события `native_entry_reached`, `application_did_finish_launching`, `loading_window_created` и `backend_coordinator_started`, после чего host валидно подключился к синтетическому loopback Gaia. Это не является физической приёмкой `NSOpenPanel`.

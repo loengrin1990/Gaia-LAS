@@ -13,9 +13,13 @@
 
 ## Поиск и жизненный цикл
 
+В исходной реализации 6.3 процесс входил в AppKit event loop, но `@main AppDelegate` не создавал явный `NSApplication`, не назначал delegate и не удерживал его сильной ссылкой. Поэтому callback не запускал окно и backend: физический запуск оставлял невидимый процесс без дочернего Python-процесса. В 6.3a `main.swift` создаёт `NSApplication`, удерживает `AppDelegate` локальной сильной ссылкой на всё время `application.run()`, назначает его delegate и активирует regular application policy. В `applicationDidFinishLaunching` сначала создаётся единственный `NSWindow` с текстом «Gaia запускается…», затем запускается coordinator в фоне; после readiness тот же window получает `WKWebView`.
+
 Приоритет backend: `GAIA_BACKEND_URL`, затем `config.json` найденного репозитория. Приоритет репозитория: `GAIA_REPOSITORY_ROOT`, затем предсказуемое родительское расположение dev-сборки. Python выбирается в порядке `GAIA_PYTHON`, `.venv/bin/python3`, `/usr/bin/python3`; shell не используется.
 
 Host сначала проверяет точный loopback `/api/runtime`. Валидный ответ означает attached backend и никогда не завершается host. Если Gaia не подтверждена, host запускает owned backend через `Foundation.Process` с массивом аргументов и ждёт readiness максимум 8 секунд вне main thread. При закрытии вызывает `terminate()` только owned process и ждёт не более трёх секунд; рабочие данные не затрагиваются.
+
+`zsh scripts/smoke_macos_host.sh` собирает app, запускает его с безопасной диагностикой и синтетическим loopback backend. Smoke прошёл: подтверждены вход в native lifecycle, `applicationDidFinishLaunching`, создание loading window, старт coordinator и валидное attached-соединение; после него не остаётся owned backend.
 
 ## WebKit и файлы
 
