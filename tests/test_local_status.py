@@ -7,6 +7,7 @@ import urllib.error
 from unittest.mock import patch
 
 from gaia.local_llm import (
+    TASK_CONTEXT_COMPILER,
     TASK_PROJECT_HEALTH,
     check_local_llm,
     check_local_provider,
@@ -16,6 +17,7 @@ from gaia.local_llm import (
     parse_json_object,
     run_lm_studio,
     run_lm_studio_prompt,
+    resolve_route,
 )
 from gaia.server import Handler
 
@@ -94,6 +96,12 @@ class LocalStatusTests(unittest.TestCase):
         self.assertEqual(payload["format"], "json")
         self.assertEqual(payload["options"]["num_ctx"], 8192)
         self.assertEqual(payload["options"]["num_predict"], 300)
+
+    def test_context_compiler_uses_a_bounded_builtin_route_when_not_configured(self) -> None:
+        with patch("gaia.local_llm.route_configs", return_value={}):
+            route = resolve_route(TASK_CONTEXT_COMPILER)
+        self.assertEqual(route["provider"], "ollama_qwen3_8b")
+        self.assertEqual(route["max_tokens"], 600)
 
     def test_explicit_provider_override_does_not_require_route_edit(self) -> None:
         response = FakeResponse({"message": {"content": "ok"}})

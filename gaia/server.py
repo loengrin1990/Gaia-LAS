@@ -128,6 +128,7 @@ def context_compile_failure(intake: ControlledIntake, project: str, artifact_id:
             "route": "context_compiler",
             "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
             "artifact_id": artifact_id,
+            "validation_code": getattr(exc, "diagnostic_code", ""),
         })
         path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception:
@@ -601,9 +602,10 @@ class Handler(BaseHTTPRequestHandler):
         except ContextCompileError as exc:
             trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             context_compile_failure(intake, project, object_id, trace_id, exc)
+            diagnostic = str(getattr(exc, "diagnostic_code", "") or "schema_invalid").upper()
             messages = {
                 "local_model_unavailable": "Локальная модель для сборки контекста недоступна. Данные не изменены. Убедитесь, что она запущена, и повторите попытку.",
-                "local_model_invalid": "Ответ локальной модели не прошёл проверку. Данные не изменены. Повторите сборку позже.",
+                "local_model_invalid": f"Ответ локальной модели не прошёл проверку. Данные не изменены. Код: CONTEXT_{diagnostic}.",
                 "material_not_confirmed": "Материал ещё не подтверждён. Данные не изменены. Подтвердите актуальную очищенную версию и повторите сборку.",
                 "stale_version": "Эта версия материала устарела. Данные не изменены. Откройте актуальную версию и повторите сборку.",
                 "material_unavailable": "Материал недоступен в выбранном рабочем пространстве. Данные не изменены. Проверьте выбранное пространство и повторите действие.",
