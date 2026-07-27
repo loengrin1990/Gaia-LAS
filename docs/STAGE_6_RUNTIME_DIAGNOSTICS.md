@@ -125,6 +125,32 @@ python3 -B app.py
 
 До клика в журнале должны быть шесть событий выше. Затем один раз нажмите кнопку выбора файла и, если панель появится, нажмите «Отменить». Последовательность после `dom_file_input_click` покажет фактически достигнутый шаг: `webkit_file_picker_request`, `open_panel_started`, `open_panel_finished`, `completion_handler_called`, `webkit_upload_flow_received`. Не добавляйте в журнал или отчёт выбранные имена, пути либо содержимое файлов.
 
+### Активация выбора файла 6.2
+
+В трёх ручных проверках после полной startup-последовательности появлялся только прежний общий маркер `dom_file_input_click`; `webkit_file_picker_request` и callback UI-delegate не появлялись. Этот маркер означал click на самом `input`, а не факт запуска системной панели.
+
+Установлены две независимые причины разрыва. На странице «Материалы» действие «Добавить материалы» отправляло только уже выбранные файлы, а не открывало выбор. Для выбора создана отдельная доступная нативная связь: единственный `journeyFiles` остаётся подключённым и активным `input[type=file]`, а видимый control — его `label for`. Он не использует `input.click()`, `dispatchEvent`, Promise, таймер или другую асинхронность, поэтому WebKit сохраняет исходный доверенный пользовательский жест. Поле визуально скрыто доступным способом и остаётся в порядке клавиатурной навигации; фокус отображается на label.
+
+В JXA отдельно исправлен фактический adapter: `GaiaFilePanelDelegate`, как и диагностический delegate ранее, обязан экспортировать selector из словаря `methods`. Старый массив не предоставлял WebKit selector `webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:`. Runtime smoke теперь создаёт delegate и подтверждает этот selector.
+
+Новые безопасные события различают уровни:
+
+| Событие | Смысл |
+| --- | --- |
+| `upload_control_pointer_received` | Пользователь нажал нативный label выбора. |
+| `file_input_activation_requested` | В том же доверенном event turn началась нативная label-активация input. |
+| `file_input_click_event_received` | Click дошёл до самого input. |
+| `webkit_file_picker_request` / `wkui_delegate_callback_received` | WebKit вызвал UI-delegate. |
+| `open_panel_started`, `open_panel_result`, `completion_handler_called` | Состояние системной панели и завершение callback. |
+
+Во все события попадают только разрешённые boolean, фиксированные коды и число выбранных URL. Не попадают имена, пути, содержимое файлов, DOM-текст, URL либо сырой event body.
+
+Автоматически подтверждены нативная DOM-связь, отсутствие синтетической активации, selector-smoke UI-delegate и startup-handshake. Среда Codex не публикует JXA-окно через macOS accessibility, поэтому один физический клик и отмена панели остаются ручной проверкой. После шести startup-событий нажмите «Выбрать материалы», затем в открывшейся панели «Отменить». Ожидайте:
+
+`upload_control_pointer_received` → `file_input_activation_requested` → `file_input_click_event_received` → `webkit_file_picker_request` → `wkui_delegate_callback_received` → `open_panel_started` → `open_panel_result` → `completion_handler_called`.
+
+При отмене `selected_url_count` должен быть `0`, а `upload_flow_started` — отсутствовать. Успешный выбор нейтрального временного файла должен привести к `upload_flow_started` через прежний единый upload-flow; drag-and-drop не менялся.
+
 ### Подтверждённый результат 6.1a (до восстановления канала)
 
 После ремонта отдельный процесс Gaia снова был запущен и подтвердил `/api/runtime`; отдельный runtime smoke подтвердил, что диагностический delegate отвечает на обязательный selector. Автоматизация macOS по-прежнему не получила JXA-окно в доступном списке accessibility, поэтому физический DOM-клик не был выполнен. Следовательно, отсутствие аварии именно после DOM-клика и появление `dom_file_input_click` ещё требуют ручной проверки; ни `WKUIDelegate callback`, ни `NSOpenPanel`, ни completion handler, ни передача файла в upload-flow этим запуском не подтверждены. Это не является доказательством их неработоспособности; остаётся выполнить ручные шаги выше.

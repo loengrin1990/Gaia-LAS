@@ -71,11 +71,12 @@ function stage6Emit(eventCode, correlationId, fields) {
 
 ObjC.registerSubclass({
   name: "GaiaFilePanelDelegate",
-  methods: [{
-    selector: "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:",
-    types: ["void", ["id", "id", "id", "id", "id"]],
-    implementation: function(webView, parameters, frameInfo, completionHandler) {
+  methods: {
+    "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:": {
+      types: ["void", ["id", "id", "id", "id", "id"]],
+      implementation: function(webView, parameters, frameInfo, completionHandler) {
       const correlationId = stage6CorrelationId();
+      stage6Emit("wkui_delegate_callback_received", correlationId, { callback_received: true });
       stage6Emit("webkit_file_picker_request", correlationId, { callback_received: true });
       const panel = $.NSOpenPanel.openPanel;
       stage6Emit("open_panel_created", correlationId, { panel_started: false });
@@ -86,12 +87,15 @@ ObjC.registerSubclass({
       const result = panel.runModal();
       const accepted = result === $.NSModalResponseOK;
       const urls = accepted ? panel.URLs : null;
+      stage6Emit("open_panel_result", correlationId, { panel_result: accepted ? "accepted" : "cancelled" });
       stage6Emit("open_panel_finished", correlationId, { panel_result: accepted ? "accepted" : "cancelled" });
       completionHandler(urls);
       stage6Emit("completion_handler_called", correlationId, { completion_called: true, selected_url_count: accepted ? Number(panel.URLs.count) : 0 });
+      stage6Emit("upload_flow_started", correlationId, { upload_flow_started: accepted });
       stage6Emit("webkit_upload_flow_received", correlationId, { upload_flow_started: accepted });
     }
-  }]
+    }
+  }
 });
 
 ObjC.registerSubclass({
@@ -108,7 +112,31 @@ ObjC.registerSubclass({
       try {
         pageEvent = ObjC.unwrap(message.body.objectForKey($("event_code"))) || "";
       } catch (_) {}
-      if (pageEvent === "page_bridge_available") {
+      const body = message.body;
+      function booleanField(name) {
+        try { return ObjC.unwrap(body.objectForKey($(name))) === true; } catch (_) { return false; }
+      }
+      if (pageEvent === "upload_control_pointer_received") {
+        stage6Emit("upload_control_pointer_received", stage6CorrelationId(), {
+          event_is_trusted: booleanField("event_is_trusted"),
+          input_present: booleanField("input_present"),
+          input_connected: booleanField("input_connected"),
+          input_disabled: booleanField("input_disabled")
+        });
+      } else if (pageEvent === "file_input_activation_requested") {
+        stage6Emit("file_input_activation_requested", stage6CorrelationId(), {
+          source_event_is_trusted: booleanField("source_event_is_trusted"),
+          same_event_turn: booleanField("same_event_turn"),
+          input_connected: booleanField("input_connected"),
+          input_disabled: booleanField("input_disabled")
+        });
+      } else if (pageEvent === "file_input_click_event_received") {
+        stage6Emit("file_input_click_event_received", stage6CorrelationId(), {
+          event_is_trusted: booleanField("event_is_trusted"),
+          input_connected: booleanField("input_connected"),
+          input_disabled: booleanField("input_disabled")
+        });
+      } else if (pageEvent === "page_bridge_available") {
         stage6Emit("diagnostics_page_bridge_available", stage6CorrelationId(), { page_bridge_available: true });
       } else if (pageEvent === "page_bridge_ready") {
         const correlationId = stage6CorrelationId();
@@ -129,11 +157,20 @@ function diagnosticsDelegateRespondsToMessageSelector() {
   return delegate.respondsToSelector("userContentController:didReceiveScriptMessage:");
 }
 
+function filePanelDelegateRespondsToOpenPanelSelector() {
+  const delegate = $.GaiaFilePanelDelegate.alloc.init;
+  return delegate.respondsToSelector("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:");
+}
+
 function run(argv) {
   if (argv[0] === "--check") return "WebKit available";
   if (argv[0] === "--diagnostics-delegate-smoke") {
     if (!diagnosticsDelegateRespondsToMessageSelector()) throw new Error("WKScriptMessageHandler selector is unavailable");
     return "WKScriptMessageHandler available";
+  }
+  if (argv[0] === "--file-panel-delegate-smoke") {
+    if (!filePanelDelegateRespondsToOpenPanelSelector()) throw new Error("WKUIDelegate open-panel selector is unavailable");
+    return "WKUIDelegate open-panel handler available";
   }
   if (argv[0] === "--diagnostics-writer-smoke") {
     if (!stage6DiagnosticsEnabled()) throw new Error("Stage 6 diagnostics are disabled");
@@ -162,7 +199,7 @@ function run(argv) {
       diagnostics_configuration_matches: Boolean(stage6DiagnosticConfigurationId())
     });
     runtimeDiagnosticsDelegate = $.GaiaRuntimeDiagnosticsDelegate.alloc.init;
-    const source = "(function(){var bridgeName='gaiaStage6Diagnostics';function bridge(){return window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers[bridgeName];}function send(eventCode){var target=bridge();if(target&&typeof target.postMessage==='function'){target.postMessage({event_code:eventCode});return true;}return false;}function announce(){if(send('page_bridge_available')){send('page_bridge_ready');}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',announce,{once:true});}else{announce();}document.addEventListener('click',function(event){if(event.target&&event.target.matches('input[type=file]')){send('dom_file_input_click');}},true);})();";
+    const source = "(function(){var bridgeName='gaiaStage6Diagnostics';function bridge(){return window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers[bridgeName];}function send(eventCode,fields){var target=bridge();if(target&&typeof target.postMessage==='function'){target.postMessage(Object.assign({event_code:eventCode},fields||{}));return true;}return false;}function inputState(input){return {input_present:!!input,input_connected:!!(input&&input.isConnected),input_disabled:!!(input&&input.disabled)};}function announce(){if(send('page_bridge_available')){send('page_bridge_ready');}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',announce,{once:true});}else{announce();}document.addEventListener('pointerdown',function(event){var control=event.target&&event.target.closest&&event.target.closest('[data-file-input-control]');if(!control)return;var input=document.getElementById(control.htmlFor);send('upload_control_pointer_received',Object.assign({event_is_trusted:!!event.isTrusted},inputState(input)));},true);document.addEventListener('click',function(event){var control=event.target&&event.target.closest&&event.target.closest('[data-file-input-control]');if(control){var input=document.getElementById(control.htmlFor);send('file_input_activation_requested',Object.assign({source_event_is_trusted:!!event.isTrusted,same_event_turn:true},inputState(input)));}if(event.target&&event.target.matches('input[type=file]')){send('file_input_click_event_received',Object.assign({event_is_trusted:!!event.isTrusted},inputState(event.target)));send('dom_file_input_click');}},true);})();";
     const script = $.WKUserScript.alloc.initWithSourceInjectionTimeForMainFrameOnly($(source), $.WKUserScriptInjectionTimeAtDocumentStart, true);
     configuration.userContentController.addUserScript(script);
     configuration.userContentController.addScriptMessageHandlerName(runtimeDiagnosticsDelegate, $(stage6HandlerName));

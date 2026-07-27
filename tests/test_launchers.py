@@ -78,7 +78,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
         script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
-        for event_code in ("dom_file_input_click", "webkit_file_picker_request", "open_panel_started", "open_panel_finished", "completion_handler_called", "webkit_upload_flow_received"):
+        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_result", "completion_handler_called", "upload_flow_started"):
             self.assertIn(f'"{event_code}"', script)
         self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
         self.assertIn("selected_url_count", script)
@@ -94,6 +94,16 @@ class LauncherTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.stdout.strip(), "WKScriptMessageHandler available")
+
+    def test_file_panel_delegate_exports_wkui_open_panel_selector(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--file-panel-delegate-smoke"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "WKUIDelegate open-panel handler available")
 
     def test_runtime_diagnostics_jxa_writer_reaches_the_requested_jsonl(self) -> None:
         script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"

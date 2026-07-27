@@ -23,9 +23,13 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertNotIn(">requires_review<", INDEX_HTML)
 
     def test_journey_file_input_is_enabled_and_has_a_connected_label(self) -> None:
-        self.assertIn('<label for="journeyFiles">Добавить материал</label>', INDEX_HTML)
-        self.assertIn('<input id="journeyFiles" type="file" multiple', INDEX_HTML)
+        self.assertEqual(INDEX_HTML.count('id="journeyFiles"'), 1)
+        self.assertIn('<input id="journeyFiles" class="native-file-input" type="file" multiple', INDEX_HTML)
+        self.assertIn('<label class="native-file-control" data-file-input-control="journey" for="journeyFiles">Выбрать материалы</label>', INDEX_HTML)
         self.assertNotIn('id="journeyFiles" type="file" disabled', INDEX_HTML)
+        self.assertNotIn("journeyFiles.click()", INDEX_HTML)
+        self.assertNotIn("journeyFiles.dispatchEvent", INDEX_HTML)
+        self.assertIn(".native-file-input:focus-visible + .native-file-control", INDEX_HTML)
         self.assertIn("const files = Array.from(input.files || [])", INDEX_HTML)
 
     def test_ui_is_loaded_from_static_asset(self) -> None:

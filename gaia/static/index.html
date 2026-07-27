@@ -209,6 +209,34 @@
       line-height: 1.35;
     }
     label { display: block; font-size: 13px; font-weight: 650; margin: 12px 0 6px; }
+    .native-file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .native-file-control {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 14px;
+      margin: 12px 0 0;
+      border: 1px solid rgba(175,205,241,.24);
+      border-radius: 6px;
+      background: rgba(18,41,81,.88);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .native-file-input:focus-visible + .native-file-control {
+      outline: 3px solid rgba(126,184,255,.85);
+      outline-offset: 3px;
+    }
     select, textarea, input[type=file] {
       width: 100%;
       border: 1px solid rgba(175,205,241,.24);
@@ -1164,9 +1192,9 @@
         <div class="journey-workspace"><label for="journeyProject">Рабочее пространство</label><select id="journeyProject" onchange="changeJourneyWorkspace()"></select></div>
       </div>
       <section>
-        <label for="journeyFiles">Добавить материал</label>
-        <input id="journeyFiles" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
-        <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить материалы</button></div>
+        <input id="journeyFiles" class="native-file-input" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
+        <label class="native-file-control" data-file-input-control="journey" for="journeyFiles">Выбрать материалы</label>
+        <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить выбранные материалы</button></div>
         <div id="journeyMaterialsNotice" class="journey-notice" hidden role="status" aria-live="polite"></div>
       </section>
       <div id="journeyMaterials" class="journey-grid" aria-live="polite"></div>
