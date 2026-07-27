@@ -34,3 +34,7 @@ HTML inputs остаются прежними: оба принимают `multip
 Исправление — один `change`-обработчик актуального input, который вызывает уже существующий `uploadJourneyMaterials()`. Он читает `input.files` до очистки `input.value`; очистка по-прежнему происходит только после успешного ответа `/api/analyze`. Новый endpoint, native upload или передача путей не добавлены. Host фиксирует только безопасные счётчики accepted-path и получает от страницы безопасные события click/input/change/upload через диагностический message handler.
 
 Debug target не включает App Sandbox и не содержит entitlement-файла, поэтому sandbox и security-scoped access не были причиной и не менялись.
+
+## Статус после ручной приёмки
+
+На commit `f052f0c` ручная приёмка native host пройдена на синтетическом файле. Основной путь macOS — Swift + AppKit `Gaia.app`; JXA сохранён только как временный fallback. Native host остаётся оболочкой окна и lifecycle: он не читает содержимое файлов и не формирует второй upload-flow. Veil не входил в эту приёмку и остаётся отдельным блокером этапа 6; merge в `main` не выполнялся.
