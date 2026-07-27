@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import subprocess
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,6 +22,22 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(command[:3], ["/usr/bin/osascript", "-l", "JavaScript"])
         self.assertIn("gaia_window.js", command[3])
         self.assertIn("runtime=runtime-a", command[4])
+
+    @patch("gaia.launchers.wait_for_runtime", return_value={"ok": True, "runtime": {"runtime_id": "runtime-a"}})
+    @patch("gaia.launchers.subprocess.Popen")
+    def test_gaia_window_explicitly_passes_opt_in_diagnostics_to_jxa(self, popen, ready) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"GAIA_STAGE6_RUNTIME_DIAGNOSTICS": "1", "GAIA_STAGE6_DIAGNOSTICS_PATH": f"{directory}/events.jsonl"},
+            clear=False,
+        ):
+            result = launch_gaia_window()
+
+        self.assertTrue(result["ok"])
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(environment["GAIA_STAGE6_RUNTIME_DIAGNOSTICS"], "1")
+        self.assertIn("GAIA_STAGE6_DIAGNOSTICS_PATH", environment)
+        self.assertTrue(environment["GAIA_STAGE6_DIAGNOSTICS_CONFIGURATION_ID"])
 
     @patch("gaia.launchers.wait_for_runtime", return_value={"ok": False, "error": "сервер Gaia не ответил"})
     @patch("gaia.launchers.subprocess.Popen")
@@ -75,6 +94,30 @@ class LauncherTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.stdout.strip(), "WKScriptMessageHandler available")
+
+    def test_runtime_diagnostics_jxa_writer_reaches_the_requested_jsonl(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.touch()
+            environment = os.environ | {
+                "GAIA_STAGE6_RUNTIME_DIAGNOSTICS": "1",
+                "GAIA_STAGE6_DIAGNOSTICS_PATH": str(path),
+                "GAIA_STAGE6_DIAGNOSTICS_CONFIGURATION_ID": "test-config-id",
+            }
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--diagnostics-writer-smoke"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            event = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.stdout.strip(), "Stage 6 diagnostics writer available")
+        self.assertIn("gaia_stage6_diagnostics:diagnostics_window_process_enabled", result.stderr)
+        self.assertEqual(event["event_code"], "diagnostics_window_process_enabled")
+        self.assertNotIn("/", json.dumps(event))
 
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})
     def test_gaia_module_opens_system_window(self, launch) -> None:
