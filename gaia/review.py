@@ -10,6 +10,8 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .provenance import ProvenanceError, ProvenanceStore
+from .runtime_diagnostics import emit as emit_runtime_diagnostic
+from .runtime_diagnostics import new_correlation_id
 from .storage import atomic_write_text, path_lock
 
 ALLOWED_CATEGORIES = {"Сотрудник", "Организация", "Подразделение", "Проект", "Система", "Адрес", "Идентификатор", "Другое"}
@@ -41,11 +43,15 @@ def local_model_review(text: str) -> dict[str, Any]:
         "# Очищенный текст",
         text,
     ])
+    correlation_id = new_correlation_id()
+    emit_runtime_diagnostic("veil", "local_model_started", correlation_id)
     started = time.monotonic()
     result = call_lm_studio_with_deadline(prompt, 20, "Ты локальный проверяющий Gaia.", task="veil_review")
-    diagnostics = local_review_diagnostics(result, time.monotonic() - started)
+    diagnostics = local_review_diagnostics(result, time.monotonic() - started, correlation_id)
     if not result.get("ok"):
+        emit_runtime_diagnostic("veil", "local_model_technical_error", correlation_id, error_code=local_review_transport_code(str(result.get("status") or "")))
         raise LocalReviewError(local_review_transport_code(str(result.get("status") or "")), "Локальная дополнительная проверка не завершена.", diagnostics)
+    emit_runtime_diagnostic("veil", "local_model_response_received", correlation_id)
     answer = str(result.get("answer") or "")
     if not answer.strip():
         raise LocalReviewError("local_model_empty_response", "Локальная дополнительная проверка вернула пустой ответ.", diagnostics)
@@ -57,11 +63,16 @@ def local_model_review(text: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise LocalReviewError("local_model_invalid_json", "Локальная дополнительная проверка вернула некорректный ответ.", diagnostics) from exc
     if not isinstance(payload, dict) or set(payload) != {"findings"} or not isinstance(payload.get("findings"), list) or len(payload["findings"]) > MAX_FINDINGS:
+        emit_runtime_diagnostic("veil", "payload_schema_failed", correlation_id, error_code="payload_schema_invalid")
         raise LocalReviewError("local_model_schema_failed", "Локальная дополнительная проверка вернула ответ неподходящей структуры.", diagnostics)
+    emit_runtime_diagnostic("veil", "payload_received", correlation_id, findings_empty=not payload["findings"], findings_count=len(payload["findings"]))
+    emit_runtime_diagnostic("veil", "payload_validation_started", correlation_id)
     try:
         validate_model_payload(payload, text)
     except ProvenanceError as exc:
+        emit_runtime_diagnostic("veil", "payload_validation_failed", correlation_id, validation_result="error", error_code=validation_error_code(exc))
         raise LocalReviewError("local_model_invalid_findings", "Локальная дополнительная проверка вернула непригодные находки.", diagnostics) from exc
+    emit_runtime_diagnostic("veil", "payload_validation_succeeded", correlation_id, validation_result="ok", findings_count=len(payload["findings"]))
     return payload
 
 
@@ -96,10 +107,10 @@ def local_review_transport_code(status: str) -> str:
     return {"timeout": "local_model_timeout", "unavailable": "local_model_unavailable", "bad_request": "local_model_request_failed", "http_error": "local_model_request_failed"}.get(status, "local_model_request_failed")
 
 
-def local_review_diagnostics(result: dict[str, Any], duration_seconds: float) -> dict[str, Any]:
+def local_review_diagnostics(result: dict[str, Any], duration_seconds: float, trace_id: str | None = None) -> dict[str, Any]:
     raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
     message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
-    return {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "provider": str(result.get("provider") or ""), "model": str(result.get("model") or ""), "route": str(result.get("route") or "veil_review"), "request_status": str(result.get("status") or "ok"), "duration_ms": round(duration_seconds * 1000), "prompt_chars_sent": int(result.get("prompt_chars_sent") or 0), "response_chars": len(str(result.get("answer") or "")), "http_status": 200 if result.get("ok") else None, "done": raw.get("done"), "finish_reason": raw.get("done_reason") or raw.get("finish_reason"), "prompt_tokens": raw.get("prompt_eval_count"), "response_tokens": raw.get("eval_count"), "reasoning_present": bool(message.get("thinking") or message.get("reasoning_content"))}
+    return {"trace_id": trace_id or f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "provider": str(result.get("provider") or ""), "model": str(result.get("model") or ""), "route": str(result.get("route") or "veil_review"), "request_status": str(result.get("status") or "ok"), "duration_ms": round(duration_seconds * 1000), "prompt_chars_sent": int(result.get("prompt_chars_sent") or 0), "response_chars": len(str(result.get("answer") or "")), "http_status": 200 if result.get("ok") else None, "done": raw.get("done"), "finish_reason": raw.get("done_reason") or raw.get("finish_reason"), "prompt_tokens": raw.get("prompt_eval_count"), "response_tokens": raw.get("eval_count"), "reasoning_present": bool(message.get("thinking") or message.get("reasoning_content"))}
 
 class ReviewService:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
@@ -108,6 +119,8 @@ class ReviewService:
         if not self.path.exists(): atomic_write_text(self.path, "{}\n")
 
     def start(self, artifact_id: str) -> dict[str, Any]:
+        correlation_id = new_correlation_id()
+        emit_runtime_diagnostic("review_service", "review_start", correlation_id)
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if item.get("kind") != "sanitized" or not item.get("current"):
             raise ProvenanceError("Для проверки доступна только актуальная очищенная версия.")
@@ -116,19 +129,25 @@ class ReviewService:
             return self.safe(existing, include_text=True)
         text = self._text(artifact_id)
         try:
-            findings = validate_model_payload(self.model(text), text)
+            payload = self.model(text)
+            payload_count = len(payload.get("findings", [])) if isinstance(payload, dict) and isinstance(payload.get("findings"), list) else None
+            emit_runtime_diagnostic("review_service", "payload_validation_started", correlation_id, findings_count=payload_count)
+            findings = validate_model_payload(payload, text)
+            emit_runtime_diagnostic("review_service", "payload_validation_succeeded", correlation_id, validation_result="ok", findings_count=len(findings))
             state = "requires_review" if findings else "ready_for_confirmation"
             error_code = ""
         except LocalReviewError as exc:
             findings = []; state = "review_error"; error_code = exc.code; diagnostics = exc.diagnostics
         except ProvenanceError:
             findings = []; state = "review_error"; error_code = "local_model_invalid_findings"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review"}
+            emit_runtime_diagnostic("review_service", "payload_validation_failed", correlation_id, validation_result="error", error_code="payload_validation_invalid")
         except Exception as exc:
             findings = []; state = "review_error"; error_code = "local_check_internal_error"; diagnostics = {"trace_id": f"gaia-{uuid.uuid4().hex[:12]}", "stage": "local_review", "exception_type": type(exc).__name__}
         record = {"artifact_id": artifact_id, "workspace_id": self.workspace_id, "state": state, "findings": findings, "decisions": [], "confirmed": False, "error_code": error_code, "created_at": now()}
         if state == "review_error":
             record["trace_id"] = diagnostics["trace_id"]
             self._write_diagnostics(artifact_id, error_code, diagnostics)
+        emit_runtime_diagnostic("review_service", "review_final_state", correlation_id, final_state=state, findings_count=len(findings), error_code=error_code or None)
         self._write(artifact_id, record); return self.safe(record, include_text=True)
 
     def prepare(self, artifact_id: str) -> dict[str, Any]:
@@ -242,6 +261,13 @@ def validate_model_payload(payload: Any, text: str | int) -> list[dict[str, Any]
             raise ProvenanceError("Локальная проверка не может предлагать уже созданный псевдоним.")
         used.append((start,end)); result.append({**item,"finding_id":f"model-{index}","expected_fingerprint":_fingerprint(expected_text)})
     return result
+
+
+def validation_error_code(exc: ProvenanceError) -> str:
+    """Map existing validator failures to stable, content-free diagnostic codes."""
+    if str(exc).startswith(("Некорректные координаты", "Координаты локальной проверки")):
+        return "payload_coordinates_invalid"
+    return "payload_validation_invalid"
 
 def _is_pseudonym_fragment(value: str) -> bool:
     return bool(re.fullmatch(r"(?:" + "|".join(re.escape(category) for category in ALLOWED_CATEGORIES) + r")-\d{2,}", value))

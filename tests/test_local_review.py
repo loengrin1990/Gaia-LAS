@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,6 +54,40 @@ class LocalReviewTests(unittest.TestCase):
             self.assertEqual(diagnostics[-1]["error_code"], "local_model_timeout")
             self.assertNotIn("Clean Person-01 remains", json.dumps(diagnostics, ensure_ascii=False))
         finally: tmp.cleanup()
+
+    def test_runtime_diagnostics_report_counts_and_final_state_without_content(self):
+        tmp,s,w,_,_,san=self.setup_review()
+        try:
+            path = Path(tmp.name) / "stage6.jsonl"
+            original = {key: os.environ.get(key) for key in ("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", "GAIA_STAGE6_DIAGNOSTICS_PATH")}
+            os.environ["GAIA_STAGE6_RUNTIME_DIAGNOSTICS"] = "1"
+            os.environ["GAIA_STAGE6_DIAGNOSTICS_PATH"] = str(path)
+            try:
+                state = ReviewService(s,w,lambda text:{"findings":[]}).start(san["artifact_id"])
+            finally:
+                for key, value in original.items():
+                    if value is None: os.environ.pop(key, None)
+                    else: os.environ[key] = value
+            events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(state["state"], "ready_for_confirmation")
+            self.assertTrue(any(item["event_code"] == "payload_validation_succeeded" and item.get("findings_count") == 0 for item in events))
+            self.assertEqual(events[-1]["event_code"], "review_final_state")
+            self.assertEqual(events[-1]["final_state"], state["state"])
+            self.assertNotIn("Clean Person-01 remains", path.read_text(encoding="utf-8"))
+        finally: tmp.cleanup()
+
+    def test_runtime_diagnostics_classify_schema_and_coordinate_failures_safely(self):
+        self.assertEqual(validate_model_payload.__module__, "gaia.review")
+        from gaia.review import validation_error_code
+        with self.assertRaises(ProvenanceError) as schema:
+            validate_model_payload({"other": []}, 10)
+        with self.assertRaises(ProvenanceError) as coordinates:
+            validate_model_payload({"findings":[{"category":"Сотрудник","start":2,"end":1,"confidence":"high","reason_code":"x","requires_review":True}]}, 10)
+        with self.assertRaises(ProvenanceError) as fragment_coordinates:
+            validate_model_payload({"findings":[{"category":"Сотрудник","start":1,"end":2,"confidence":"high","reason_code":"x","requires_review":True}]}, "word")
+        self.assertEqual(validation_error_code(schema.exception), "payload_validation_invalid")
+        self.assertEqual(validation_error_code(coordinates.exception), "payload_coordinates_invalid")
+        self.assertEqual(validation_error_code(fragment_coordinates.exception), "payload_coordinates_invalid")
 
     def test_unique_json_extraction_accepts_one_fence_only(self):
         self.assertEqual(extract_unique_json_object("```json\n{\"findings\":[]}\n```"), {"findings": []})

@@ -56,6 +56,15 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("panel.runModal()", script)
         self.assertIn("webView.setUIDelegate(filePanelDelegate)", script)
 
+    def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
+        script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
+        for event_code in ("dom_file_input_click", "webkit_file_picker_request", "open_panel_started", "open_panel_finished", "completion_handler_called", "webkit_upload_flow_received"):
+            self.assertIn(f'"{event_code}"', script)
+        self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
+        self.assertIn("selected_url_count", script)
+        self.assertNotIn("panel.URL.path", script)
+        self.assertNotIn("panel.URLs.description", script)
+
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})
     def test_gaia_module_opens_system_window(self, launch) -> None:
         self.assertEqual(launch_module("gaia"), {"ok": True})
