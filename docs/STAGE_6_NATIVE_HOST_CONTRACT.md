@@ -26,3 +26,11 @@ Host сначала проверяет точный loopback `/api/runtime`. В�
 Навигация разрешена только для `http://127.0.0.1:<фактический-порт>`; внешний URL, другой port, `file:`, `data:` и `javascript:` блокируются. `WKUIDelegate.webView(_:runOpenPanelWith:initiatedByFrame:completionHandler:)` переносит `allowsMultipleSelection` и `allowsDirectories` в `NSOpenPanel`. Отмена передаёт `nil`, подтверждение — исходный `[URL]`; локальный guard вызывает completion только один раз. URL не преобразуются в строки и не сохраняются.
 
 HTML inputs остаются прежними: оба принимают `multiple`, подпись `label/for` исправлена, а drag-and-drop и системный выбор далее сходятся в существующем JavaScript upload-flow и backend API.
+
+### Accepted-path 6.3b
+
+Физическая проверка подтвердила, что cancel работает, panel открывается повторно, а accepted-путь не создавал материал. Аудит показал первую точку разрыва: `journeyFiles` не имел обработчика `input` или `change`; единственный вызов `uploadJourneyMaterials()` был привязан к отдельной кнопке. Поэтому даже доставленный WebKit `FileList` не передавался в существующий upload-flow.
+
+Исправление — один `change`-обработчик актуального input, который вызывает уже существующий `uploadJourneyMaterials()`. Он читает `input.files` до очистки `input.value`; очистка по-прежнему происходит только после успешного ответа `/api/analyze`. Новый endpoint, native upload или передача путей не добавлены. Host фиксирует только безопасные счётчики accepted-path и получает от страницы безопасные события click/input/change/upload через диагностический message handler.
+
+Debug target не включает App Sandbox и не содержит entitlement-файла, поэтому sandbox и security-scoped access не были причиной и не менялись.

@@ -31,6 +31,9 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertNotIn("journeyFiles.dispatchEvent", INDEX_HTML)
         self.assertIn(".native-file-input:focus-visible + .native-file-control", INDEX_HTML)
         self.assertIn("const files = Array.from(input.files || [])", INDEX_HTML)
+        self.assertIn("journeyFilesInput.addEventListener('change'", INDEX_HTML)
+        self.assertIn("journeyFilesInput.addEventListener('input'", INDEX_HTML)
+        self.assertIn("nativeFileDiagnostics('file_input_change_event_received'", INDEX_HTML)
 
     def test_ui_is_loaded_from_static_asset(self) -> None:
         self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())

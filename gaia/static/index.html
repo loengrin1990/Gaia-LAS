@@ -1602,17 +1602,37 @@
     async function uploadJourneyMaterials() {
       const input = document.getElementById('journeyFiles'); const files = Array.from(input.files || []); const project = journeyProject();
       const query = ''; const hasFiles = files.length > 0;
+      nativeFileDiagnostics('file_list_received', {file_count:files.length, input_connected:!!input?.isConnected, input_disabled:!!input?.disabled});
       if (!query && !hasFiles) { journeyMessage('Выберите хотя бы один файл перед добавлением.', true); return; }
       const button = document.getElementById('journeyUploadButton'); button.disabled = true; journeyMessage('Добавляем материал и выполняем локальную очистку…');
+      nativeFileDiagnostics('upload_flow_started', {file_count:files.length, upload_started:true});
       const form = new FormData(); form.append('project', project); for (const file of files) form.append('files', file);
       try {
         const response = await fetch('/api/analyze', { method:'POST', body:form }); const data = await response.json();
-        if (!response.ok) { journeyMessage(journeyError(data, 'Не удалось добавить файл.'), true); return; }
+        if (!response.ok) { nativeFileDiagnostics('upload_flow_failed', {http_status:response.status, error_code:'http_error'}); journeyMessage(journeyError(data, 'Не удалось добавить файл.'), true); return; }
         input.value = ''; journeyMessage('Материал добавлен. Откройте проверку очищенной версии.'); await loadJourneyMaterials();
+        nativeFileDiagnostics('upload_flow_completed', {http_status:response.status});
         if (data.review?.artifact_id) openJourneyReview(data.review.artifact_id);
-      } catch (_) { journeyMessage('Не удалось связаться с Gaia. Данные не были добавлены. Проверьте, что приложение открыто на этом устройстве.', true); }
+      } catch (_) { nativeFileDiagnostics('upload_flow_failed', {error_code:'network_error'}); journeyMessage('Не удалось связаться с Gaia. Данные не были добавлены. Проверьте, что приложение открыто на этом устройстве.', true); }
       finally { button.disabled = false; }
     }
+    function nativeFileDiagnostics(event, fields) {
+      const target = window.webkit?.messageHandlers?.gaiaNativeDiagnostics;
+      if (target?.postMessage) target.postMessage(Object.assign({event}, fields || {}));
+    }
+    const journeyFilesInput = document.getElementById('journeyFiles');
+    journeyFilesInput.addEventListener('click', (event) => {
+      nativeFileDiagnostics('file_input_click_received', {event_is_trusted:!!event.isTrusted, input_connected:!!journeyFilesInput.isConnected, input_disabled:!!journeyFilesInput.disabled});
+    });
+    journeyFilesInput.addEventListener('input', (event) => {
+      const input = event.currentTarget;
+      nativeFileDiagnostics('file_input_input_event_received', {file_count:(input.files || []).length, event_is_trusted:!!event.isTrusted, input_connected:!!input.isConnected, input_disabled:!!input.disabled});
+    });
+    journeyFilesInput.addEventListener('change', (event) => {
+      const input = event.currentTarget;
+      nativeFileDiagnostics('file_input_change_event_received', {file_count:(input.files || []).length, event_is_trusted:!!event.isTrusted, input_connected:!!input.isConnected, input_disabled:!!input.disabled});
+      uploadJourneyMaterials();
+    });
     async function openJourneyReview(artifactId) {
       showScreen('review'); const root = document.getElementById('journeyReview'); root.className='journey-empty'; root.textContent='Загружаем очищенную версию…';
       const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(journeyProject())}`); const data = await response.json();

@@ -104,7 +104,7 @@ final class NativeDiagnostics {
 
     func emit(_ event: String, fields: [String: Any] = [:]) {
         guard enabled, let path else { return }
-        let permitted = Set(["correlation_id", "owned", "port", "http_status", "result", "selected_url_count", "completion_call_count", "error_code", "duration_ms"])
+        let permitted = Set(["correlation_id", "owned", "port", "http_status", "result", "panel_result", "selected_url_count", "completion_call_count", "error_code", "duration_ms", "main_thread", "allows_multiple_selection", "allows_directories", "event_is_trusted", "input_connected", "input_disabled", "file_count", "upload_started"])
         var payload = fields.filter { permitted.contains($0.key) }
         payload["event"] = event
         payload["timestamp"] = ISO8601DateFormatter().string(from: Date())

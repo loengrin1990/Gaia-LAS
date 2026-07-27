@@ -17,7 +17,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        body = b"<!doctype html><title>Gaia smoke</title>"
+        if "--file-picker-harness" in sys.argv:
+            body = b'''<!doctype html><meta charset="utf-8"><title>Gaia file picker harness</title><label for="picker">Choose synthetic file</label><input id="picker" type="file"><p id="result">Waiting</p><script>const input=document.getElementById('picker');const send=(event,fields={})=>window.webkit?.messageHandlers?.gaiaNativeDiagnostics?.postMessage(Object.assign({event},fields));input.addEventListener('input',e=>send('file_input_input_event_received',{file_count:e.target.files.length,event_is_trusted:e.isTrusted,input_connected:e.target.isConnected,input_disabled:e.target.disabled}));input.addEventListener('change',e=>{send('file_input_change_event_received',{file_count:e.target.files.length,event_is_trusted:e.isTrusted,input_connected:e.target.isConnected,input_disabled:e.target.disabled});document.getElementById('result').textContent='FileList count: '+e.target.files.length;});</script>'''
+        else:
+            body = b"<!doctype html><title>Gaia smoke</title>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))

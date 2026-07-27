@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
+final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private enum ProbeResult: Equatable { case gaia, otherService, unavailable }
     private let diagnostics: NativeDiagnostics
     private let correlationID: String
@@ -116,7 +116,11 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
     private func loadWebView(origin: GaiaOrigin) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            let view = WKWebView(frame: .zero)
+            let contentController = WKUserContentController()
+            contentController.add(self, name: "gaiaNativeDiagnostics")
+            let configuration = WKWebViewConfiguration()
+            configuration.userContentController = contentController
+            let view = WKWebView(frame: .zero, configuration: configuration)
             view.uiDelegate = self
             view.navigationDelegate = self
             self.window.contentView = view
@@ -140,8 +144,17 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
         diagnostics.emit("webview_load_finished", fields: ["correlation_id": correlationID, "port": origin?.port ?? 0])
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let allowedEvents = Set(["file_input_click_received", "file_input_input_event_received", "file_input_change_event_received", "file_list_received", "upload_flow_started", "upload_flow_completed", "upload_flow_failed"])
+        guard message.name == "gaiaNativeDiagnostics", let body = message.body as? [String: Any], let event = body["event"] as? String, allowedEvents.contains(event) else { return }
+        let allowedFields = Set(["file_count", "event_is_trusted", "input_connected", "input_disabled", "upload_started", "http_status", "error_code"])
+        var fields = body.filter { allowedFields.contains($0.key) }
+        fields["correlation_id"] = correlationID
+        diagnostics.emit(event, fields: fields)
+    }
+
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
-        diagnostics.emit("open_panel_requested", fields: ["correlation_id": correlationID])
+        diagnostics.emit("open_panel_requested", fields: ["correlation_id": correlationID, "main_thread": Thread.isMainThread, "allows_multiple_selection": parameters.allowsMultipleSelection, "allows_directories": parameters.allowsDirectories])
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
@@ -150,11 +163,21 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate {
         func finish(_ urls: [URL]?, result: String) {
             guard callCount == 0 else { return }
             callCount += 1
+            diagnostics.emit("completion_handler_invocation_started", fields: ["correlation_id": correlationID, "main_thread": Thread.isMainThread, "selected_url_count": urls?.count ?? 0, "completion_call_count": callCount])
             completionHandler(urls)
-            diagnostics.emit("completion_handler_called", fields: ["correlation_id": correlationID, "result": result, "selected_url_count": urls?.count ?? 0, "completion_call_count": callCount])
+            diagnostics.emit("completion_handler_called", fields: ["correlation_id": correlationID, "result": result, "panel_result": result, "main_thread": Thread.isMainThread, "selected_url_count": urls?.count ?? 0, "completion_call_count": callCount])
         }
+        diagnostics.emit("open_panel_presented", fields: ["correlation_id": correlationID, "main_thread": Thread.isMainThread])
         panel.beginSheetModal(for: window) { response in
-            response == .OK ? finish(panel.urls, result: "accepted") : finish(nil, result: "cancelled")
+            if response == .OK {
+                let urls = panel.urls
+                self.diagnostics.emit("open_panel_result", fields: ["correlation_id": self.correlationID, "panel_result": "accepted", "main_thread": Thread.isMainThread, "selected_url_count": urls.count])
+                self.diagnostics.emit("selected_urls_collected", fields: ["correlation_id": self.correlationID, "selected_url_count": urls.count])
+                finish(urls, result: "accepted")
+            } else {
+                self.diagnostics.emit("open_panel_result", fields: ["correlation_id": self.correlationID, "panel_result": "cancelled", "main_thread": Thread.isMainThread])
+                finish(nil, result: "cancelled")
+            }
         }
     }
 
