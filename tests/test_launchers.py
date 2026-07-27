@@ -78,7 +78,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
         script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
-        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_result", "completion_handler_called", "upload_flow_started"):
+        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_result", "completion_handler_called", "upload_flow_started"):
             self.assertIn(f'"{event_code}"', script)
         self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
         self.assertIn("selected_url_count", script)
@@ -104,6 +104,25 @@ class LauncherTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.stdout.strip(), "WKUIDelegate open-panel handler available")
+
+    def test_file_panel_delegate_runtime_abi_matches_webkit_open_panel_contract(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--file-panel-delegate-abi"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        report = json.loads(result.stdout)
+
+        self.assertTrue(report["selector_present"])
+        self.assertTrue(report["responds_to_selector"])
+        self.assertTrue(report["instances_respond_to_selector"])
+        self.assertTrue(report["method_get_available"])
+        self.assertEqual(report["runtime_type_encoding"], "v@:@@@@?")
+        self.assertEqual(report["signature_argument_count"], 6)
+        self.assertEqual(report["return_type"], "v")
+        self.assertEqual(report["argument_types"], ["@", ":", "@", "@", "@", "@?"])
 
     def test_runtime_diagnostics_jxa_writer_reaches_the_requested_jsonl(self) -> None:
         script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"

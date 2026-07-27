@@ -151,6 +151,29 @@ python3 -B app.py
 
 При отмене `selected_url_count` должен быть `0`, а `upload_flow_started` — отсутствовать. Успешный выбор нейтрального временного файла должен привести к `upload_flow_started` через прежний единый upload-flow; drag-and-drop не менялся.
 
+### ABI `WKUIDelegate` 6.2a
+
+После `dda53fb` ручной click подтвердил работу страницы до самого `input[type=file]`, но процесс `osascript` аварийно завершался до `webkit_file_picker_request`. macOS зафиксировала `EXC_BAD_ACCESS / EXC_ARM_PAC_FAIL` на главном потоке в цепочке `WebKit::UIDelegate::UIClient::runOpenPanel` → `ffi_closure_SYSV` → `JSOCInvocationClosureThunk` → `JSOCForwardInvocation` → `JSOCWrap`. Это означает, что WebKit нашёл selector и начал вызывать delegate, а JXA падал при маршалинге аргументов до входа в JavaScript-тело.
+
+Runtime-аудит зарегистрированного `GaiaFilePanelDelegate` до исправления показал семь аргументов и контракт `v@:@@@@@`: `void`, `self`, `_cmd`, четыре object-аргумента и ещё один object. Это не соответствует API WebKit. Callback имеет только четыре явных аргумента: `WKWebView`, `WKOpenPanelParameters`, `WKFrameInfo` и completion block.
+
+Исправленная JXA-регистрация использует четыре явных типа: `id`, `id`, `id`, `@?`. Runtime `NSMethodSignature` после исправления подтверждает:
+
+| Индекс | Тип |
+| --- | --- |
+| 0 | `@` (`self`) |
+| 1 | `:` (`_cmd`) |
+| 2 | `@` (`WKWebView`) |
+| 3 | `@` (`WKOpenPanelParameters`) |
+| 4 | `@` (`WKFrameInfo`) |
+| 5 | `@?` (completion block) |
+
+Итоговый runtime type encoding: `v@:@@@@?`; число аргументов — 6, return type — `v`. Selector существует, class и instance отвечают на него. Раннее событие `wkui_delegate_body_entered` теперь является первой операцией тела callback; оно не имитируется другой частью pipeline.
+
+Добавлен отдельный `--file-panel-harness`: он создаёт `NSApplication`, `WKWebViewConfiguration`, `WKWebView` с тем же delegate и локальную HTML-страницу с одним input. Harness создаётся без crash и пишет `file_panel_harness_ready`; он не вызывает delegate напрямую и не содержит Gaia backend или второй upload-flow. В среде Codex JXA-окно не доступно через accessibility, поэтому физический click в harness не автоматизирован. Ручной запуск harness либо Gaia после исправления должен подтвердить `wkui_delegate_body_entered` до `NSOpenPanel`.
+
+Stop-condition ограничения JXA не достигнут: было найдено конкретное ABI-несоответствие. Native-host decision report в этой задаче не создавался.
+
 ### Подтверждённый результат 6.1a (до восстановления канала)
 
 После ремонта отдельный процесс Gaia снова был запущен и подтвердил `/api/runtime`; отдельный runtime smoke подтвердил, что диагностический delegate отвечает на обязательный selector. Автоматизация macOS по-прежнему не получила JXA-окно в доступном списке accessibility, поэтому физический DOM-клик не был выполнен. Следовательно, отсутствие аварии именно после DOM-клика и появление `dom_file_input_click` ещё требуют ручной проверки; ни `WKUIDelegate callback`, ни `NSOpenPanel`, ни completion handler, ни передача файла в upload-flow этим запуском не подтверждены. Это не является доказательством их неработоспособности; остаётся выполнить ручные шаги выше.

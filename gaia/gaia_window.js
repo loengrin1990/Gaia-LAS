@@ -1,5 +1,8 @@
 ObjC.import("Cocoa");
 ObjC.import("WebKit");
+ObjC.bindFunction("class_getInstanceMethod", ["pointer", ["id", "id"]]);
+ObjC.bindFunction("method_getNumberOfArguments", ["unsigned long", ["pointer"]]);
+ObjC.bindFunction("method_getTypeEncoding", ["pointer", ["pointer"]]);
 
 let filePanelDelegate = null;
 let runtimeDiagnosticsDelegate = null;
@@ -73,9 +76,10 @@ ObjC.registerSubclass({
   name: "GaiaFilePanelDelegate",
   methods: {
     "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:": {
-      types: ["void", ["id", "id", "id", "id", "id"]],
+      types: ["void", ["id", "id", "id", "@?"]],
       implementation: function(webView, parameters, frameInfo, completionHandler) {
       const correlationId = stage6CorrelationId();
+      stage6Emit("wkui_delegate_body_entered", correlationId, { callback_received: true });
       stage6Emit("wkui_delegate_callback_received", correlationId, { callback_received: true });
       stage6Emit("webkit_file_picker_request", correlationId, { callback_received: true });
       const panel = $.NSOpenPanel.openPanel;
@@ -162,6 +166,53 @@ function filePanelDelegateRespondsToOpenPanelSelector() {
   return delegate.respondsToSelector("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:");
 }
 
+function runFilePanelHarness() {
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
+  const frame = $.NSMakeRect(0, 0, 640, 300);
+  const configuration = $.WKWebViewConfiguration.alloc.init;
+  const webView = $.WKWebView.alloc.initWithFrameConfiguration(frame, configuration);
+  filePanelDelegate = $.GaiaFilePanelDelegate.alloc.init;
+  webView.setUIDelegate(filePanelDelegate);
+  const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
+    frame,
+    $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable,
+    $.NSBackingStoreBuffered,
+    false
+  );
+  window.setTitle($("Gaia — проверка выбора файла"));
+  window.setContentView(webView);
+  window.makeKeyAndOrderFront(null);
+  stage6Emit("file_panel_harness_ready", stage6CorrelationId(), { delegate_retained: filePanelDelegate !== null });
+  webView.loadHTMLStringBaseURL($("<!doctype html><html lang='ru'><body><label for='file'>Выберите файл для проверки</label><input id='file' type='file'></body></html>"), $.NSURL.URLWithString($("about:blank")));
+  app.activateIgnoringOtherApps(true);
+  app.run();
+}
+
+function filePanelDelegateAbiReport() {
+  const selectorName = "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:";
+  const selector = $.NSSelectorFromString($(selectorName));
+  const delegate = $.GaiaFilePanelDelegate.alloc.init;
+  const method = $.class_getInstanceMethod($.GaiaFilePanelDelegate, selector);
+  if (!method) throw new Error("WKUIDelegate open-panel method is unavailable");
+  const signature = delegate.methodSignatureForSelector(selector);
+  const argumentTypes = [];
+  const signatureArgumentCount = Number(ObjC.unwrap(signature.numberOfArguments));
+  for (let index = 0; index < signatureArgumentCount; index += 1) {
+    argumentTypes.push(ObjC.unwrap(signature.getArgumentTypeAtIndex(index)));
+  }
+  return JSON.stringify({
+    selector_present: true,
+    responds_to_selector: delegate.respondsToSelector(selector),
+    instances_respond_to_selector: $.GaiaFilePanelDelegate.instancesRespondToSelector(selector),
+    method_get_available: Boolean(method),
+    runtime_type_encoding: ObjC.unwrap(signature.methodReturnType) + argumentTypes.join(""),
+    signature_argument_count: signatureArgumentCount,
+    return_type: ObjC.unwrap(signature.methodReturnType),
+    argument_types: argumentTypes
+  });
+}
+
 function run(argv) {
   if (argv[0] === "--check") return "WebKit available";
   if (argv[0] === "--diagnostics-delegate-smoke") {
@@ -172,6 +223,8 @@ function run(argv) {
     if (!filePanelDelegateRespondsToOpenPanelSelector()) throw new Error("WKUIDelegate open-panel selector is unavailable");
     return "WKUIDelegate open-panel handler available";
   }
+  if (argv[0] === "--file-panel-delegate-abi") return filePanelDelegateAbiReport();
+  if (argv[0] === "--file-panel-harness") return runFilePanelHarness();
   if (argv[0] === "--diagnostics-writer-smoke") {
     if (!stage6DiagnosticsEnabled()) throw new Error("Stage 6 diagnostics are disabled");
     const wrote = stage6Emit("diagnostics_window_process_enabled", stage6CorrelationId(), {
