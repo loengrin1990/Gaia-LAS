@@ -18,6 +18,10 @@ WINDOW_PROCESS: subprocess.Popen[bytes] | None = None
 RUNTIME_READY_TIMEOUT_SECONDS = 8.0
 
 
+def native_host_app_path() -> Path:
+    return Path(__file__).parents[1] / "native" / "macos" / "build" / "DerivedData" / "Build" / "Products" / "Debug" / "Gaia.app"
+
+
 def launch_path(path) -> dict[str, Any]:
     if not path.exists():
         return {"ok": False, "error": f"Файл не найден: {path}"}
@@ -57,9 +61,6 @@ def wait_for_runtime(url: str, expected_runtime_id: str = "", timeout_seconds: f
 
 def launch_gaia_window(runtime_id: str = "") -> dict[str, Any]:
     global WINDOW_PROCESS
-    script = Path(__file__).with_name("gaia_window.js")
-    if not script.exists():
-        return {"ok": False, "error": "Не найден системный launcher Gaia."}
     url = f"http://{SETTINGS.host}:{SETTINGS.port}"
     ready = wait_for_runtime(url, runtime_id)
     if not ready.get("ok"):
@@ -68,6 +69,13 @@ def launch_gaia_window(runtime_id: str = "") -> dict[str, Any]:
     if WINDOW_PROCESS and WINDOW_PROCESS.poll() is None:
         return {"ok": True, "message": "Окно Gaia уже открыто для текущего запуска."}
     try:
+        native_host = native_host_app_path()
+        if native_host.exists():
+            WINDOW_PROCESS = subprocess.Popen(["open", str(native_host)], start_new_session=True)
+            return {"ok": True, "message": "Gaia открыта в нативном системном окне."}
+        script = Path(__file__).with_name("gaia_window.js")
+        if not script.exists():
+            return {"ok": False, "error": "Не найден системный launcher Gaia."}
         environment = window_diagnostics_environment()
         diagnostic_result = write_event(
             "diagnostics_python_enabled",

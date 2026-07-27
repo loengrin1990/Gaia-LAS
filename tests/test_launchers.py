@@ -12,20 +12,23 @@ from gaia.launchers import launch_gaia_window, launch_module, wait_for_runtime
 
 
 class LauncherTests(unittest.TestCase):
+    @patch("gaia.launchers.native_host_app_path")
     @patch("gaia.launchers.wait_for_runtime", return_value={"ok": True, "runtime": {"runtime_id": "runtime-a"}})
     @patch("gaia.launchers.subprocess.Popen")
-    def test_gaia_window_uses_system_webkit_launcher(self, popen, ready) -> None:
+    def test_gaia_window_prefers_built_native_host(self, popen, ready, native_host) -> None:
+        native_host.return_value.exists.return_value = True
         result = launch_gaia_window()
 
         self.assertTrue(result["ok"])
         command = popen.call_args.args[0]
-        self.assertEqual(command[:3], ["/usr/bin/osascript", "-l", "JavaScript"])
-        self.assertIn("gaia_window.js", command[3])
-        self.assertIn("runtime=runtime-a", command[4])
+        self.assertEqual(command[0], "open")
+        self.assertIn("нативном", result["message"])
 
+    @patch("gaia.launchers.native_host_app_path")
     @patch("gaia.launchers.wait_for_runtime", return_value={"ok": True, "runtime": {"runtime_id": "runtime-a"}})
     @patch("gaia.launchers.subprocess.Popen")
-    def test_gaia_window_explicitly_passes_opt_in_diagnostics_to_jxa(self, popen, ready) -> None:
+    def test_jxa_remains_diagnostic_fallback_when_native_app_is_absent(self, popen, ready, native_host) -> None:
+        native_host.return_value.exists.return_value = False
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ,
             {"GAIA_STAGE6_RUNTIME_DIAGNOSTICS": "1", "GAIA_STAGE6_DIAGNOSTICS_PATH": f"{directory}/events.jsonl"},

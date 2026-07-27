@@ -1,0 +1,24 @@
+# Контракт нативного host Gaia
+
+## Граница ответственности
+
+`Gaia.app` создаёт одно окно AppKit с `WKWebView`. Он находит и при необходимости запускает уже существующий Python backend Gaia, а затем открывает его существующий интерфейс. Host не читает DOM, рабочие материалы, тела запросов или содержимое выбранных файлов; не создаёт новый API и не изменяет upload-flow.
+
+## Фактический launcher-контракт
+
+- `app.py` вызывает `gaia.server.main(open_window=True)` и backend слушает loopback host/port из локального `config.json`.
+- `GET /api/runtime` возвращает `ready`, непустой `runtime_id` и `api_contract_version`; этого недостаточно заменить просто открытым TCP-портом.
+- Старый `launch_gaia_window` ждёт этот endpoint, после чего запускает JXA через `osascript`. JXA оставлен только диагностическим fallback и не изменяется.
+- Для native host добавлен узкий `python app.py --no-window`: тот же backend запускается без JXA-окна. Порт аргументом не передаётся: это сохраняет существующий конфигурационный контракт без широкого рефакторинга.
+
+## Поиск и жизненный цикл
+
+Приоритет backend: `GAIA_BACKEND_URL`, затем `config.json` найденного репозитория. Приоритет репозитория: `GAIA_REPOSITORY_ROOT`, затем предсказуемое родительское расположение dev-сборки. Python выбирается в порядке `GAIA_PYTHON`, `.venv/bin/python3`, `/usr/bin/python3`; shell не используется.
+
+Host сначала проверяет точный loopback `/api/runtime`. Валидный ответ означает attached backend и никогда не завершается host. Если Gaia не подтверждена, host запускает owned backend через `Foundation.Process` с массивом аргументов и ждёт readiness максимум 8 секунд вне main thread. При закрытии вызывает `terminate()` только owned process и ждёт не более трёх секунд; рабочие данные не затрагиваются.
+
+## WebKit и файлы
+
+Навигация разрешена только для `http://127.0.0.1:<фактический-порт>`; внешний URL, другой port, `file:`, `data:` и `javascript:` блокируются. `WKUIDelegate.webView(_:runOpenPanelWith:initiatedByFrame:completionHandler:)` переносит `allowsMultipleSelection` и `allowsDirectories` в `NSOpenPanel`. Отмена передаёт `nil`, подтверждение — исходный `[URL]`; локальный guard вызывает completion только один раз. URL не преобразуются в строки и не сохраняются.
+
+HTML inputs остаются прежними: оба принимают `multiple`, подпись `label/for` исправлена, а drag-and-drop и системный выбор далее сходятся в существующем JavaScript upload-flow и backend API.

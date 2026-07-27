@@ -10,6 +10,16 @@ Codex/ChatGPT.
 python3 app.py
 ```
 
+### Нативное окно macOS
+
+Для разработки доступен минимальный host `Gaia.app` на Swift + AppKit. Он не упаковывает Python runtime: использует локальный репозиторий и его `config.json`, либо явные `GAIA_REPOSITORY_ROOT`, `GAIA_PYTHON` и `GAIA_BACKEND_URL`. Собрать его можно так:
+
+```bash
+zsh scripts/build_macos_host.sh
+```
+
+Готовое приложение появляется в `native/macos/build/DerivedData/Build/Products/Debug/Gaia.app`; для открытия после сборки используйте `zsh scripts/build_macos_host.sh --open`. Нужна полная Xcode. Code signing, notarization, установщик и переносимая упаковка Python пока не выполняются.
+
 Затем открыть:
 
 ```text
