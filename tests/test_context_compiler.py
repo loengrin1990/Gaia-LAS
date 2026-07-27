@@ -37,6 +37,8 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(len(compiler.compile(san["artifact_id"])),5)
             service=ContextService(s,w); confirmed=service.decide(items[0]["id"],"confirm"); self.assertEqual(service.summary()["requirement"][0]["title"], confirmed["title"])
             edited=service.decide(confirmed["id"],"edit","Новая версия","Уточнённое требование."); self.assertTrue(edited["current"]); self.assertFalse(s.object_metadata(w,confirmed["id"])["current"])
+            with self.assertRaisesRegex(ProvenanceError, "устарела"):
+                service.decide(confirmed["id"], "reject")
         finally: tmp.cleanup()
     def test_rejects_unconfirmed_and_invalid_model_result(self):
         tmp,s,w,san=self.setup()

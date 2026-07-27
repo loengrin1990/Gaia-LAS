@@ -20,6 +20,11 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.", INDEX_HTML)
         self.assertIn("Материал недоступен в выбранном рабочем пространстве. Данные не изменены.", INDEX_HTML)
         self.assertIn("button.disabled=true", INDEX_HTML)
+        self.assertIn("function journeyContextEditForm", INDEX_HTML)
+        self.assertIn("function journeyRejectConfirmation", INDEX_HTML)
+        self.assertIn("item.current!==false", INDEX_HTML)
+        self.assertNotIn("window.prompt('Новый заголовок: будет создана новая версия'", INDEX_HTML)
+        self.assertNotIn("window.confirm('Отклонить предложение?", INDEX_HTML)
         self.assertNotIn(">requires_review<", INDEX_HTML)
 
     def test_veil_result_messages_are_distinct_and_human_readable(self) -> None:

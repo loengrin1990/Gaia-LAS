@@ -122,6 +122,8 @@ class ContextService:
     def get(self, context_id: str) -> dict[str, Any]: return self.store._object(self.workspace_id, context_id, "context")
     def decide(self, context_id: str, decision: str, title: str = "", statement: str = "") -> dict[str, Any]:
         item = self.get(context_id)
+        if item.get("current") is False:
+            raise ProvenanceError("Эта версия предложения устарела. Откройте актуальную версию.")
         if decision == "confirm": self.store._update(context_id, status="confirmed", confirmation_status="confirmed", requires_review=False); return self.get(context_id)
         if decision == "reject": self.store._update(context_id, status="rejected", confirmation_status="rejected", current=False); return self.get(context_id)
         if decision == "edit":
