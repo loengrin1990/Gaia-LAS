@@ -73,12 +73,13 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("$.GaiaFilePanelDelegate.alloc.init", script)
         self.assertNotIn("const FilePanelDelegate", script)
         self.assertIn("let filePanelDelegate = null", script)
-        self.assertIn("panel.runModal()", script)
+        self.assertIn("const result = panel.runModal;", script)
+        self.assertNotIn("panel.runModal()", script)
         self.assertIn("webView.setUIDelegate(filePanelDelegate)", script)
 
     def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
         script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
-        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_result", "completion_handler_called", "upload_flow_started"):
+        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_runmodal_invocation_started", "open_panel_runmodal_returned", "open_panel_result_decoding_started", "open_panel_result", "selected_urls_read_started", "selected_urls_read_completed", "completion_handler_invocation_started", "completion_handler_called", "upload_flow_started"):
             self.assertIn(f'"{event_code}"', script)
         self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
         self.assertIn("selected_url_count", script)

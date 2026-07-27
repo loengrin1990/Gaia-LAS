@@ -88,13 +88,24 @@ ObjC.registerSubclass({
       panel.setCanChooseDirectories(false);
       panel.setAllowsMultipleSelection(ObjC.unwrap(parameters.allowsMultipleSelection));
       stage6Emit("open_panel_started", correlationId, { panel_started: true });
-      const result = panel.runModal();
-      const accepted = result === $.NSModalResponseOK;
-      const urls = accepted ? panel.URLs : null;
+      stage6Emit("open_panel_runmodal_invocation_started", correlationId, { panel_started: true });
+      const result = panel.runModal;
+      stage6Emit("open_panel_runmodal_returned", correlationId, { panel_started: true });
+      stage6Emit("open_panel_result_decoding_started", correlationId, {});
+      const accepted = Number(result) === Number($.NSModalResponseOK);
       stage6Emit("open_panel_result", correlationId, { panel_result: accepted ? "accepted" : "cancelled" });
       stage6Emit("open_panel_finished", correlationId, { panel_result: accepted ? "accepted" : "cancelled" });
+      let urls = $.NSArray.array;
+      let selectedUrlCount = 0;
+      if (accepted) {
+        stage6Emit("selected_urls_read_started", correlationId, {});
+        urls = panel.URLs;
+        selectedUrlCount = Number(urls.count);
+        stage6Emit("selected_urls_read_completed", correlationId, { selected_url_count: selectedUrlCount });
+      }
+      stage6Emit("completion_handler_invocation_started", correlationId, { selected_url_count: selectedUrlCount });
       completionHandler(urls);
-      stage6Emit("completion_handler_called", correlationId, { completion_called: true, selected_url_count: accepted ? Number(panel.URLs.count) : 0 });
+      stage6Emit("completion_handler_called", correlationId, { completion_called: true, selected_url_count: selectedUrlCount });
       stage6Emit("upload_flow_started", correlationId, { upload_flow_started: accepted });
       stage6Emit("webkit_upload_flow_received", correlationId, { upload_flow_started: accepted });
     }
@@ -189,6 +200,29 @@ function runFilePanelHarness() {
   app.run();
 }
 
+function runOpenPanelSmoke() {
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyRegular);
+  const panel = $.NSOpenPanel.openPanel;
+  panel.setCanChooseFiles(true);
+  panel.setCanChooseDirectories(false);
+  panel.setAllowsMultipleSelection(false);
+  app.activateIgnoringOtherApps(true);
+  stage6Emit("open_panel_runmodal_invocation_started", stage6CorrelationId(), { panel_started: true });
+  const result = panel.runModal;
+  const correlationId = stage6CorrelationId();
+  stage6Emit("open_panel_runmodal_returned", correlationId, { panel_started: true });
+  stage6Emit("open_panel_result_decoding_started", correlationId, {});
+  const accepted = Number(result) === Number($.NSModalResponseOK);
+  stage6Emit("open_panel_result", correlationId, { panel_result: accepted ? "accepted" : "cancelled" });
+  if (accepted) {
+    stage6Emit("selected_urls_read_started", correlationId, {});
+    const urls = panel.URLs;
+    stage6Emit("selected_urls_read_completed", correlationId, { selected_url_count: Number(urls.count) });
+  }
+  return accepted ? "NSOpenPanel accepted" : "NSOpenPanel cancelled";
+}
+
 function filePanelDelegateAbiReport() {
   const selectorName = "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:";
   const selector = $.NSSelectorFromString($(selectorName));
@@ -225,6 +259,7 @@ function run(argv) {
   }
   if (argv[0] === "--file-panel-delegate-abi") return filePanelDelegateAbiReport();
   if (argv[0] === "--file-panel-harness") return runFilePanelHarness();
+  if (argv[0] === "--open-panel-smoke") return runOpenPanelSmoke();
   if (argv[0] === "--diagnostics-writer-smoke") {
     if (!stage6DiagnosticsEnabled()) throw new Error("Stage 6 diagnostics are disabled");
     const wrote = stage6Emit("diagnostics_window_process_enabled", stage6CorrelationId(), {

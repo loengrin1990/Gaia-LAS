@@ -174,6 +174,18 @@ Runtime-аудит зарегистрированного `GaiaFilePanelDelegate
 
 Stop-condition ограничения JXA не достигнут: было найдено конкретное ABI-несоответствие. Native-host decision report в этой задаче не создавался.
 
+### Запуск `NSOpenPanel` в JXA 6.2b
+
+После исправления ABI ручной сценарий дошёл до `wkui_delegate_body_entered`, `webkit_file_picker_request`, `open_panel_created` и `open_panel_started`, но `osascript` завершался с `SIGABRT` до результата панели. Одинаковый crash при отмене и выборе файла указывал на необработанное Objective-C exception уже внутри тела JXA callback.
+
+Первая операция после `open_panel_started` была `panel.runModal()`. Гипотеза подтвердилась: `runModal` не имеет явных Objective-C аргументов, а JXA представляет такой selector как property. Вызов со скобками создавал JavaScript-вызов вместо корректного Objective-C dispatch — тот же класс ошибки, который ранее был найден у `seekToEndOfFile()`.
+
+Исправление минимально: используется `const result = panel.runModal;`. После возврата результат сравнивается как числовой `NSModalResponse`. Для отмены создаётся пустой Objective-C `NSArray`; для принятого выбора `panel.URLs` читается как `NSArray<NSURL *>` без строкового преобразования. Completion block вызывается ровно один раз непосредственно после подготовки этого массива.
+
+Добавлены безопасные границы: `open_panel_runmodal_invocation_started`, `open_panel_runmodal_returned`, `open_panel_result_decoding_started`, `selected_urls_read_started`, `selected_urls_read_completed`, `completion_handler_invocation_started` и `completion_handler_called`. Они не содержат имени, пути, URL или содержимого файла.
+
+Отдельный `--open-panel-smoke` создаёт только `NSApplication` и `NSOpenPanel`. После исправления он достиг `open_panel_runmodal_invocation_started` и оставался живым, без прежнего немедленного `SIGABRT`. Автоматизация Codex не получает JXA-диалог в accessibility, поэтому ручная отмена, реальный возврат `NSModalResponse`, callback completion и успешный upload ещё требуют одного ручного запуска. При отмене ожидается `open_panel_runmodal_returned` → `open_panel_result=cancelled` → `completion_handler_invocation_started` → `completion_handler_called` с `selected_url_count=0` и без `upload_flow_started`.
+
 ### Подтверждённый результат 6.1a (до восстановления канала)
 
 После ремонта отдельный процесс Gaia снова был запущен и подтвердил `/api/runtime`; отдельный runtime smoke подтвердил, что диагностический delegate отвечает на обязательный selector. Автоматизация macOS по-прежнему не получила JXA-окно в доступном списке accessibility, поэтому физический DOM-клик не был выполнен. Следовательно, отсутствие аварии именно после DOM-клика и появление `dom_file_input_click` ещё требуют ручной проверки; ни `WKUIDelegate callback`, ни `NSOpenPanel`, ни completion handler, ни передача файла в upload-flow этим запуском не подтверждены. Это не является доказательством их неработоспособности; остаётся выполнить ручные шаги выше.
