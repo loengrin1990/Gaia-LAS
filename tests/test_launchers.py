@@ -79,7 +79,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
         script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
-        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_runmodal_invocation_started", "open_panel_runmodal_returned", "open_panel_result_decoding_started", "open_panel_result", "selected_urls_read_started", "selected_urls_read_completed", "completion_handler_invocation_started", "completion_handler_called", "upload_flow_started"):
+        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_runmodal_invocation_started", "open_panel_runmodal_returned", "open_panel_result_decoding_started", "open_panel_result", "selected_urls_read_started", "selected_urls_read_completed", "completion_handler_argument_inspection_started", "completion_handler_argument_inspected", "completion_handler_invocation_started", "completion_handler_called", "upload_flow_started"):
             self.assertIn(f'"{event_code}"', script)
         self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
         self.assertIn("selected_url_count", script)
@@ -124,6 +124,23 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(report["signature_argument_count"], 6)
         self.assertEqual(report["return_type"], "v")
         self.assertEqual(report["argument_types"], ["@", ":", "@", "@", "@", "@?"])
+
+    def test_completion_block_bridge_harness_reports_jxa_limitation_without_addresses(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--completion-block-bridge-harness"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        report = json.loads(result.stdout)
+
+        self.assertTrue(report["block_typed"])
+        self.assertEqual(report["receipts"], 2)
+        self.assertFalse(report["js_callable"])
+        self.assertFalse(report["objc_wrapped"])
+        self.assertEqual(report["direct_bridge"], "unavailable")
+        self.assertNotIn("0x", result.stdout)
 
     def test_runtime_diagnostics_jxa_writer_reaches_the_requested_jsonl(self) -> None:
         script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"

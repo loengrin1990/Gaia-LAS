@@ -103,6 +103,7 @@ ObjC.registerSubclass({
         selectedUrlCount = Number(urls.count);
         stage6Emit("selected_urls_read_completed", correlationId, { selected_url_count: selectedUrlCount });
       }
+      inspectCompletionHandlerArgument(completionHandler, correlationId);
       stage6Emit("completion_handler_invocation_started", correlationId, { selected_url_count: selectedUrlCount });
       completionHandler(urls);
       stage6Emit("completion_handler_called", correlationId, { completion_called: true, selected_url_count: selectedUrlCount });
@@ -175,6 +176,44 @@ function diagnosticsDelegateRespondsToMessageSelector() {
 function filePanelDelegateRespondsToOpenPanelSelector() {
   const delegate = $.GaiaFilePanelDelegate.alloc.init;
   return delegate.respondsToSelector("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:");
+}
+
+function inspectCompletionHandlerArgument(completionHandler, correlationId) {
+  stage6Emit("completion_handler_argument_inspection_started", correlationId, {});
+  const present = completionHandler !== null && typeof completionHandler !== "undefined";
+  const jsCallable = typeof completionHandler === "function";
+  const objcWrapped = typeof completionHandler === "object" && completionHandler !== null;
+  stage6Emit("completion_handler_argument_inspected", correlationId, {
+    completion_argument_present: present,
+    completion_argument_js_callable: jsCallable,
+    completion_argument_objc_wrapped: objcWrapped,
+    completion_argument_block_typed: true,
+    completion_argument_class_known: objcWrapped
+  });
+  return jsCallable;
+}
+
+function runCompletionBlockBridgeHarness() {
+  let report = { block_typed: true, receipts: 0, js_callable: false, objc_wrapped: false, direct_bridge: "unavailable" };
+  ObjC.registerSubclass({
+    name: "GaiaCompletionBlockBridgeHarness",
+    methods: {
+      "inspectBlock:": {
+        types: ["void", ["@?"]],
+        implementation: function(block) {
+          report.receipts += 1;
+          report.js_callable = typeof block === "function";
+          report.objc_wrapped = typeof block === "object" && block !== null;
+          if (report.js_callable) report.direct_bridge = "available";
+        }
+      }
+    }
+  });
+  const receiver = $.GaiaCompletionBlockBridgeHarness.alloc.init;
+  const nativeBlock = $.NSBlockOperation.blockOperationWithBlock(function() {});
+  receiver.inspectBlock(nativeBlock);
+  receiver.inspectBlock(nativeBlock);
+  return JSON.stringify(report);
 }
 
 function runFilePanelHarness() {
@@ -260,6 +299,7 @@ function run(argv) {
   if (argv[0] === "--file-panel-delegate-abi") return filePanelDelegateAbiReport();
   if (argv[0] === "--file-panel-harness") return runFilePanelHarness();
   if (argv[0] === "--open-panel-smoke") return runOpenPanelSmoke();
+  if (argv[0] === "--completion-block-bridge-harness") return runCompletionBlockBridgeHarness();
   if (argv[0] === "--diagnostics-writer-smoke") {
     if (!stage6DiagnosticsEnabled()) throw new Error("Stage 6 diagnostics are disabled");
     const wrote = stage6Emit("diagnostics_window_process_enabled", stage6CorrelationId(), {

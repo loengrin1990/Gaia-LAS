@@ -186,6 +186,16 @@ Stop-condition ограничения JXA не достигнут: было на
 
 Отдельный `--open-panel-smoke` создаёт только `NSApplication` и `NSOpenPanel`. После исправления он достиг `open_panel_runmodal_invocation_started` и оставался живым, без прежнего немедленного `SIGABRT`. Автоматизация Codex не получает JXA-диалог в accessibility, поэтому ручная отмена, реальный возврат `NSModalResponse`, callback completion и успешный upload ещё требуют одного ручного запуска. При отмене ожидается `open_panel_runmodal_returned` → `open_panel_result=cancelled` → `completion_handler_invocation_started` → `completion_handler_called` с `selected_url_count=0` и без `upload_flow_started`.
 
+### Completion block `WKUIDelegate` 6.2c
+
+После исправления `runModal` ручная отмена дошла до `open_panel_result=cancelled` и `completion_handler_invocation_started`, после чего JXA завершилась с `NSInternalInconsistencyException`: completion block не является JavaScript function. Это не повтор ABI-ошибки: runtime signature метода сохраняет `v@:@@@@?`, а тело callback и результат панели уже подтверждены.
+
+Безопасная инспекция фиксирует только типовые признаки. Входящий block присутствует и объявлен как `@?`, но в JavaScriptObjC не callable и не представлен ObjC wrapper. Его адрес, описание и raw object не записываются. Прямой вызов, преобразование указателя, `eval` и libffi исключены.
+
+Изолированный `--completion-block-bridge-harness` создаёт реальный Objective-C block Foundation и дважды передаёт его в JXA-метод, также объявленный `@?`. Оба получения дают одинаковый результат: block не callable и не ObjC-wrapped. Это воспроизводит границу bridge без WebKit, файла или пользовательских данных. JXA `registerSubclass` не может быть нативным helper: implementation такого метода выполняется в JavaScript и получает то же значение.
+
+Stop-condition JXA выполнен. Безопасного способа вызвать completion block в этом runtime не найдено; callback нельзя корректно завершить из JXA. [Решение по замене только оконного host](/Users/ilia/Documents/Gaia/docs/STAGE_6_NATIVE_WINDOW_HOST_DECISION.md) сравнивает Swift, Objective-C и PyObjC. Рекомендуется отдельная задача на минимальный Swift host, который оставит Python backend, текущую web UI, API, drag-and-drop и единый upload-flow без изменений.
+
 ### Подтверждённый результат 6.1a (до восстановления канала)
 
 После ремонта отдельный процесс Gaia снова был запущен и подтвердил `/api/runtime`; отдельный runtime smoke подтвердил, что диагностический delegate отвечает на обязательный selector. Автоматизация macOS по-прежнему не получила JXA-окно в доступном списке accessibility, поэтому физический DOM-клик не был выполнен. Следовательно, отсутствие аварии именно после DOM-клика и появление `dom_file_input_click` ещё требуют ручной проверки; ни `WKUIDelegate callback`, ни `NSOpenPanel`, ни completion handler, ни передача файла в upload-flow этим запуском не подтверждены. Это не является доказательством их неработоспособности; остаётся выполнить ручные шаги выше.
