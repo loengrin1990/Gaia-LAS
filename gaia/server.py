@@ -564,9 +564,13 @@ class Handler(BaseHTTPRequestHandler):
                 result["review"] = review.create_successor(artifact_id, result["artifact_id"])
                 json_response(self, result, 202); return
             if action == "confirm":
+                existing = review.get(artifact_id)
+                if existing.get("confirmed") is True:
+                    json_response(self, {"status": "confirmed", "message": "Материал уже подтверждён.", "artifact_id": artifact_id, "confirmation_method": existing.get("confirmation_method", "")}, 200); return
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
-                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
+                confirmed = review.get(artifact_id)
+                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "confirmation_method": confirmed.get("confirmation_method", ""), "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
         except ProvenanceError as exc:
             trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             if intake is not None:

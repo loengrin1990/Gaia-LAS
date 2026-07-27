@@ -24,6 +24,18 @@ class VeilMaskingTests(unittest.TestCase):
         self.assertEqual(result.review.counts.get("EMAIL"), 1)
         self.assertFalse(result.review.unresolved_pii)
 
+    def test_masks_full_name_and_explicitly_labelled_phone_written_in_words(self) -> None:
+        result = mask_with_review(
+            "query",
+            "Контакт: Иванов Иван Иванович. Телефон: восемь девятьсот двадцать три четыреста пятьдесят шесть семьдесят восемь.",
+            include_llm_review=False,
+        )
+
+        self.assertNotIn("Иванов Иван Иванович", result.masked_text)
+        self.assertNotIn("восемь девятьсот двадцать три", result.masked_text)
+        self.assertEqual(result.review.counts.get("PERSON"), 1)
+        self.assertEqual(result.review.counts.get("PHONE"), 1)
+
     def test_masks_address_passport_contract(self) -> None:
         result = mask_with_review(
             "document",

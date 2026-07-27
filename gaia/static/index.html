@@ -1648,6 +1648,7 @@
       const side=document.createElement('section'); side.className='journey-card'; side.innerHTML='<h3>Результат проверки</h3>';
       const badge=document.createElement('span'); badge.className=`journey-status ${state.tone}`; badge.textContent=state.label; side.appendChild(badge);
       const explanation=document.createElement('p'); explanation.textContent=state.detail; side.appendChild(explanation);
+      if (review.confirmed && review.confirmation_method === 'manual') { const manual=document.createElement('p'); manual.className='journey-meta'; manual.textContent='Ручная проверка подтверждена пользователем.'; side.appendChild(manual); }
       if ((review.carried_decisions || []).length) { const carried=document.createElement('p'); carried.className='journey-meta'; carried.textContent=`Сохранены решения предыдущей версии: ${review.carried_decisions.length}. Новая версия требует отдельного подтверждения.`; side.appendChild(carried); }
       for (const finding of review.findings || []) {
         const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);

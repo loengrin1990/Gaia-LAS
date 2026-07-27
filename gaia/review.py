@@ -221,6 +221,8 @@ class ReviewService:
         item = self.store.object_metadata(self.workspace_id, artifact_id)
         if not record or record["workspace_id"] != self.workspace_id or not item.get("current"):
             raise ProvenanceError("Нельзя подтвердить неактуальную версию.")
+        if record.get("confirmed"):
+            return self._text(artifact_id)
         if record.get("state") not in {"ready_for_confirmation", REVIEW_STATE_MANUAL_REVIEW_REQUIRED}:
             raise ProvenanceError("Подтверждение доступно только после завершения локальной проверки.")
         record["confirmation_method"] = "manual" if record.get("state") == REVIEW_STATE_MANUAL_REVIEW_REQUIRED else "veil_review"

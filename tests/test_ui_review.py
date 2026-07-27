@@ -27,6 +27,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Найдены сведения, требующие проверки", INDEX_HTML)
         self.assertIn("Автоматическая проверка не завершена. Проверьте очищенный текст вручную", INDEX_HTML)
         self.assertIn("Подтвердить после ручной проверки", INDEX_HTML)
+        self.assertIn("Ручная проверка подтверждена пользователем.", INDEX_HTML)
 
     def test_journey_file_input_is_enabled_and_has_a_connected_label(self) -> None:
         self.assertEqual(INDEX_HTML.count('id="journeyFiles"'), 1)
