@@ -1689,8 +1689,7 @@
       if (journeyContextCompiler.jobId) return;
       button.disabled=true;
       journeyContextCompiler.state=(status)=>{if(['done','failed','cancelled','error'].includes(status)){button.disabled=false;button.textContent='Собрать проектный контекст';button.onclick=()=>compileJourneyContext(id,button);}};
-      await journeyContextCompiler.start(id);
-      if (!journeyContextCompiler.jobId) button.disabled=false;
+      try { await journeyContextCompiler.start(id); } finally { if (!journeyContextCompiler.jobId) button.disabled=false; }
     }
     async function loadJourneyContext() { const response=await fetch(`/api/context?project=${encodeURIComponent(journeyProject())}`); const data=await response.json(); if(response.ok) renderJourneyContext(data.candidates || []); }
     function renderJourneyContext(candidates) { const root=document.getElementById('journeyContext'); root.innerHTML=''; if(!candidates.length){root.className='journey-empty';root.textContent='Контекст ещё не собран. Подтвердите материал и запустите сбор контекста.';return;} root.className=''; for(const [type,label] of Object.entries(journeyTypeLabels)){ const items=candidates.filter(item=>item.item_type===type&&item.current!==false); const group=document.createElement('section');group.className='candidate-group';group.innerHTML=`<h3>${label}</h3>`; if(!items.length){group.innerHTML += '<p class="journey-meta">Предложений пока нет.</p>';} for(const item of items) group.appendChild(journeyCandidateCard(item));root.appendChild(group);} }

@@ -129,7 +129,7 @@ def context_compile_failure(intake: ControlledIntake, project: str, artifact_id:
             "reason": getattr(exc, "code", "unexpected"),
             "route": "context_compiler",
             "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
-            "artifact_id": artifact_id,
+            "artifact_hash": hashlib.sha256(artifact_id.encode("utf-8")).hexdigest()[:12],
             "validation_code": getattr(exc, "diagnostic_code", ""),
         })
         path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -612,11 +612,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_context_action(self) -> None:
         parts=urlparse(self.path).path.split("/"); object_id=parts[3] if len(parts)>=4 else ""; action=parts[4] if len(parts)>=5 else ""; payload=self.read_json(); project=str(payload.get("project") or "")
+        trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+        workspace_hash=hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12]
         try:
             intake=ControlledIntake()
             if action == "compile":
+                emit_runtime_diagnostic("context_compile", "compile_request_received", trace_id, workspace_hash=workspace_hash)
+                emit_runtime_diagnostic("context_compile", "preflight_started", trace_id, workspace_hash=workspace_hash)
                 intake.compiler(project).preflight(object_id)
+                emit_runtime_diagnostic("context_compile", "preflight_passed", trace_id, workspace_hash=workspace_hash)
+                emit_runtime_diagnostic("context_compile", "job_submit_started", trace_id, workspace_hash=workspace_hash)
                 job = submit_context_compile_job(project, object_id)
+                emit_runtime_diagnostic("context_compile", "job_created", trace_id, workspace_hash=workspace_hash)
                 json_response(self, {"job_id": job.id, "status_url": f"/api/jobs/{job.id}", "status": "queued", "message": "Подготавливаем материал…"}, 202); return
             if action == "decision": json_response(self,intake.context(project).decide(object_id,str(payload.get("decision") or ""),str(payload.get("title") or ""),str(payload.get("statement") or ""))); return
             if action == "duplicate": json_response(self, intake.context(project).mark_duplicate(object_id, str(payload.get("target_id") or ""))); return
@@ -624,7 +631,7 @@ class Handler(BaseHTTPRequestHandler):
         except JobQueueFullError as exc:
             json_response(self, api_error_payload("job_queue_full", str(exc)), 429); return
         except ContextCompileError as exc:
-            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            emit_runtime_diagnostic("context_compile", "preflight_failed", trace_id, workspace_hash=workspace_hash, error_code=exc.code)
             context_compile_failure(intake, project, object_id, trace_id, exc)
             diagnostic = str(getattr(exc, "diagnostic_code", "") or "schema_invalid").upper()
             messages = {
@@ -636,9 +643,12 @@ class Handler(BaseHTTPRequestHandler):
             }
             json_response(self, api_error_payload(exc.code, messages.get(exc.code, "Не удалось собрать проектный контекст. Данные не изменены. Повторите попытку."), trace_id=trace_id), 400); return
         except ProvenanceError as exc:
-            trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             context_compile_failure(intake, project, object_id, trace_id, exc)
             json_response(self, api_error_payload("context_internal_error", "Внутренняя ошибка сборки контекста. Данные не изменены. Повторите попытку.", trace_id=trace_id), 400); return
+        except Exception as exc:
+            context_compile_failure(locals().get("intake"), project, object_id, trace_id, exc) if locals().get("intake") is not None else None
+            emit_runtime_diagnostic("context_compile", "preflight_failed", trace_id, workspace_hash=workspace_hash, error_code="internal_error", exception_type=type(exc).__name__)
+            json_response(self, api_error_payload("context_compile_failed", "Не удалось начать сборку проектного контекста. Данные не изменены. Повторите попытку.", trace_id=trace_id), 500); return
         error_response(self,"not_found","not found",404)
 
     def handle_job_action(self) -> None:

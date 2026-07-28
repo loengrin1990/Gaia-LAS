@@ -10,5 +10,7 @@ const response = (body, ok=true) => ({ok, json: async()=>body});
   assert.ok(calls.some(x=>x==='/new'));
   let cancelCall=''; const cancelling=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async url=>{cancelCall=url;return response({});}}); cancelling.jobId='job-safe'; assert.strictEqual(await cancelling.cancel(),true); assert.strictEqual(cancelCall,'/api/jobs/job-safe/cancel');
   const failing=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>response({error:'safe'},false)}); assert.strictEqual(await failing.start('san-error'),false); assert.strictEqual(failing.jobId,'');
+  const rejected=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>{throw new Error('network')}}); assert.strictEqual(await rejected.start('san-error'),false); assert.strictEqual(rejected.jobId,'');
+  const invalid=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>({ok:true,json:async()=>({})})}); assert.strictEqual(await invalid.start('san-error'),false); assert.strictEqual(invalid.jobId,'');
   console.log('context compile controller checks passed');
 })().catch(error=>{console.error(error);process.exit(1);});

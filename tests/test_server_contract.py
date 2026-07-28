@@ -83,6 +83,13 @@ class ServerContractTests(unittest.TestCase):
         error=response.call_args.args[1]["error"]
         self.assertEqual(error["code"],"job_queue_full")
         self.assertIn("busy",error["message"])
+
+    def test_context_compile_unexpected_error_returns_safe_json_500(self) -> None:
+        handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
+        with patch("gaia.server.ControlledIntake",side_effect=RuntimeError("secret")), patch("gaia.server.json_response") as response:
+            Handler.handle_context_action(handler)
+        self.assertEqual(response.call_args.args[2],500)
+        self.assertEqual(response.call_args.args[1]["error"]["code"],"context_compile_failed")
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (
