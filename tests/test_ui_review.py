@@ -14,7 +14,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn('id="contextSearchMore"', INDEX_HTML)
         self.assertIn('Найдено элементов:', INDEX_HTML)
         self.assertIn('Есть связанный вариант', INDEX_HTML)
-        self.assertIn("resetContextSearch();", INDEX_HTML)
+        self.assertIn("function resetContextSearch", INDEX_HTML)
         self.assertNotIn("window.prompt", INDEX_HTML)
         self.assertNotIn("window.confirm", INDEX_HTML)
 

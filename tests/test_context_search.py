@@ -11,6 +11,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from gaia.context_search import ContextSearchError, parse_params, search
+from gaia.controlled_intake import ControlledIntake
 from gaia.provenance import ProvenanceStore
 from gaia.server import Handler
 
@@ -83,7 +84,7 @@ class ContextSearchTests(unittest.TestCase):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
         try:
-            intake = SimpleNamespace(context=lambda _: SimpleNamespace(list=lambda: [item("ctx_1", workspace_id=workspace, title="Секретный результат")]))
+            intake = SimpleNamespace(store=store, existing_workspace=lambda _: workspace)
             with patch("gaia.server.ControlledIntake", return_value=intake), patch("gaia.server.emit_runtime_diagnostic", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
                 connection.request("GET", "/api/context/search?project=search-project&q=%D1%81%D0%B5%D0%BA%D1%80%D0%B5%D1%82%D0%BD%D1%8B%D0%B9")
@@ -93,5 +94,25 @@ class ContextSearchTests(unittest.TestCase):
             diagnostic = captured[0][1]
             self.assertNotIn("q", diagnostic)
             self.assertNotIn("Секретный", json.dumps(diagnostic, ensure_ascii=False))
+        finally:
+            server.shutdown(); server.server_close(); temporary.cleanup()
+
+    def test_real_http_search_is_workspace_isolated_and_unknown_project_writes_nothing(self) -> None:
+        temporary = tempfile.TemporaryDirectory(); store = ProvenanceStore(Path(temporary.name) / "store")
+        intake = ControlledIntake(store); first = intake._workspace_for("first"); second = intake._workspace_for("second")
+        store._add(item("first_ctx", workspace_id=first, title="Только первое")); store._add(item("second_ctx", workspace_id=second, title="Только второе"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler); threading.Thread(target=server.serve_forever, daemon=True).start()
+        def request(project: str) -> tuple[int, dict[str, object]]:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
+            connection.request("GET", f"/api/context/search?project={project}"); response=connection.getresponse(); data=json.loads(response.read()); connection.close(); return response.status, data
+        try:
+            with patch("gaia.controlled_intake.default_store", return_value=store):
+                self.assertEqual(request("first")[1]["results"][0]["title"], "Только первое")
+                self.assertEqual(request("second")[1]["results"][0]["title"], "Только второе")
+                before = {str(path.relative_to(store.root)): path.read_bytes() for path in store.root.rglob("*") if path.is_file()}
+                status, payload = request("never-created")
+                after = {str(path.relative_to(store.root)): path.read_bytes() for path in store.root.rglob("*") if path.is_file()}
+            self.assertEqual(status, 200); self.assertEqual(payload["total"], 0); self.assertEqual(before, after)
+            self.assertEqual(ProvenanceStore(store.root).object_metadata(first, "first_ctx")["title"], "Только первое")
         finally:
             server.shutdown(); server.server_close(); temporary.cleanup()

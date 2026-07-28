@@ -23,11 +23,18 @@ from .context_compiler import ContextCompiler, ContextService
 
 
 class ControlledIntake:
-    def __init__(self, store: ProvenanceStore | None = None) -> None:
+    def __init__(self, store: ProvenanceStore | None = None, create_metadata: bool = True) -> None:
         self.store = store or default_store()
         self.path = self.store.root / "metadata" / "intake_operations.json"
-        if not self.path.exists():
+        if create_metadata and not self.path.exists():
             atomic_write_text(self.path, json.dumps({"workspaces": {}, "source_keys": {}, "operations": {}}, ensure_ascii=False) + "\n")
+
+    def existing_workspace(self, project: str) -> str | None:
+        """Return an already registered workspace without creating files or records."""
+        if not project.strip() or not self.path.exists():
+            return None
+        key = hashlib.sha256(project.strip().encode("utf-8")).hexdigest()
+        return str(self._read().get("workspaces", {}).get(key) or "") or None
 
     def admit(self, project: str, uploaded: list[tuple[str, bytes]]) -> dict[str, Any]:
         if not project.strip():
