@@ -60,8 +60,8 @@ def local_context_model(text: str) -> dict[str, Any]:
         "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
         "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста; не добавляй предположений.\n\n" + text
     )
-    from .module_assist import call_lm_studio_with_deadline
-    result = call_lm_studio_with_deadline(prompt, int(route.get("timeout_seconds", 120)), "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER, response_schema=schema)
+    from .local_llm import run_local_llm_prompt
+    result = run_local_llm_prompt(prompt, "Ты локальный компилятор проектного контекста Gaia.", timeout=int(route.get("timeout_seconds", 120)), temperature=0.0, task=TASK_CONTEXT_COMPILER, response_schema=schema)
     emit_runtime_diagnostic("context_compile_model", "context_compile_model", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, model=str(route.get("model", "")), prompt_chars=len(text), num_ctx=int(route.get("context_length", 0)), num_predict=int(route.get("max_tokens", 0)), prompt_eval_count=result.get("prompt_eval_count"), eval_count=result.get("eval_count"), done_reason=str(result.get("done_reason") or ""), total_duration=result.get("total_duration"), load_duration=result.get("load_duration"), prompt_eval_duration=result.get("prompt_eval_duration"), eval_duration=result.get("eval_duration"), validation="received")
     if not result.get("ok"):
         code = "timeout" if result.get("status") == "timeout" else "provider_unavailable"
