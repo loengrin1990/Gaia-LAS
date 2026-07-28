@@ -42,7 +42,7 @@ def context_response_schema(max_candidates: int) -> dict[str, Any]:
 
 def local_context_model(text: str) -> dict[str, Any]:
     route = resolve_route(TASK_CONTEXT_COMPILER)
-    schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16)))
+    schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16))) if route.get("structured_output", "schema") == "schema" else None
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
         "Обязательные поля каждого кандидата: type, title, statement, block, confidence, requires_review. "

@@ -18,12 +18,12 @@ from gaia.review import ReviewService
 
 
 def main() -> None:
-    material = "\n\n".join(
-        f"{index}. Требование: проверить синтетический пункт {index}. "
-        "Ответственный: Роль 1. Срок: 2030-01-01. Статус: назначено. Приоритет: высокий. "
-        "Решение: использовать локальный маршрут. Риск: задержка. Действие: проверить результат."
-        for index in range(1, 66)
-    )
+    material = "\n\n".join((
+        "Действие: [Координатор-Север] должен согласовать список помещений до 15 сентября 2026 года. Статус: назначено. Приоритет: высокий.",
+        "Решение: владельцем процесса назначен [Координатор-Орбита].",
+        "Требование: еженедельный отчёт должен быть подготовлен до 1 октября 2026 года.",
+        "Риск: возможна задержка поставки. Ответственный за контроль: [Инженер-Север].",
+    ))
     with tempfile.TemporaryDirectory() as folder:
         store = ProvenanceStore(Path(folder) / "storage")
         workspace = store.create_workspace()
@@ -41,11 +41,14 @@ def main() -> None:
             "chunk_count": len(chunks),
             "candidate_count": len(items),
             "candidate_types": dict(Counter(item["item_type"] for item in items)),
-            "metadata_present": any(item.get("actor_ref") and item.get("deadline") for item in items),
+            "metadata_present": any(item.get("item_type") == "action" and item.get("actor_ref") and item.get("deadline") and item.get("explicit_status") and item.get("priority") for item in items),
             "offsets_valid": all(0 <= block["start"] < block["end"] <= len(material) for item in items for block in item["block_links"]),
             "idempotent": [item["id"] for item in items] == [item["id"] for item in repeated],
         }
         print(json.dumps(summary, ensure_ascii=False))
+        expected = {"action", "decision", "requirement", "risk"}
+        if not expected.issubset(summary["candidate_types"]) or not summary["metadata_present"] or not summary["offsets_valid"] or not summary["idempotent"]:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

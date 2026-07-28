@@ -16,7 +16,7 @@
 
 ## Структурированный результат и восстановление
 
-Для Ollama поле `format` получает JSON Schema: только объект с `candidates`, до 16 кандидатов, с закрытыми полями и обязательными type/title/statement/block/confidence/requires_review. Строгая backend-проверка остаётся второй линией защиты. OpenAI-compatible маршруты сохраняют прежний совместимый путь.
+Для Ollama production-профиль `gpt-oss:20b` использует `/api/chat`, `format="json"`, `think="low"`, `num_ctx=16384` и `num_predict=2400`. Диагностика показала несовместимость полного JSON Schema object: qwen3.5:9b извлекает metadata неполно, qwen3:14b галлюцинирует metadata на отрицательном контроле, а gpt-oss:20b расходует ответ в thinking и оставляет final пустым. При `format="json"` gpt-oss проходит строгую backend-проверку; JSON Schema остаётся доступен для диагностического сравнения, но не является production format. Автоматического fallback нет: 20B-модель запускается строго последовательно на Mac с 24 ГБ памяти.
 
 Безопасные показатели различают пустой ответ, обрезанный вывод, JSON parse, нарушения схемы, timeout и недоступность provider. Ни prompt, ни raw-ответ, ни текст фрагмента в диагностику или receipt не записываются.
 

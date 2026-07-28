@@ -141,6 +141,10 @@ def resolve_route(task: str) -> dict[str, Any]:
             resolved[key] = value
     if isinstance(route.get("temperature"), (int, float)) and not isinstance(route.get("temperature"), bool):
         resolved["temperature"] = float(route["temperature"])
+    if isinstance(route.get("thinking"), (bool, str)):
+        resolved["thinking"] = route["thinking"]
+    if route.get("structured_output") in {"schema", "json"}:
+        resolved["structured_output"] = route["structured_output"]
     return resolved
 
 
@@ -334,7 +338,9 @@ def run_local_llm_prompt(
         prompt,
         limit=int(route.get("prompt_char_limit") or local_prompt_char_limit()),
     )
-    provider = provider_config(route["provider"])
+    provider = dict(provider_config(route["provider"]))
+    if "thinking" in route:
+        provider["thinking"] = route["thinking"]
     label = provider_label(route["provider"])
     if provider.get("enabled", True) is not True:
         return {
@@ -444,7 +450,7 @@ def local_llm_payload(
             "model": model,
             "messages": messages,
             "stream": False,
-            "think": bool(provider.get("thinking", False)),
+            "think": provider.get("thinking", False),
             "options": {"temperature": temperature},
         }
         if response_schema is not None: payload["format"] = response_schema

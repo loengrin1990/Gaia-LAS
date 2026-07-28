@@ -17,3 +17,6 @@
 ## Текущий статус
 
 Завершено: corrective review reliability. Перед commit выполнены целевые Python/API/E2E/Node-проверки, syntax check и native host build.
+# Compatibility decision
+
+Выбран ручной локальный профиль `gpt-oss:20b` с `format="json"` и `think="low"` только для `context_compiler`. Полный schema object остаётся полезным диагностическим режимом, однако в этой связке Ollama он уводит ответ gpt-oss в thinking; Gaia читает только final response и не разбирает thinking. Автоматическое переключение моделей не добавляется.

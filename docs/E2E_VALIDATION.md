@@ -44,3 +44,6 @@
 # Проверка context compiler job
 
 Проверка API должна ожидать `202` от `POST /api/context/<artifact>/compile`, затем опрашивать `status_url` до `done`, `failed` или `cancelled`. Успешные кандидаты находятся в `result.candidates`; progress содержит счётчики фрагментов. Тесты используют synthetic model и не зависят от Ollama.
+# Context compiler live smoke
+
+Перед ручной приёмкой выполните `python3 scripts/smoke_context_compiler.py`. Успех означает валидные offsets, receipt без повторного вызова модели, четыре базовых типа и metadata действия. Для диагностики профилей используйте `python3 scripts/diagnose_context_models.py`; его вывод безопасен и не содержит материалов или ответов модели.

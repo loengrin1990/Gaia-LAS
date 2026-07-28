@@ -261,8 +261,18 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
             if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= float(temperature) <= 1:
                 raise ConfigError(f"Config value `local_llm.routes.{name}.temperature` must be between 0 and 1.")
             route["temperature"] = float(temperature)
+        thinking = value.get("thinking")
+        if thinking is not None:
+            if not isinstance(thinking, (bool, str)) or isinstance(thinking, str) and thinking not in {"low", "medium", "high"}:
+                raise ConfigError(f"Config value `local_llm.routes.{name}.thinking` must be boolean or low, medium, high.")
+            route["thinking"] = thinking
+        structured_output = value.get("structured_output")
+        if structured_output is not None:
+            if structured_output not in {"schema", "json"}:
+                raise ConfigError(f"Config value `local_llm.routes.{name}.structured_output` must be schema or json.")
+            route["structured_output"] = structured_output
         if name == "context_compiler":
-            allowed = {"provider", "model", "prompt_char_limit", "max_tokens", "context_length", "temperature", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"}
+            allowed = {"provider", "model", "prompt_char_limit", "max_tokens", "context_length", "temperature", "thinking", "structured_output", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"}
             unknown = sorted(set(value) - allowed)
             if unknown:
                 raise ConfigError(f"Config route `context_compiler` contains unsupported fields: {', '.join(unknown)}.")
