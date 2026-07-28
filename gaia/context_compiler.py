@@ -177,7 +177,7 @@ class ContextService:
             if filters.get("conflict") == "false" and item.get("relation_ids"): continue
             if filters.get("deadline") == "true" and not item.get("deadline"): continue
             if filters.get("actor") == "true" and not item.get("actor_ref"): continue
-            sections[item["item_type"]].append({key:item.get(key) for key in ("title","statement","status","actor_ref","deadline","updated_at","source_links","relation_ids")})
+            sections[item["item_type"]].append({key:item.get(key) for key in ("item_type","title","statement","status","actor_ref","deadline","updated_at","source_links","relation_ids")})
         return sections
 
 def validate_candidates(payload: Any, length: int) -> list[dict[str, Any]]:

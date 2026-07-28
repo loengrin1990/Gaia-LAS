@@ -7,6 +7,17 @@ from gaia.ui import INDEX_HTML, load_index_html
 
 
 class UiReviewContractTests(unittest.TestCase):
+    def test_context_search_controls_are_accessible_and_non_technical(self) -> None:
+        self.assertIn('id="contextSearchQuery"', INDEX_HTML)
+        self.assertIn('id="contextSearchForm"', INDEX_HTML)
+        self.assertIn('id="contextSearchReset"', INDEX_HTML)
+        self.assertIn('id="contextSearchMore"', INDEX_HTML)
+        self.assertIn('Найдено элементов:', INDEX_HTML)
+        self.assertIn('Есть связанный вариант', INDEX_HTML)
+        self.assertIn("resetContextSearch();", INDEX_HTML)
+        self.assertNotIn("window.prompt", INDEX_HTML)
+        self.assertNotIn("window.confirm", INDEX_HTML)
+
     def test_stage_six_journey_uses_business_sections_and_central_statuses(self) -> None:
         for label in ("Материалы", "Проверка", "Контекст проекта", "Сводка"):
             self.assertIn(label, INDEX_HTML)

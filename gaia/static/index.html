@@ -1152,6 +1152,9 @@
     .candidate-flag { font-size:12px; color:#ffe0a0; font-weight:700; }
     .summary-filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; margin-bottom:16px; }
     .summary-filters label { margin:0; }
+    .context-type-filter { margin:0; border:1px solid rgba(175,205,241,.24); border-radius:6px; padding:8px; min-width:0; }
+    .context-type-filter label { display:inline-block; margin:3px 6px 3px 0; font-size:12px; }
+    .context-type-filter input { width:auto; }
     .journey-screen button:focus-visible, .journey-screen select:focus-visible, .journey-screen input:focus-visible { outline:3px solid #f1dfb0; outline-offset:2px; }
     @media (max-width: 720px) { .journey-head { align-items:stretch; } .journey-workspace { width:100%; } }
   </style>
@@ -1212,14 +1215,19 @@
 
     <section id="screen-summary" class="screen journey-screen" aria-labelledby="summaryTitle">
       <div class="journey-head"><div><h2 id="summaryTitle">Сводка проекта</h2><p>Здесь отображаются только подтверждённые актуальные элементы контекста.</p></div><button class="secondary" type="button" onclick="showScreen('materials')">Вернуться к материалам</button></div>
-      <section class="summary-filters" aria-label="Фильтры сводки">
-        <label for="summaryType">Тип<select id="summaryType"><option value="">Все типы</option><option value="requirement">Требования</option><option value="decision">Решения</option><option value="risk">Риски</option><option value="open_question">Открытые вопросы</option><option value="action">Действия</option></select></label>
-        <label for="summaryConflict">Противоречия<select id="summaryConflict"><option value="">Все</option><option value="true">Есть открытое</option></select></label>
-        <label for="summaryDeadline">Срок<select id="summaryDeadline"><option value="">Не важно</option><option value="true">Указан</option></select></label>
-        <label for="summaryActor">Ответственный<select id="summaryActor"><option value="">Не важно</option><option value="true">Указан</option></select></label>
-        <button type="button" onclick="loadJourneySummary()">Применить</button>
-      </section>
-      <div id="journeySummary" class="journey-empty">Контекст ещё не собран.</div>
+      <form id="contextSearchForm" class="summary-filters" aria-label="Поиск и фильтры сводки">
+        <label for="contextSearchQuery">Поиск по контексту<input id="contextSearchQuery" type="search" maxlength="200" autocomplete="off"></label>
+        <fieldset class="context-type-filter"><legend>Типы</legend><label><input name="contextType" type="checkbox" value="requirement"> Требования</label><label><input name="contextType" type="checkbox" value="decision"> Решения</label><label><input name="contextType" type="checkbox" value="risk"> Риски</label><label><input name="contextType" type="checkbox" value="open_question"> Открытые вопросы</label><label><input name="contextType" type="checkbox" value="action"> Действия</label></fieldset>
+        <label for="contextActorPresence">Ответственный<select id="contextActorPresence"><option value="any">Любой</option><option value="present">Указан</option><option value="missing">Не указан</option></select></label>
+        <label for="contextActor">Конкретный ответственный<select id="contextActor"><option value="">Любой</option></select></label>
+        <label for="contextDeadlinePresence">Срок<select id="contextDeadlinePresence"><option value="any">Любой</option><option value="present">Указан</option><option value="missing">Не указан</option></select></label>
+        <label for="contextRelated">Связанные варианты<select id="contextRelated"><option value="any">Все элементы</option><option value="present">Есть связанный вариант</option><option value="none">Без связанных вариантов</option></select></label>
+        <label for="contextSort">Сортировка<select id="contextSort"><option value="">По умолчанию</option><option value="relevance">По соответствию</option><option value="updated_desc">Сначала недавно изменённые</option><option value="updated_asc">Сначала давно изменённые</option><option value="title_asc">По названию</option></select></label>
+        <div class="journey-actions"><button id="contextSearchButton" type="submit">Найти</button><button id="contextSearchReset" class="secondary" type="button">Сбросить</button></div>
+      </form>
+      <p id="contextSearchCount" class="journey-meta" aria-live="polite"></p>
+      <div id="journeySummary" class="journey-empty" aria-live="polite">Подтверждённый проектный контекст пока пуст. Сначала добавьте и подтвердите материалы.</div>
+      <div class="journey-actions"><button id="contextSearchMore" type="button" hidden>Показать ещё</button></div>
     </section>
     <div id="screen-dialog" class="screen">
       <div class="dialog-workspace project-dialogue">
@@ -1577,6 +1585,7 @@
       document.getElementById('journeyReview').textContent = 'Выберите материал из нового рабочего пространства.';
       document.getElementById('journeyContext').className = 'journey-empty';
       document.getElementById('journeyContext').textContent = 'Контекст другого рабочего пространства не показывается.';
+      resetContextSearch();
       loadJourneyMaterials();
     }
     async function loadJourneyMaterials() {
@@ -1658,7 +1667,7 @@
         else if (!review.confirmed) {
           const actions=document.createElement('div'); actions.className='journey-actions';
           for (const [decision,label] of [['replace','Заменить псевдонимом'],['keep','Оставить без изменения']]) { const button=document.createElement('button'); button.type='button'; button.textContent=label; button.onclick=()=>saveJourneyFinding(review.artifact_id,finding.finding_id,decision,button); actions.appendChild(button); }
-          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>{const choices=['Сотрудник','Организация','Подразделение','Проект','Система','Адрес','Идентификатор','Другое'];const value=window.prompt(`Выберите категорию: ${choices.join(', ')}`, finding.category); if(!value){journeyMessage('Категория не выбрана. Данные не изменены. Выберите допустимую категорию и повторите действие.',true);return;} saveJourneyFinding(review.artifact_id,finding.finding_id,'change_category',category,value.trim());}; actions.appendChild(category);
+          const category=document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent='Изменить категорию'; category.onclick=()=>journeyMessage('Изменение категории доступно после выбора значения в карточке проверки.', true); actions.appendChild(category);
           row.appendChild(actions);
         }
         side.appendChild(row);
@@ -1679,7 +1688,16 @@
     function journeyRejectConfirmation(item, button) { const confirmation=document.createElement('div');confirmation.className='journey-actions';const text=document.createElement('span');text.textContent='Отклонить предложение?';const reject=document.createElement('button');reject.type='button';reject.textContent='Да, отклонить';reject.onclick=()=>journeyContextDecision(item,'reject',reject);const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='Отмена';cancel.onclick=()=>{confirmation.remove();button.disabled=false;};confirmation.append(text,reject,cancel);button.after(confirmation);button.disabled=true; }
     async function journeyContextDecision(item, decision, button, title='', statement='') { if(decision==='edit'&&button.type==='button'){journeyContextEditForm(item,button);return;} if(decision==='reject'&&button.textContent==='Отклонить'){journeyRejectConfirmation(item,button);return;} if(decision==='edit'&&(!title.trim()||!statement.trim())){journeyMessage('Укажите заголовок и содержание новой версии.',true);return;} button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(item.id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),decision,title,statement})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по предложению.'),true);button.disabled=false;return;}journeyMessage(decision==='confirm'?'Предложение подтверждено.':decision==='reject'?'Предложение отклонено.':'Создана новая версия предложения.');await loadJourneyContext(); }
     async function journeyConflictDecision(id,resolution,button) {button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(id)}/conflict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),resolution})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по противоречию.'),true);button.disabled=false;return;}await loadJourneyContext();}
-    async function loadJourneySummary() { const root=document.getElementById('journeySummary');root.className='journey-empty';root.textContent='Загружаем сводку…';const query=new URLSearchParams({project:journeyProject()});for(const [key,id] of Object.entries({type:'summaryType',conflict:'summaryConflict',deadline:'summaryDeadline',actor:'summaryActor'})){const value=document.getElementById(id).value;if(value)query.set(key,value);}const response=await fetch(`/api/context/summary?${query}`);const data=await response.json();if(!response.ok){root.textContent=journeyError(data,'Не удалось загрузить сводку.');return;}const items=Object.entries(journeyTypeLabels).flatMap(([type])=>data[type]||[]);root.innerHTML='';if(!items.length){root.className='journey-empty';root.textContent='Подтверждённых элементов по выбранным условиям нет.';return;}root.className='journey-grid';for(const item of items){const card=document.createElement('article');card.className='journey-card';card.innerHTML=`<h3>${item.title}</h3><p>${item.statement}</p><p class="journey-meta">${journeyTypeLabels[item.item_type]||'Элемент'} · источников: ${(item.source_links||[]).length||1}${item.actor_ref ? ` · ответственный: ${item.actor_ref}`:''}${item.deadline ? ` · срок: ${item.deadline}`:''}</p>`;if(item.status==='conflicted'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть открытое противоречие.';card.appendChild(flag);}root.appendChild(card);} }
+    let contextSearchOffset = 0;
+    let contextSearchBusy = false;
+    function contextSearchParams(offset=0) { const query=new URLSearchParams({project:journeyProject(),offset:String(offset)}); const text=document.getElementById('contextSearchQuery').value.trim(); if(text) query.set('q',text); for(const input of document.querySelectorAll('input[name="contextType"]:checked')) query.append('type',input.value); for(const [key,id] of Object.entries({actor_presence:'contextActorPresence',actor:'contextActor',deadline_presence:'contextDeadlinePresence',related:'contextRelated',sort:'contextSort'})){const value=document.getElementById(id).value;if(value)query.set(key,value);} return query; }
+    function resetContextSearch() { contextSearchOffset=0; const form=document.getElementById('contextSearchForm'); if(form) form.reset(); const root=document.getElementById('journeySummary'); if(root){root.className='journey-empty';root.textContent='Подтверждённый проектный контекст пока пуст. Сначала добавьте и подтвердите материалы.';} document.getElementById('contextSearchCount').textContent=''; document.getElementById('contextSearchMore').hidden=true; }
+    function renderContextSearchCard(item) { const card=document.createElement('article');card.className='journey-card'; const type=document.createElement('p');type.className='journey-meta';type.textContent=journeyTypeLabels[item.item_type]||'Элемент'; const title=document.createElement('h3');title.textContent=item.title;const statement=document.createElement('p');statement.textContent=item.statement;card.append(type,title,statement);const details=[];if(item.actor_ref)details.push(`Ответственный: ${item.actor_ref}`);if(item.deadline)details.push(`Срок: ${item.deadline}`);if(item.explicit_status)details.push(`Статус: ${item.explicit_status}`);if(item.priority)details.push(`Приоритет: ${item.priority}`);details.push(`Изменено: ${journeyDate(item.updated_at)}`);details.push(`Подтверждающих источников: ${item.source_count}`);const meta=document.createElement('p');meta.className='journey-meta';meta.textContent=details.join(' · ');card.appendChild(meta);if(item.has_related){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть связанный вариант';card.appendChild(flag);}return card; }
+    async function loadJourneySummary() { return runContextSearch(false); }
+    async function runContextSearch(more=false) { if(contextSearchBusy)return;contextSearchBusy=true;const root=document.getElementById('journeySummary');const button=document.getElementById('contextSearchButton');const moreButton=document.getElementById('contextSearchMore');button.disabled=true;moreButton.disabled=true;if(!more){root.className='journey-empty';root.textContent='Ищем в подтверждённом контексте…';}try{const response=await fetch(`/api/context/search?${contextSearchParams(more?contextSearchOffset:0)}`);const data=await response.json();if(!response.ok){root.className='journey-empty';root.textContent=response.status===400?'Некорректный запрос или фильтр. Проверьте условия поиска.':'Не удалось выполнить поиск. Данные не изменены. Повторите попытку.';return;}if(!more){root.innerHTML='';contextSearchOffset=0;}const count=document.getElementById('contextSearchCount');count.textContent=`Найдено элементов: ${data.total}.`;for(const item of data.results||[])root.appendChild(renderContextSearchCard(item));contextSearchOffset+=data.returned;moreButton.hidden=!data.has_more;if(!data.total){root.className='journey-empty';root.textContent='По выбранному запросу и фильтрам ничего не найдено. Измените условия или сбросьте фильтры.';}else root.className='journey-grid';const actor=document.getElementById('contextActor');const selected=actor.value;actor.innerHTML='<option value="">Любой</option>';for(const item of data.facets.actors||[]){const option=document.createElement('option');option.value=item.value;option.textContent=`${item.value} (${item.count})`;actor.appendChild(option);}actor.value=selected;}catch(_){root.className='journey-empty';root.textContent='Не удалось выполнить поиск. Данные не изменены. Повторите попытку.';}finally{contextSearchBusy=false;button.disabled=false;moreButton.disabled=false;}}
+    document.getElementById('contextSearchForm').addEventListener('submit',event=>{event.preventDefault();loadJourneySummary();});
+    document.getElementById('contextSearchReset').addEventListener('click',resetContextSearch);
+    document.getElementById('contextSearchMore').addEventListener('click',()=>runContextSearch(true));
 
     function showScreen(name) {
       for (const screen of document.querySelectorAll('.screen')) {
@@ -2054,7 +2072,7 @@
           actions.appendChild(button);
         }
         const category = document.createElement('button'); category.type='button'; category.className='secondary'; category.textContent=`Изменить категорию: ${finding.category}`;
-        category.onclick=async()=>{ const value=window.prompt('Категория',finding.category); if(!value)return; await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,finding_id:finding.finding_id,decision:'change_category',category:value})}); };
+        category.onclick=()=>setOutput('Выберите категорию через основной экран проверки материала.');
         actions.appendChild(category);
         const dictionary = document.createElement('button'); dictionary.type='button'; dictionary.className='secondary'; dictionary.textContent=`Добавить в словарь: ${finding.category}`;
         dictionary.onclick=async()=>{ const value=(review.cleaned_text||'').slice(finding.start,finding.end); const res=await fetch(`/api/reviews/${encodeURIComponent(review.artifact_id)}/dictionary`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:document.getElementById('project').value,category:finding.category,value})}); const data=await res.json(); if(res.ok){ state.textContent='Создана новая версия очищенного материала'; } };
@@ -2076,7 +2094,7 @@
         const confirm=document.createElement('button'); confirm.type='button'; confirm.className='secondary'; confirm.textContent=`Подтвердить: ${item.title}`;
         confirm.onclick=()=>saveContextDecision(item.id,'confirm'); actions.appendChild(confirm);
         const edit=document.createElement('button'); edit.type='button'; edit.className='secondary'; edit.textContent=`Уточнить: ${item.title}`;
-        edit.onclick=()=>{const title=window.prompt('Краткий заголовок',item.title); const statement=window.prompt('Содержание',item.statement); if(title&&statement) saveContextDecision(item.id,'edit',title,statement);}; actions.appendChild(edit);
+        edit.onclick=()=>setOutput('Уточнение контекста доступно через основной экран «Контекст проекта».'); actions.appendChild(edit);
         const reject=document.createElement('button'); reject.type='button'; reject.className='secondary'; reject.textContent=`Отклонить: ${item.title}`;
         reject.onclick=()=>saveContextDecision(item.id,'reject'); actions.appendChild(reject);
         if ((item.relation_ids||[]).length) {
@@ -2087,7 +2105,7 @@
           const both=document.createElement('button'); both.type='button'; both.className='secondary'; both.textContent=`Сохранить оба варианта: ${item.title}`;
           both.onclick=()=>saveContextConflict(item.id,'keep_both'); actions.appendChild(both);
           const duplicate=document.createElement('button'); duplicate.type='button'; duplicate.className='secondary'; duplicate.textContent=`Отметить повтором: ${item.title}`;
-          duplicate.onclick=()=>{const choices=candidates.filter(other=>other.id!==item.id&&other.item_type===item.item_type); const position=window.prompt(`Номер исходного ${contextTypeLabel[item.item_type].toLowerCase()}: ${choices.map((other,index)=>`${index+1}. ${other.title}`).join('; ')}`); const target=choices[Number(position)-1]; if(target) saveContextDuplicate(item.id,target.id);}; actions.appendChild(duplicate);
+          duplicate.onclick=()=>setOutput('Отметка повтора доступна через основной экран «Контекст проекта».'); actions.appendChild(duplicate);
         }
       }
     }

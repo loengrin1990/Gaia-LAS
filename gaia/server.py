@@ -30,7 +30,9 @@ from .conversations import (
 from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
 from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError
+from .context_search import ContextSearchError, parse_params, search
 from .provenance import ProvenanceError
+from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .launchers import close_gaia_window, launch_gaia_window, launch_module
 from .local_llm import check_local_llm, run_lm_studio
 from .models import ApiError
@@ -583,6 +585,19 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path); parts=route.path.split("/"); project=parse_qs(route.query).get("project",[""])[0]
         try:
             service=ControlledIntake().context(project)
+            if route.path == "/api/context/search":
+                started = datetime.now().timestamp(); trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+                try:
+                    params = parse_params(parse_qs(route.query, keep_blank_values=True))
+                    payload = search(service.list(), params)
+                    emit_runtime_diagnostic("context_search", "context_search", trace_id, workspace_hash=hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12], query_length=len(parse_qs(route.query, keep_blank_values=True).get("q", [""])[0]), term_count=len(params.terms), filter_names=",".join(name for name in ("type", "actor_presence", "actor", "deadline_presence", "related") if name in parse_qs(route.query, keep_blank_values=True)), sort_mode=params.sort, result_count=payload["total"], duration_ms=int((datetime.now().timestamp()-started)*1000))
+                    json_response(self, payload); return
+                except ContextSearchError as exc:
+                    emit_runtime_diagnostic("context_search", "context_search", trace_id, workspace_hash=hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12], error_code="invalid_request", exception_type=type(exc).__name__)
+                    error_response(self, "invalid_context_search", str(exc), 400); return
+                except Exception as exc:
+                    emit_runtime_diagnostic("context_search", "context_search", trace_id, workspace_hash=hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12], error_code="internal_error", exception_type=type(exc).__name__)
+                    error_response(self, "context_search_failed", "Не удалось выполнить поиск. Данные не изменены. Повторите попытку.", 500); return
             if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
             if len(parts) >= 5 and parts[4] == "status":
                 candidates = [item for item in service.list() if parts[3] in item.get("parents", [])]
