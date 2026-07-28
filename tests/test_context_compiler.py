@@ -117,6 +117,15 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertIn("response_schema", call.call_args.kwargs)
         self.assertIn("Разрешённые необязательные поля", call.call_args.args[0])
         self.assertIn("не придумывай ответственного", call.call_args.args[0])
+        self.assertIn("Сопоставление optional metadata", call.call_args.args[0])
+        self.assertIn("actor_ref «[Координатор-Север]»", call.call_args.args[0])
+        self.assertIn("deadline «15 сентября 2026 года»", call.call_args.args[0])
+        schema = call.call_args.kwargs["response_schema"]
+        candidate = schema["properties"]["candidates"]["items"]
+        self.assertNotIn("actor_ref", candidate["required"])
+        self.assertNotIn("deadline", candidate["required"])
+        self.assertNotIn("status", candidate["required"])
+        self.assertNotIn("priority", candidate["required"])
         with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":""}):
             with self.assertRaises(ContextCompileError) as empty: local_context_model("[Сотрудник-01]")
         self.assertEqual(empty.exception.diagnostic_code,"empty_response")
