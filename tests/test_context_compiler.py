@@ -11,7 +11,7 @@ from unittest.mock import patch
 from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
 from gaia.review import ReviewService
-from gaia.context_compiler import ContextCompiler, ContextService, validate_candidates
+from gaia.context_compiler import CandidateValidationError, ContextCompiler, ContextService, validate_candidates
 from gaia.context_compiler import ContextCompileError, local_context_model
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
@@ -19,7 +19,7 @@ from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 class ContextCompilerTests(unittest.TestCase):
     def setup(self):
         tmp=tempfile.TemporaryDirectory(); s=ProvenanceStore(Path(tmp.name)); w=s.create_workspace(); src=s.accept_bytes(w,b"[PERSON_1] decided: use local review. Risk: delay.","text/plain"); ext=s.create_extraction(w,src["source_id"],"v1"); san=protect(s,w,ext["artifact_id"])["sanitized"]
-        ReviewService(s,w,lambda text:{"findings":[]}).start(san["artifact_id"]); ReviewService(s,w).confirm(san["artifact_id"])
+        ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san["artifact_id"]); ReviewService(s,w).confirm(san["artifact_id"])
         return tmp,s,w,san
     def test_compiles_confirmed_only_idempotently_and_preserves_provenance(self):
         tmp,s,w,san=self.setup()
@@ -37,6 +37,8 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(len(compiler.compile(san["artifact_id"])),5)
             service=ContextService(s,w); confirmed=service.decide(items[0]["id"],"confirm"); self.assertEqual(service.summary()["requirement"][0]["title"], confirmed["title"])
             edited=service.decide(confirmed["id"],"edit","Новая версия","Уточнённое требование."); self.assertTrue(edited["current"]); self.assertFalse(s.object_metadata(w,confirmed["id"])["current"])
+            with self.assertRaisesRegex(ProvenanceError, "устарела"):
+                service.decide(confirmed["id"], "reject")
         finally: tmp.cleanup()
     def test_rejects_unconfirmed_and_invalid_model_result(self):
         tmp,s,w,san=self.setup()
@@ -52,6 +54,30 @@ class ContextCompilerTests(unittest.TestCase):
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[{**valid,"extra":"no"}]},20)
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[{**valid,"block":{"start":0,"end":21}}]},20)
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[valid]*33},20)
+
+    def test_validator_rejects_the_real_model_shape_without_writing_candidates(self):
+        valid={"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":5},"confidence":"low","requires_review":True}
+        cases = [
+            ({"candidates":[{**valid,"confidence":1}]}, "schema_field"),
+            ({"candidates":[{**valid,"requires_review":None,"requires review":True}]}, "schema_unknown_field"),
+            ({"candidates":[{key:value for key,value in valid.items() if key != "requires_review"}]}, "schema_required_fields"),
+            ({"candidates":[{**valid,"type":"требование"}]}, "unknown_type"),
+            ({"candidates":[{**valid,"type":"solution"}]}, "unknown_type"),
+            ({"candidates":[valid,{**valid,"title":42}]}, "schema_field"),
+        ]
+        for payload, code in cases:
+            with self.subTest(code=code), self.assertRaises(CandidateValidationError) as rejected:
+                validate_candidates(payload,20)
+            self.assertEqual(rejected.exception.diagnostic_code, code)
+        tmp,s,w,san=self.setup()
+        try:
+            runtime_shape={"candidates":[{**valid,"confidence":1}]}
+            with self.assertRaises(ContextCompileError) as rejected:
+                ContextCompiler(s,w,lambda text:runtime_shape).compile(san["artifact_id"])
+            self.assertEqual(rejected.exception.code,"local_model_invalid")
+            self.assertEqual(rejected.exception.diagnostic_code,"schema_field")
+            self.assertEqual(ContextService(s,w).list(),[])
+        finally: tmp.cleanup()
 
     def test_model_failure_is_safe_and_does_not_change_existing_context(self):
         tmp,s,w,san=self.setup()
@@ -71,6 +97,9 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(invalid.exception.code, "local_model_invalid")
         self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
         self.assertEqual(call.call_args.args[1], 45)
+        with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":""}):
+            with self.assertRaises(ContextCompileError) as empty: local_context_model("[Сотрудник-01]")
+        self.assertEqual(empty.exception.diagnostic_code,"empty_response")
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()
@@ -86,7 +115,7 @@ class ContextCompilerTests(unittest.TestCase):
             source_id=s.object_metadata(w,san["parents"][0])["parents"][0]
             ext=s.create_extraction(w,source_id,"v2")
             san2=protect(s,w,ext["artifact_id"],rules_version="v2")["sanitized"]
-            ReviewService(s,w,lambda text:{"findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
+            ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
             second=ContextCompiler(s,w,model).compile(san2["artifact_id"])
             action=next(x for x in second if x["item_type"]=="action")
             self.assertEqual(len(action["source_links"]),2)

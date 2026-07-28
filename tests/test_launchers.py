@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -8,16 +12,35 @@ from gaia.launchers import launch_gaia_window, launch_module, wait_for_runtime
 
 
 class LauncherTests(unittest.TestCase):
+    @patch("gaia.launchers.native_host_app_path")
     @patch("gaia.launchers.wait_for_runtime", return_value={"ok": True, "runtime": {"runtime_id": "runtime-a"}})
     @patch("gaia.launchers.subprocess.Popen")
-    def test_gaia_window_uses_system_webkit_launcher(self, popen, ready) -> None:
+    def test_gaia_window_prefers_built_native_host(self, popen, ready, native_host) -> None:
+        native_host.return_value.exists.return_value = True
         result = launch_gaia_window()
 
         self.assertTrue(result["ok"])
         command = popen.call_args.args[0]
-        self.assertEqual(command[:3], ["/usr/bin/osascript", "-l", "JavaScript"])
-        self.assertIn("gaia_window.js", command[3])
-        self.assertIn("runtime=runtime-a", command[4])
+        self.assertEqual(command[0], "open")
+        self.assertIn("нативном", result["message"])
+
+    @patch("gaia.launchers.native_host_app_path")
+    @patch("gaia.launchers.wait_for_runtime", return_value={"ok": True, "runtime": {"runtime_id": "runtime-a"}})
+    @patch("gaia.launchers.subprocess.Popen")
+    def test_jxa_remains_diagnostic_fallback_when_native_app_is_absent(self, popen, ready, native_host) -> None:
+        native_host.return_value.exists.return_value = False
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"GAIA_STAGE6_RUNTIME_DIAGNOSTICS": "1", "GAIA_STAGE6_DIAGNOSTICS_PATH": f"{directory}/events.jsonl"},
+            clear=False,
+        ):
+            result = launch_gaia_window()
+
+        self.assertTrue(result["ok"])
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(environment["GAIA_STAGE6_RUNTIME_DIAGNOSTICS"], "1")
+        self.assertIn("GAIA_STAGE6_DIAGNOSTICS_PATH", environment)
+        self.assertTrue(environment["GAIA_STAGE6_DIAGNOSTICS_CONFIGURATION_ID"])
 
     @patch("gaia.launchers.wait_for_runtime", return_value={"ok": False, "error": "сервер Gaia не ответил"})
     @patch("gaia.launchers.subprocess.Popen")
@@ -52,7 +75,99 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("NSOpenPanel.openPanel", script)
         self.assertIn("$.GaiaFilePanelDelegate.alloc.init", script)
         self.assertNotIn("const FilePanelDelegate", script)
+        self.assertIn("let filePanelDelegate = null", script)
+        self.assertIn("const result = panel.runModal;", script)
+        self.assertNotIn("panel.runModal()", script)
         self.assertIn("webView.setUIDelegate(filePanelDelegate)", script)
+
+    def test_system_window_has_opt_in_runtime_file_picker_diagnostics_contract(self) -> None:
+        script = (Path(__file__).parents[1] / "gaia" / "gaia_window.js").read_text(encoding="utf-8")
+        for event_code in ("upload_control_pointer_received", "file_input_activation_requested", "file_input_click_event_received", "dom_file_input_click", "wkui_delegate_body_entered", "webkit_file_picker_request", "wkui_delegate_callback_received", "open_panel_started", "open_panel_runmodal_invocation_started", "open_panel_runmodal_returned", "open_panel_result_decoding_started", "open_panel_result", "selected_urls_read_started", "selected_urls_read_completed", "completion_handler_argument_inspection_started", "completion_handler_argument_inspected", "completion_handler_invocation_started", "completion_handler_called", "upload_flow_started"):
+            self.assertIn(f'"{event_code}"', script)
+        self.assertIn("GAIA_STAGE6_RUNTIME_DIAGNOSTICS", script)
+        self.assertIn("selected_url_count", script)
+        self.assertNotIn("panel.URL.path", script)
+        self.assertNotIn("panel.URLs.description", script)
+
+    def test_runtime_diagnostics_delegate_exports_wk_script_message_handler_selector(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--diagnostics-delegate-smoke"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "WKScriptMessageHandler available")
+
+    def test_file_panel_delegate_exports_wkui_open_panel_selector(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--file-panel-delegate-smoke"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "WKUIDelegate open-panel handler available")
+
+    def test_file_panel_delegate_runtime_abi_matches_webkit_open_panel_contract(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--file-panel-delegate-abi"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        report = json.loads(result.stdout)
+
+        self.assertTrue(report["selector_present"])
+        self.assertTrue(report["responds_to_selector"])
+        self.assertTrue(report["instances_respond_to_selector"])
+        self.assertTrue(report["method_get_available"])
+        self.assertEqual(report["runtime_type_encoding"], "v@:@@@@?")
+        self.assertEqual(report["signature_argument_count"], 6)
+        self.assertEqual(report["return_type"], "v")
+        self.assertEqual(report["argument_types"], ["@", ":", "@", "@", "@", "@?"])
+
+    def test_completion_block_bridge_harness_reports_jxa_limitation_without_addresses(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        result = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--completion-block-bridge-harness"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        report = json.loads(result.stdout)
+
+        self.assertTrue(report["block_typed"])
+        self.assertEqual(report["receipts"], 2)
+        self.assertFalse(report["js_callable"])
+        self.assertFalse(report["objc_wrapped"])
+        self.assertEqual(report["direct_bridge"], "unavailable")
+        self.assertNotIn("0x", result.stdout)
+
+    def test_runtime_diagnostics_jxa_writer_reaches_the_requested_jsonl(self) -> None:
+        script = Path(__file__).parents[1] / "gaia" / "gaia_window.js"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.touch()
+            environment = os.environ | {
+                "GAIA_STAGE6_RUNTIME_DIAGNOSTICS": "1",
+                "GAIA_STAGE6_DIAGNOSTICS_PATH": str(path),
+                "GAIA_STAGE6_DIAGNOSTICS_CONFIGURATION_ID": "test-config-id",
+            }
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-l", "JavaScript", str(script), "--diagnostics-writer-smoke"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            event = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.stdout.strip(), "Stage 6 diagnostics writer available")
+        self.assertIn("gaia_stage6_diagnostics:diagnostics_window_process_enabled", result.stderr)
+        self.assertEqual(event["event_code"], "diagnostics_window_process_enabled")
+        self.assertNotIn("/", json.dumps(event))
 
     @patch("gaia.launchers.launch_gaia_window", return_value={"ok": True})
     def test_gaia_module_opens_system_window(self, launch) -> None:

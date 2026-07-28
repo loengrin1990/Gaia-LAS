@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from gaia.controlled_intake import ControlledIntake
 from gaia.provenance import ProvenanceStore
+from gaia.review import LocalReviewError
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 
 
@@ -40,11 +41,11 @@ class EndToEndValidationTests(unittest.TestCase):
             if organization in text:
                 start = text.index(organization)
                 false_start = text.index("Риск")
-                return {"findings": [
+                return {"status": "completed", "findings": [
                     {"category": "Организация", "start": start, "end": start + len(organization), "confidence": "high", "reason_code": "residual", "requires_review": True},
                     {"category": "Другое", "start": false_start, "end": false_start + 4, "confidence": "low", "reason_code": "false_positive", "requires_review": True},
                 ]}
-            return {"findings": []}
+            return {"status": "completed", "findings": []}
 
         def context_model(text: str) -> dict[str, object]:
             conflict = "иной локальный" in text
@@ -185,6 +186,64 @@ class EndToEndValidationTests(unittest.TestCase):
                 safe_text = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in safe_files)
                 for marker in raw_markers:
                     self.assertNotIn(marker, safe_text)
+            finally:
+                if server:
+                    server.shutdown(); server.server_close()
+                temporary.cleanup()
+
+    def test_manual_confirmation_allows_existing_context_compiler_route(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        store = ProvenanceStore(Path(temporary.name) / "storage")
+        project = "synthetic-manual"
+        server: ThreadingHTTPServer | None = None
+
+        def context_model(_: str) -> dict[str, object]:
+            return {"candidates": [
+                {"type": "requirement", "title": "Проверка", "statement": "Проверять материал вручную.", "block": {"start": 0, "end": 1}, "confidence": "high", "requires_review": True},
+            ]}
+
+        def indeterminate(_: str) -> dict[str, object]:
+            raise LocalReviewError("local_model_timeout", "synthetic", {"trace_id": "gaia-test", "stage": "local_review", "provider": "synthetic", "response_chars": 0})
+
+        with patch("gaia.controlled_intake.default_store", return_value=store), patch("gaia.review.local_model_review", side_effect=indeterminate), patch("gaia.context_compiler.local_context_model", side_effect=context_model), patch("gaia.server.submit_analyze_job", return_value=SimpleNamespace(id="job_manual")):
+            def request(method: str, path: str, payload: dict[str, object] | bytes | None = None, content_type: str = "application/json") -> tuple[int, dict[str, object]]:
+                assert server is not None
+                body = payload if isinstance(payload, bytes) else (json.dumps(payload).encode("utf-8") if payload is not None else None)
+                port = server.server_address[1]
+                headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}", "Content-Type": content_type}
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+                connection.request(method, path, body, headers)
+                response = connection.getresponse()
+                data = json.loads(response.read().decode("utf-8"))
+                connection.close()
+                return response.status, data
+
+            try:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                boundary = "----manual-boundary"
+                body = (
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"project\"\r\n\r\n{project}\r\n"
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"manual.txt\"\r\nContent-Type: text/plain\r\n\r\nТребование: проверить материал.\r\n"
+                    f"--{boundary}--\r\n"
+                ).encode("utf-8")
+                status, accepted = request("POST", "/api/analyze", body, f"multipart/form-data; boundary={boundary}")
+                self.assertEqual(status, 202)
+                artifact_id = str(accepted["review"]["artifact_id"])
+                self.assertEqual(request("POST", f"/api/reviews/{artifact_id}/check", {"project": project})[1]["state"], "manual_review_required")
+                self.assertEqual(request("POST", f"/api/context/{artifact_id}/compile", {"project": project})[0], 400)
+                self.assertEqual(request("POST", f"/api/reviews/{artifact_id}/confirm", {"project": project})[0], 202)
+                repeated_status, repeated = request("POST", f"/api/reviews/{artifact_id}/confirm", {"project": project})
+                self.assertEqual(repeated_status, 200)
+                self.assertEqual(repeated["confirmation_method"], "manual")
+                status, review = request("GET", f"/api/reviews/{artifact_id}?project={project}")
+                self.assertEqual(status, 200)
+                self.assertTrue(review["confirmed"])
+                self.assertEqual(review["confirmation_method"], "manual")
+                status, compiled = request("POST", f"/api/context/{artifact_id}/compile", {"project": project})
+                self.assertEqual(status, 202)
+                self.assertEqual(len(compiled["candidates"]), 1)
+                self.assertEqual(len(request("POST", f"/api/context/{artifact_id}/compile", {"project": project})[1]["candidates"]), 1)
             finally:
                 if server:
                     server.shutdown(); server.server_close()

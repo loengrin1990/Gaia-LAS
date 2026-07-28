@@ -21,6 +21,7 @@ TASK_VEIL_REVIEW = "veil_review"
 TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
 TASK_PROJECT_HEALTH = "project_health"
 TASK_CONTEXT_COMPILER = "context_compiler"
+CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_8b", "prompt_char_limit": 6000, "max_tokens": 600}
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -129,7 +130,7 @@ def provider_endpoint(name: str) -> str:
 
 def resolve_route(task: str) -> dict[str, Any]:
     routes = route_configs()
-    route = routes.get(task, {})
+    route = routes.get(task, CONTEXT_COMPILER_DEFAULT_ROUTE if task == TASK_CONTEXT_COMPILER and "ollama_qwen3_8b" in provider_configs() else {})
     provider = str(route.get("provider") or default_provider_name())
     provider_data = provider_config(provider)
     model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)

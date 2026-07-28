@@ -24,6 +24,19 @@ class ServerContractTests(unittest.TestCase):
         service.start.assert_called_once_with("san_1")
         submit.assert_not_called(); response.assert_called_once()
 
+    def test_indeterminate_review_is_returned_without_submitting_analysis(self) -> None:
+        service = Mock(); service.start.return_value = {"artifact_id": "san_1", "state": "manual_review_required", "findings": [], "confirmed": False}
+        intake = Mock(); intake.review.return_value = service
+        handler = SimpleNamespace(path="/api/reviews/san_1/check", read_json=lambda: {"project": "synthetic"})
+        with (
+            patch("gaia.server.ControlledIntake", return_value=intake),
+            patch("gaia.server.json_response") as response,
+            patch("gaia.server.submit_analyze_job") as submit,
+        ):
+            Handler.handle_review_action(handler)
+        self.assertEqual(response.call_args.args[1]["state"], "manual_review_required")
+        submit.assert_not_called()
+
     def test_review_confirmation_submits_only_cleaned_text(self) -> None:
         service = Mock(); service.confirm.return_value = "[PERSON_1]"
         intake = Mock(); intake.review.return_value = service
@@ -62,7 +75,7 @@ class ServerContractTests(unittest.TestCase):
         compiler.compile.assert_called_once_with("san_1"); self.assertEqual(response.call_args.args[1]["candidates"][0]["id"],"ctx_1")
 
     def test_context_compile_reports_safe_specific_error(self) -> None:
-        compiler=Mock(); compiler.compile.side_effect=ContextCompileError("local_model_invalid", "synthetic")
+        compiler=Mock(); compiler.compile.side_effect=ContextCompileError("local_model_invalid", "synthetic", "schema_field")
         intake=Mock(); intake.compiler.return_value=compiler; intake.store.root=Mock()
         handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
         with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.context_compile_failure") as diagnostic,patch("gaia.server.json_response") as response):
@@ -71,6 +84,7 @@ class ServerContractTests(unittest.TestCase):
         error=response.call_args.args[1]["error"]
         self.assertEqual(error["code"],"local_model_invalid")
         self.assertIn("не прошёл проверку",error["message"])
+        self.assertIn("CONTEXT_SCHEMA_FIELD",error["message"])
         self.assertNotIn("synthetic",error["message"])
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"

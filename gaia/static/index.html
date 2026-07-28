@@ -209,6 +209,34 @@
       line-height: 1.35;
     }
     label { display: block; font-size: 13px; font-weight: 650; margin: 12px 0 6px; }
+    .native-file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .native-file-control {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      padding: 0 14px;
+      margin: 12px 0 0;
+      border: 1px solid rgba(175,205,241,.24);
+      border-radius: 6px;
+      background: rgba(18,41,81,.88);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .native-file-input:focus-visible + .native-file-control {
+      outline: 3px solid rgba(126,184,255,.85);
+      outline-offset: 3px;
+    }
     select, textarea, input[type=file] {
       width: 100%;
       border: 1px solid rgba(175,205,241,.24);
@@ -1164,9 +1192,9 @@
         <div class="journey-workspace"><label for="journeyProject">Рабочее пространство</label><select id="journeyProject" onchange="changeJourneyWorkspace()"></select></div>
       </div>
       <section>
-        <label for="journeyFiles">Добавить материал</label>
-        <input id="journeyFiles" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
-        <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить материалы</button></div>
+        <input id="journeyFiles" class="native-file-input" type="file" multiple accept=".txt,.md,.pdf,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.mov,.mkv">
+        <label class="native-file-control" data-file-input-control="journey" for="journeyFiles">Выбрать материалы</label>
+        <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить выбранные материалы</button></div>
         <div id="journeyMaterialsNotice" class="journey-notice" hidden role="status" aria-live="polite"></div>
       </section>
       <div id="journeyMaterials" class="journey-grid" aria-live="polite"></div>
@@ -1499,8 +1527,9 @@
       accepted: { label: 'Добавляется', detail: 'Материал принят и готовится к обработке.', tone: 'warn', next: 'Откройте материал позже.' },
       ready: { label: 'Готово к подтверждению', detail: 'Очищенная версия готова к проверке.', tone: 'warn', next: 'Откройте проверку материала.' },
       requires_review: { label: 'Требуется проверка', detail: 'Нужно принять решения по найденным местам.', tone: 'danger', next: 'Откройте проверку материала.' },
-      ready_for_confirmation: { label: 'Готово к подтверждению', detail: 'Все найденные места обработаны.', tone: 'ok', next: 'Подтвердите актуальную очищенную версию.' },
-      review_error: { label: 'Локальная проверка не завершилась', detail: 'Данные не изменены.', tone: 'danger', next: 'Повторите локальную проверку.' },
+      ready_for_confirmation: { label: 'Проверка завершена', detail: 'Проверка завершена: дополнительных сведений не найдено.', tone: 'ok', next: 'Подтвердите актуальную очищенную версию.' },
+      manual_review_required: { label: 'Нужна ручная проверка', detail: 'Автоматическая проверка не завершена. Проверьте очищенный текст вручную.', tone: 'danger', next: 'После ручной проверки явно подтвердите актуальную очищенную версию.' },
+      review_error: { label: 'Локальная проверка не завершилась', detail: 'Автоматическая проверка не завершена. Проверьте очищенный текст вручную.', tone: 'danger', next: 'Повторите локальную проверку.' },
       review_in_progress: { label: 'Проверка продолжается', detail: 'Часть решений уже сохранена.', tone: 'warn', next: 'Завершите проверку и подтвердите актуальную версию.' },
       confirmed: { label: 'Подтверждено', detail: 'Актуальная очищенная версия подтверждена.', tone: 'ok', next: 'Соберите проектный контекст.' },
       superseded: { label: 'Создана новая версия', detail: 'Прежняя версия больше не является актуальной.', tone: 'warn', next: 'Откройте актуальную версию материала.' },
@@ -1574,17 +1603,37 @@
     async function uploadJourneyMaterials() {
       const input = document.getElementById('journeyFiles'); const files = Array.from(input.files || []); const project = journeyProject();
       const query = ''; const hasFiles = files.length > 0;
+      nativeFileDiagnostics('file_list_received', {file_count:files.length, input_connected:!!input?.isConnected, input_disabled:!!input?.disabled});
       if (!query && !hasFiles) { journeyMessage('Выберите хотя бы один файл перед добавлением.', true); return; }
       const button = document.getElementById('journeyUploadButton'); button.disabled = true; journeyMessage('Добавляем материал и выполняем локальную очистку…');
+      nativeFileDiagnostics('upload_flow_started', {file_count:files.length, upload_started:true});
       const form = new FormData(); form.append('project', project); for (const file of files) form.append('files', file);
       try {
         const response = await fetch('/api/analyze', { method:'POST', body:form }); const data = await response.json();
-        if (!response.ok) { journeyMessage(journeyError(data, 'Не удалось добавить файл.'), true); return; }
+        if (!response.ok) { nativeFileDiagnostics('upload_flow_failed', {http_status:response.status, error_code:'http_error'}); journeyMessage(journeyError(data, 'Не удалось добавить файл.'), true); return; }
         input.value = ''; journeyMessage('Материал добавлен. Откройте проверку очищенной версии.'); await loadJourneyMaterials();
+        nativeFileDiagnostics('upload_flow_completed', {http_status:response.status});
         if (data.review?.artifact_id) openJourneyReview(data.review.artifact_id);
-      } catch (_) { journeyMessage('Не удалось связаться с Gaia. Данные не были добавлены. Проверьте, что приложение открыто на этом устройстве.', true); }
+      } catch (_) { nativeFileDiagnostics('upload_flow_failed', {error_code:'network_error'}); journeyMessage('Не удалось связаться с Gaia. Данные не были добавлены. Проверьте, что приложение открыто на этом устройстве.', true); }
       finally { button.disabled = false; }
     }
+    function nativeFileDiagnostics(event, fields) {
+      const target = window.webkit?.messageHandlers?.gaiaNativeDiagnostics;
+      if (target?.postMessage) target.postMessage(Object.assign({event}, fields || {}));
+    }
+    const journeyFilesInput = document.getElementById('journeyFiles');
+    journeyFilesInput.addEventListener('click', (event) => {
+      nativeFileDiagnostics('file_input_click_received', {event_is_trusted:!!event.isTrusted, input_connected:!!journeyFilesInput.isConnected, input_disabled:!!journeyFilesInput.disabled});
+    });
+    journeyFilesInput.addEventListener('input', (event) => {
+      const input = event.currentTarget;
+      nativeFileDiagnostics('file_input_input_event_received', {file_count:(input.files || []).length, event_is_trusted:!!event.isTrusted, input_connected:!!input.isConnected, input_disabled:!!input.disabled});
+    });
+    journeyFilesInput.addEventListener('change', (event) => {
+      const input = event.currentTarget;
+      nativeFileDiagnostics('file_input_change_event_received', {file_count:(input.files || []).length, event_is_trusted:!!event.isTrusted, input_connected:!!input.isConnected, input_disabled:!!input.disabled});
+      uploadJourneyMaterials();
+    });
     async function openJourneyReview(artifactId) {
       showScreen('review'); const root = document.getElementById('journeyReview'); root.className='journey-empty'; root.textContent='Загружаем очищенную версию…';
       const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(journeyProject())}`); const data = await response.json();
@@ -1599,6 +1648,7 @@
       const side=document.createElement('section'); side.className='journey-card'; side.innerHTML='<h3>Результат проверки</h3>';
       const badge=document.createElement('span'); badge.className=`journey-status ${state.tone}`; badge.textContent=state.label; side.appendChild(badge);
       const explanation=document.createElement('p'); explanation.textContent=state.detail; side.appendChild(explanation);
+      if (review.confirmed && review.confirmation_method === 'manual') { const manual=document.createElement('p'); manual.className='journey-meta'; manual.textContent='Ручная проверка подтверждена пользователем.'; side.appendChild(manual); }
       if ((review.carried_decisions || []).length) { const carried=document.createElement('p'); carried.className='journey-meta'; carried.textContent=`Сохранены решения предыдущей версии: ${review.carried_decisions.length}. Новая версия требует отдельного подтверждения.`; side.appendChild(carried); }
       for (const finding of review.findings || []) {
         const row=document.createElement('div'); row.className='journey-card'; const saved=decisions.get(finding.finding_id);
@@ -1614,18 +1664,20 @@
         side.appendChild(row);
       }
       const actions=document.createElement('div'); actions.className='journey-actions';
-      if (!review.confirmed) { if (['not_started','review_error'].includes(review.state)) { const check=document.createElement('button'); check.type='button'; check.className='secondary'; check.textContent=review.state==='review_error'?'Повторить локальную проверку':'Запустить локальную проверку'; check.onclick=()=>startJourneyCheck(review.artifact_id,check); actions.appendChild(check); } const confirm=document.createElement('button'); confirm.type='button'; confirm.textContent='Подтвердить актуальную версию'; confirm.disabled=review.state !== 'ready_for_confirmation'; confirm.title=confirm.disabled ? 'Подтверждение станет доступно после завершения локальной проверки и решений по находкам.' : ''; confirm.onclick=()=>confirmJourneyReview(review.artifact_id,confirm); actions.appendChild(confirm); }
+      if (!review.confirmed) { if (['not_started','review_error','manual_review_required'].includes(review.state)) { const check=document.createElement('button'); check.type='button'; check.className='secondary'; check.textContent=review.state==='not_started'?'Запустить локальную проверку':'Повторить автоматическую проверку'; check.onclick=()=>startJourneyCheck(review.artifact_id,check); actions.appendChild(check); } const confirm=document.createElement('button'); confirm.type='button'; confirm.textContent=review.state==='manual_review_required'?'Подтвердить после ручной проверки':'Подтвердить актуальную версию'; confirm.disabled=!['ready_for_confirmation','manual_review_required'].includes(review.state); confirm.title=confirm.disabled ? 'Подтверждение станет доступно после завершения проверки или явной ручной проверки.' : ''; confirm.onclick=()=>confirmJourneyReview(review.artifact_id,confirm); actions.appendChild(confirm); }
       if (review.confirmed) { const compile=document.createElement('button'); compile.type='button'; compile.textContent='Собрать проектный контекст'; compile.onclick=()=>compileJourneyContext(review.artifact_id,compile); actions.appendChild(compile); }
       side.appendChild(actions); root.appendChild(side);
     }
-    async function startJourneyCheck(id, button) { button.disabled=true; journeyMessage('Локальная проверка выполняется…'); const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;journeyMessage(data.state==='ready_for_confirmation'?'Новых находок нет. Версию можно подтвердить.':data.state==='requires_review'?'Найдены места, требующие решения.':'Локальная проверка не завершилась. Повторите попытку.',data.state==='review_error');renderJourneyReview(data); }
+    async function startJourneyCheck(id, button) { button.disabled=true; journeyMessage('Локальная проверка выполняется…'); const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;journeyMessage(data.state==='ready_for_confirmation'?'Проверка завершена: дополнительных сведений не найдено':data.state==='requires_review'?'Найдены сведения, требующие проверки':'Автоматическая проверка не завершена. Проверьте очищенный текст вручную.',data.state==='manual_review_required'||data.state==='review_error');renderJourneyReview(data); }
     async function saveJourneyFinding(id, findingId, decision, button, category='') { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),finding_id:findingId,decision,category})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение.'),true);button.disabled=false;return;} if(data.new_version?.artifact_id){journeyMessage('Создана новая версия. Прежняя версия больше не действует.');await openJourneyReview(data.new_version.artifact_id);await loadJourneyMaterials();return;} await openJourneyReview(id); }
     async function confirmJourneyReview(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Эта версия устарела. Откройте актуальную версию материала.'),true);button.disabled=false;return;} journeyMessage('Актуальная версия подтверждена. Следующее действие — собрать проектный контекст.');await openJourneyReview(id);await loadJourneyMaterials(); }
     async function compileJourneyContext(id, button) { button.disabled=true; const response=await fetch(`/api/context/${encodeURIComponent(id)}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось собрать проектный контекст.'),true);button.disabled=false;return;} showScreen('context'); renderJourneyContext(data.candidates || []); }
     async function loadJourneyContext() { const response=await fetch(`/api/context?project=${encodeURIComponent(journeyProject())}`); const data=await response.json(); if(response.ok) renderJourneyContext(data.candidates || []); }
-    function renderJourneyContext(candidates) { const root=document.getElementById('journeyContext'); root.innerHTML=''; if(!candidates.length){root.className='journey-empty';root.textContent='Контекст ещё не собран. Подтвердите материал и запустите сбор контекста.';return;} root.className=''; for(const [type,label] of Object.entries(journeyTypeLabels)){ const items=candidates.filter(item=>item.item_type===type); const group=document.createElement('section');group.className='candidate-group';group.innerHTML=`<h3>${label}</h3>`; if(!items.length){group.innerHTML += '<p class="journey-meta">Предложений пока нет.</p>';} for(const item of items) group.appendChild(journeyCandidateCard(item));root.appendChild(group);} }
-    function journeyCandidateCard(item) { const card=document.createElement('article');card.className='journey-card';const title=document.createElement('h3');title.textContent=item.title;card.appendChild(title);const statement=document.createElement('p');statement.textContent=item.statement;card.appendChild(statement);const meta=document.createElement('p');meta.className='journey-meta';meta.textContent=`${journeyConfidence[item.confidence] || 'Уверенность не определена'}. Подтверждающих источников: ${(item.source_links || []).length || 1}.`;card.appendChild(meta); if(item.status==='conflicted') {const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть противоречие: выберите вариант или оставьте вопрос открытым.';card.appendChild(flag);} if(item.status==='duplicate'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Возможный повтор: источники можно объединить.';card.appendChild(flag);} const actions=document.createElement('div');actions.className='journey-actions'; if(item.status!=='confirmed'&&item.status!=='rejected'){for(const [decision,label] of [['confirm','Подтвердить'],['edit','Уточнить'],['reject','Отклонить']]){const button=document.createElement('button');button.type='button';button.className=decision==='confirm'?'':'secondary';button.textContent=label;button.onclick=()=>journeyContextDecision(item,decision,button);actions.appendChild(button);}} if((item.relation_ids||[]).length){for(const [resolution,label] of [['keep_open','Оставить противоречие открытым'],['choose_current','Выбрать этот вариант'],['keep_both','Сохранить оба варианта']]){const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=label;button.onclick=()=>journeyConflictDecision(item.id,resolution,button);actions.appendChild(button);}} card.appendChild(actions);return card; }
-    async function journeyContextDecision(item, decision, button) { let title='',statement=''; if(decision==='edit'){title=window.prompt('Новый заголовок: будет создана новая версия',item.title)||'';statement=title ? window.prompt('Новое содержание',item.statement)||'' : '';if(!title||!statement)return;} if(decision==='reject'&&!window.confirm('Отклонить предложение? Это действие потребует отдельного решения для возврата.'))return;button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(item.id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),decision,title,statement})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по предложению.'),true);button.disabled=false;return;}await loadJourneyContext(); }
+    function renderJourneyContext(candidates) { const root=document.getElementById('journeyContext'); root.innerHTML=''; if(!candidates.length){root.className='journey-empty';root.textContent='Контекст ещё не собран. Подтвердите материал и запустите сбор контекста.';return;} root.className=''; for(const [type,label] of Object.entries(journeyTypeLabels)){ const items=candidates.filter(item=>item.item_type===type&&item.current!==false); const group=document.createElement('section');group.className='candidate-group';group.innerHTML=`<h3>${label}</h3>`; if(!items.length){group.innerHTML += '<p class="journey-meta">Предложений пока нет.</p>';} for(const item of items) group.appendChild(journeyCandidateCard(item));root.appendChild(group);} }
+    function journeyCandidateCard(item) { const card=document.createElement('article');card.className='journey-card';const title=document.createElement('h3');title.textContent=item.title;card.appendChild(title);const statement=document.createElement('p');statement.textContent=item.statement;card.appendChild(statement);const meta=document.createElement('p');meta.className='journey-meta';meta.textContent=`${journeyConfidence[item.confidence] || 'Уверенность не определена'}. Подтверждающих источников: ${(item.source_links || []).length || 1}.`;card.appendChild(meta); if(item.status==='conflicted') {const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть противоречие: выберите вариант или оставьте вопрос открытым.';card.appendChild(flag);} if(item.status==='duplicate'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Возможный повтор: источники можно объединить.';card.appendChild(flag);} const actions=document.createElement('div');actions.className='journey-actions'; if(item.current!==false&&item.status!=='confirmed'&&item.status!=='rejected'){for(const [decision,label] of [['confirm','Подтвердить'],['edit','Уточнить'],['reject','Отклонить']]){const button=document.createElement('button');button.type='button';button.className=decision==='confirm'?'':'secondary';button.textContent=label;button.onclick=()=>journeyContextDecision(item,decision,button);actions.appendChild(button);}} if((item.relation_ids||[]).length){for(const [resolution,label] of [['keep_open','Оставить противоречие открытым'],['choose_current','Выбрать этот вариант'],['keep_both','Сохранить оба варианта']]){const button=document.createElement('button');button.type='button';button.className='secondary';button.textContent=label;button.onclick=()=>journeyConflictDecision(item.id,resolution,button);actions.appendChild(button);}} card.appendChild(actions);return card; }
+    function journeyContextEditForm(item, button) { const form=document.createElement('form');form.className='journey-actions';const title=document.createElement('input');title.type='text';title.value=item.title;title.setAttribute('aria-label','Новый заголовок предложения');const statement=document.createElement('textarea');statement.value=item.statement;statement.setAttribute('aria-label','Новое содержание предложения');const save=document.createElement('button');save.type='submit';save.textContent='Сохранить новую версию';const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='Отмена';cancel.onclick=()=>{form.remove();button.disabled=false;};form.append(title,statement,save,cancel);form.onsubmit=event=>{event.preventDefault();journeyContextDecision(item,'edit',save,title.value,statement.value);};button.after(form);button.disabled=true; }
+    function journeyRejectConfirmation(item, button) { const confirmation=document.createElement('div');confirmation.className='journey-actions';const text=document.createElement('span');text.textContent='Отклонить предложение?';const reject=document.createElement('button');reject.type='button';reject.textContent='Да, отклонить';reject.onclick=()=>journeyContextDecision(item,'reject',reject);const cancel=document.createElement('button');cancel.type='button';cancel.className='secondary';cancel.textContent='Отмена';cancel.onclick=()=>{confirmation.remove();button.disabled=false;};confirmation.append(text,reject,cancel);button.after(confirmation);button.disabled=true; }
+    async function journeyContextDecision(item, decision, button, title='', statement='') { if(decision==='edit'&&button.type==='button'){journeyContextEditForm(item,button);return;} if(decision==='reject'&&button.textContent==='Отклонить'){journeyRejectConfirmation(item,button);return;} if(decision==='edit'&&(!title.trim()||!statement.trim())){journeyMessage('Укажите заголовок и содержание новой версии.',true);return;} button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(item.id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),decision,title,statement})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по предложению.'),true);button.disabled=false;return;}journeyMessage(decision==='confirm'?'Предложение подтверждено.':decision==='reject'?'Предложение отклонено.':'Создана новая версия предложения.');await loadJourneyContext(); }
     async function journeyConflictDecision(id,resolution,button) {button.disabled=true;const response=await fetch(`/api/context/${encodeURIComponent(id)}/conflict`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),resolution})});const data=await response.json();if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение по противоречию.'),true);button.disabled=false;return;}await loadJourneyContext();}
     async function loadJourneySummary() { const root=document.getElementById('journeySummary');root.className='journey-empty';root.textContent='Загружаем сводку…';const query=new URLSearchParams({project:journeyProject()});for(const [key,id] of Object.entries({type:'summaryType',conflict:'summaryConflict',deadline:'summaryDeadline',actor:'summaryActor'})){const value=document.getElementById(id).value;if(value)query.set(key,value);}const response=await fetch(`/api/context/summary?${query}`);const data=await response.json();if(!response.ok){root.textContent=journeyError(data,'Не удалось загрузить сводку.');return;}const items=Object.entries(journeyTypeLabels).flatMap(([type])=>data[type]||[]);root.innerHTML='';if(!items.length){root.className='journey-empty';root.textContent='Подтверждённых элементов по выбранным условиям нет.';return;}root.className='journey-grid';for(const item of items){const card=document.createElement('article');card.className='journey-card';card.innerHTML=`<h3>${item.title}</h3><p>${item.statement}</p><p class="journey-meta">${journeyTypeLabels[item.item_type]||'Элемент'} · источников: ${(item.source_links||[]).length||1}${item.actor_ref ? ` · ответственный: ${item.actor_ref}`:''}${item.deadline ? ` · срок: ${item.deadline}`:''}</p>`;if(item.status==='conflicted'){const flag=document.createElement('p');flag.className='candidate-flag';flag.textContent='Есть открытое противоречие.';card.appendChild(flag);}root.appendChild(card);} }
 

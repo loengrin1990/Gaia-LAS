@@ -20,13 +20,32 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("Новая версия создана, но проверка ещё не готова. Данные сохранены. Повторите попытку.", INDEX_HTML)
         self.assertIn("Материал недоступен в выбранном рабочем пространстве. Данные не изменены.", INDEX_HTML)
         self.assertIn("button.disabled=true", INDEX_HTML)
+        self.assertIn("function journeyContextEditForm", INDEX_HTML)
+        self.assertIn("function journeyRejectConfirmation", INDEX_HTML)
+        self.assertIn("item.current!==false", INDEX_HTML)
+        self.assertNotIn("window.prompt('Новый заголовок: будет создана новая версия'", INDEX_HTML)
+        self.assertNotIn("window.confirm('Отклонить предложение?", INDEX_HTML)
         self.assertNotIn(">requires_review<", INDEX_HTML)
 
+    def test_veil_result_messages_are_distinct_and_human_readable(self) -> None:
+        self.assertIn("Проверка завершена: дополнительных сведений не найдено", INDEX_HTML)
+        self.assertIn("Найдены сведения, требующие проверки", INDEX_HTML)
+        self.assertIn("Автоматическая проверка не завершена. Проверьте очищенный текст вручную", INDEX_HTML)
+        self.assertIn("Подтвердить после ручной проверки", INDEX_HTML)
+        self.assertIn("Ручная проверка подтверждена пользователем.", INDEX_HTML)
+
     def test_journey_file_input_is_enabled_and_has_a_connected_label(self) -> None:
-        self.assertIn('<label for="journeyFiles">Добавить материал</label>', INDEX_HTML)
-        self.assertIn('<input id="journeyFiles" type="file" multiple', INDEX_HTML)
+        self.assertEqual(INDEX_HTML.count('id="journeyFiles"'), 1)
+        self.assertIn('<input id="journeyFiles" class="native-file-input" type="file" multiple', INDEX_HTML)
+        self.assertIn('<label class="native-file-control" data-file-input-control="journey" for="journeyFiles">Выбрать материалы</label>', INDEX_HTML)
         self.assertNotIn('id="journeyFiles" type="file" disabled', INDEX_HTML)
+        self.assertNotIn("journeyFiles.click()", INDEX_HTML)
+        self.assertNotIn("journeyFiles.dispatchEvent", INDEX_HTML)
+        self.assertIn(".native-file-input:focus-visible + .native-file-control", INDEX_HTML)
         self.assertIn("const files = Array.from(input.files || [])", INDEX_HTML)
+        self.assertIn("journeyFilesInput.addEventListener('change'", INDEX_HTML)
+        self.assertIn("journeyFilesInput.addEventListener('input'", INDEX_HTML)
+        self.assertIn("nativeFileDiagnostics('file_input_change_event_received'", INDEX_HTML)
 
     def test_ui_is_loaded_from_static_asset(self) -> None:
         self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())

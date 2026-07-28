@@ -128,6 +128,7 @@ def context_compile_failure(intake: ControlledIntake, project: str, artifact_id:
             "route": "context_compiler",
             "workspace": hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12],
             "artifact_id": artifact_id,
+            "validation_code": getattr(exc, "diagnostic_code", ""),
         })
         path.write_text(json.dumps(existing[-100:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except Exception:
@@ -564,9 +565,13 @@ class Handler(BaseHTTPRequestHandler):
                 result["review"] = review.create_successor(artifact_id, result["artifact_id"])
                 json_response(self, result, 202); return
             if action == "confirm":
+                existing = review.get(artifact_id)
+                if existing.get("confirmed") is True:
+                    json_response(self, {"status": "confirmed", "message": "Материал уже подтверждён.", "artifact_id": artifact_id, "confirmation_method": existing.get("confirmation_method", "")}, 200); return
                 cleaned = review.confirm(artifact_id)
                 job = submit_analyze_job(project, str(payload.get("query") or ""), [("cleaned.txt", cleaned.encode("utf-8"))], str(payload.get("profile") or "") or None)
-                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
+                confirmed = review.get(artifact_id)
+                json_response(self, {"status": "confirmed", "message": "Материал подтверждён.", "artifact_id": artifact_id, "confirmation_method": confirmed.get("confirmation_method", ""), "job_id": job.id, "status_url": f"/api/jobs/{job.id}"}, 202); return
         except ProvenanceError as exc:
             trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             if intake is not None:
@@ -597,9 +602,10 @@ class Handler(BaseHTTPRequestHandler):
         except ContextCompileError as exc:
             trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             context_compile_failure(intake, project, object_id, trace_id, exc)
+            diagnostic = str(getattr(exc, "diagnostic_code", "") or "schema_invalid").upper()
             messages = {
                 "local_model_unavailable": "Локальная модель для сборки контекста недоступна. Данные не изменены. Убедитесь, что она запущена, и повторите попытку.",
-                "local_model_invalid": "Ответ локальной модели не прошёл проверку. Данные не изменены. Повторите сборку позже.",
+                "local_model_invalid": f"Ответ локальной модели не прошёл проверку. Данные не изменены. Код: CONTEXT_{diagnostic}.",
                 "material_not_confirmed": "Материал ещё не подтверждён. Данные не изменены. Подтвердите актуальную очищенную версию и повторите сборку.",
                 "stale_version": "Эта версия материала устарела. Данные не изменены. Откройте актуальную версию и повторите сборку.",
                 "material_unavailable": "Материал недоступен в выбранном рабочем пространстве. Данные не изменены. Проверьте выбранное пространство и повторите действие.",

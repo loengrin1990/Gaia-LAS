@@ -23,6 +23,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+*.profraw
 htmlcov/
 .venv/
 venv/
@@ -31,3 +32,4 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+native/macos/build/

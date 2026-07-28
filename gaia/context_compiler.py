@@ -18,23 +18,34 @@ MAX_RESULT_SIZE = 48_000
 MAX_INPUT_SIZE = 120_000
 
 class ContextCompileError(ProvenanceError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message); self.code = code
+    def __init__(self, code: str, message: str, diagnostic_code: str = "") -> None:
+        super().__init__(message); self.code, self.diagnostic_code = code, diagnostic_code
+
+
+class CandidateValidationError(ProvenanceError):
+    def __init__(self, diagnostic_code: str) -> None:
+        super().__init__("Некорректный результат компилятора.")
+        self.diagnostic_code = diagnostic_code
 
 def local_context_model(text: str) -> dict[str, Any]:
     from .module_assist import call_lm_studio_with_deadline
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
-        "Каждый элемент candidates обязан иметь ровно поля type, title, statement, block, confidence, requires_review; "
-        "type только requirement, decision, risk, open_question или action; block имеет только start и end с координатами очищенного текста. "
-        "Не используй ключи requirement, solution, risk, question или action как замену структуры кандидата. "
+        "Каждый элемент candidates обязан иметь РОВНО ключи type, title, statement, block, confidence, requires_review. "
+        "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
+        "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
+        "block: только объект {\"start\":целое,\"end\":целое} с координатами очищенного текста, 0 <= start < end <= длина текста. "
+        "Не используй русские enum, пробелы в ключах или ключи requirement, solution, risk, question, action как замену структуры кандидата. "
         "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
-        "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста.\n\n" + text
+        "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста; не добавляй предположений.\n\n" + text
     )
     result = call_lm_studio_with_deadline(prompt, 45, "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER)
     if not result.get("ok"): raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.")
-    try: return json.loads(str(result.get("answer") or ""))
-    except json.JSONDecodeError as exc: raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул некорректный ответ.") from exc
+    answer = str(result.get("answer") or "")
+    if not answer.strip():
+        raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул пустой ответ.", "empty_response")
+    try: return json.loads(answer)
+    except json.JSONDecodeError as exc: raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул некорректный ответ.", "json_parse") from exc
 
 class ContextCompiler:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
@@ -58,8 +69,10 @@ class ContextCompiler:
             candidates = validate_candidates(self.model(text), len(text))
         except ContextCompileError:
             raise
+        except CandidateValidationError as exc:
+            raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул результат, который не прошёл проверку.", exc.diagnostic_code) from exc
         except ProvenanceError:
-            raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул результат, который не прошёл проверку.")
+            raise ContextCompileError("local_model_invalid", "Локальный компилятор вернул результат, который не прошёл проверку.", "schema_invalid")
         except Exception as exc:
             raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.") from exc
         result=[]
@@ -109,6 +122,8 @@ class ContextService:
     def get(self, context_id: str) -> dict[str, Any]: return self.store._object(self.workspace_id, context_id, "context")
     def decide(self, context_id: str, decision: str, title: str = "", statement: str = "") -> dict[str, Any]:
         item = self.get(context_id)
+        if item.get("current") is False:
+            raise ProvenanceError("Эта версия предложения устарела. Откройте актуальную версию.")
         if decision == "confirm": self.store._update(context_id, status="confirmed", confirmation_status="confirmed", requires_review=False); return self.get(context_id)
         if decision == "reject": self.store._update(context_id, status="rejected", confirmation_status="rejected", current=False); return self.get(context_id)
         if decision == "edit":
@@ -166,20 +181,27 @@ class ContextService:
         return sections
 
 def validate_candidates(payload: Any, length: int) -> list[dict[str, Any]]:
-    if (not isinstance(payload, dict) or set(payload) != {"candidates"}
-            or not isinstance(payload["candidates"], list) or len(payload["candidates"]) > MAX_CANDIDATES
-            or len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_SIZE):
-        raise ProvenanceError("Некорректный результат компилятора.")
+    if not isinstance(payload, dict) or set(payload) != {"candidates"}:
+        raise CandidateValidationError("schema_top_level")
+    if not isinstance(payload["candidates"], list) or len(payload["candidates"]) > MAX_CANDIDATES:
+        raise CandidateValidationError("schema_candidates")
+    if len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_SIZE:
+        raise CandidateValidationError("result_too_large")
     result=[]
     required={"type","title","statement","block","confidence","requires_review"}
     for item in payload["candidates"]:
-        if not isinstance(item,dict) or not required.issubset(item) or set(item)-required-OPTIONAL-{RELATIONS_FIELD}: raise ProvenanceError("Некорректный результат компилятора.")
-        if item["type"] not in TYPES or not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str) or not 1<=len(item["statement"])<=1200 or item["confidence"] not in {"low","medium","high"} or item["requires_review"] is not True: raise ProvenanceError("Некорректный результат компилятора.")
+        if not isinstance(item,dict): raise CandidateValidationError("schema_candidate")
+        if not required.issubset(item): raise CandidateValidationError("schema_required_fields")
+        if set(item)-required-OPTIONAL-{RELATIONS_FIELD}: raise CandidateValidationError("schema_unknown_field")
+        if item["type"] not in TYPES: raise CandidateValidationError("unknown_type")
+        if (not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str)
+                or not 1<=len(item["statement"])<=1200 or item["confidence"] not in {"low","medium","high"}
+                or item["requires_review"] is not True): raise CandidateValidationError("schema_field")
         block=item["block"]
-        if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise ProvenanceError("Некорректная ссылка на блок.")
+        if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise CandidateValidationError("block_coordinates")
         for field in OPTIONAL:
-            if field in item and not isinstance(item[field],str): raise ProvenanceError("Некорректный результат компилятора.")
+            if field in item and not isinstance(item[field],str): raise CandidateValidationError("schema_optional_field")
         if RELATIONS_FIELD in item and (not isinstance(item[RELATIONS_FIELD], list) or len(item[RELATIONS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[RELATIONS_FIELD])):
-            raise ProvenanceError("Некорректный результат компилятора.")
+            raise CandidateValidationError("schema_relations")
         result.append(dict(item))
     return result
