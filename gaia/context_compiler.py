@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from .provenance import ProvenanceError, ProvenanceStore
 from .review import ReviewService
-from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
+from .local_llm import TASK_CONTEXT_COMPILER, resolve_route, provider_config
 from .context_chunking import ChunkLimitError, ContextChunk, split_context
 from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
@@ -62,7 +62,8 @@ def local_context_model(text: str, cancel_event: Any = None) -> dict[str, Any]:
         "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста; не добавляй предположений.\n\n" + text
     )
     try:
-        result = execute_context_model_call({"prompt": prompt, "system": "Ты локальный компилятор проектного контекста Gaia.", "timeout": int(route.get("timeout_seconds", 120)), "temperature": 0.0, "task": TASK_CONTEXT_COMPILER, "response_schema": schema}, int(route.get("timeout_seconds", 120)), cancel_event)
+        timeout = int(route.get("model_call_timeout_seconds", route.get("timeout_seconds", 120)))
+        result = execute_context_model_call({"prompt": prompt, "system": "Ты локальный компилятор проектного контекста Gaia.", "timeout": timeout, "temperature": 0.0, "task": TASK_CONTEXT_COMPILER, "response_schema": schema}, timeout, cancel_event)
     except ContextModelExecutorError as exc:
         if exc.code == "cancelled":
             raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.", "cancelled") from None
@@ -84,6 +85,7 @@ def local_context_model(text: str, cancel_event: Any = None) -> dict[str, Any]:
 class ContextCompiler:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
         self.store, self.workspace_id, self.model = store, workspace_id, model or local_context_model
+        self._uses_local_provider = model is None and getattr(self.model, "__module__", "") == __name__
 
     def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None, activity: Callable[[int, int, int], None] | None = None) -> list[dict[str, Any]]:
         self._model_attempts = 0
@@ -94,8 +96,11 @@ class ContextCompiler:
         receipt = self._receipt(sanitized_id)
         if receipt and receipt.get("status") == "complete" and receipt.get("compiler_version") == compiler_version:
             return self._restore_receipt(receipt, sanitized_id, compiler_version)
-        text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
         route = self._route()
+        if self._uses_local_provider:
+            if activity: activity(0, 0, 0)
+            self._preload(route, cancel_event)
+        text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
         if len(text) > int(route["max_input_chars"]):
             raise ContextCompileError("context_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку. Данные не изменены.")
         try: chunks = split_context(text, int(route["chunk_char_limit"]), int(route["chunk_max_units"]), int(route["chunk_overlap_chars"]), int(route["max_chunks"]))
@@ -110,10 +115,14 @@ class ContextCompiler:
             candidates.extend(local)
             if len(candidates) > int(route["max_total_candidates"]): raise ContextCompileError("total_candidate_limit", "Слишком много элементов контекста. Данные не изменены.")
             if progress: progress(position, len(chunks), len(candidates))
+        if activity: activity(-1, len(chunks), self._model_attempts)
         candidates = _deduplicate_candidates(candidates)
         if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+        if activity: activity(-2, len(chunks), self._model_attempts)
         result = self._persist_all(item, sanitized_id, candidates, compiler_version, route, cancel_event)
         self._write_receipt(sanitized_id, result, len(chunks), compiler_version, route)
+        if self._uses_local_provider:
+            self._unload(route)
         return result
 
     def preflight(self, sanitized_id: str) -> dict[str, Any]:
@@ -126,8 +135,29 @@ class ContextCompiler:
 
     def _route(self) -> dict[str, Any]:
         route = resolve_route(TASK_CONTEXT_COMPILER)
-        defaults = {"prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": MAX_INPUT_SIZE, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800, "max_model_attempts": 256}
+        defaults = {"prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "timeout_seconds": 120, "model_load_timeout_seconds": 300, "model_call_timeout_seconds": 240, "model_keep_alive": "30m", "unload_model_after_job": True, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": MAX_INPUT_SIZE, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800, "max_model_attempts": 256}
         return {**defaults, **route}
+
+    def _preload(self, route: dict[str, Any], cancel_event: Any) -> None:
+        provider = provider_config(str(route["provider"]))
+        if provider.get("type") != "ollama": return
+        timeout = int(route.get("model_load_timeout_seconds", route.get("timeout_seconds", 120)))
+        try:
+            result = execute_context_model_call({"operation": "preload", "endpoint": str(provider.get("endpoint")), "model": str(route["model"]), "keep_alive": str(route.get("model_keep_alive", "30m")), "timeout": timeout}, timeout, cancel_event)
+        except ContextModelExecutorError as exc:
+            if exc.code == "cancelled": raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.", "cancelled") from None
+            code = "model_load_timeout" if exc.code == "timeout" else "model_process"
+            raise ContextCompileError("local_model_unavailable", "Локальная модель не успела загрузиться. Данные не изменены.", code) from None
+        if not result.get("ok"): raise ContextCompileError("local_model_unavailable", "Локальная модель не успела загрузиться. Данные не изменены.", "model_load_timeout")
+
+    def _unload(self, route: dict[str, Any]) -> None:
+        if not route.get("unload_model_after_job"): return
+        provider = provider_config(str(route["provider"]))
+        if provider.get("type") != "ollama": return
+        try:
+            execute_context_model_call({"operation": "unload", "endpoint": str(provider.get("endpoint")), "model": str(route["model"]), "timeout": 15}, 15)
+        except ContextModelExecutorError:
+            pass
 
     def _compile_chunk(self, text: str, route: dict[str, Any], cancel_event: Any, depth: int = 0) -> list[dict[str, Any]]:
         failures: list[ContextCompileError] = []
@@ -137,7 +167,7 @@ class ContextCompiler:
         for _ in range(int(route["retry_count"]) + 1):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             try:
-                if self.model is local_context_model:
+                if self._uses_local_provider:
                     response = self.model(text, cancel_event=cancel_event)
                 else:
                     response = self.model(text)

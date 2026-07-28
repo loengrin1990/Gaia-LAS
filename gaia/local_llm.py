@@ -135,7 +135,7 @@ def resolve_route(task: str) -> dict[str, Any]:
     provider_data = provider_config(provider)
     model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)
     resolved: dict[str, Any] = {"task": task, "provider": provider, "model": model}
-    for key in ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"):
+    for key in ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "model_load_timeout_seconds", "model_call_timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"):
         value = route.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             resolved[key] = value
@@ -145,6 +145,8 @@ def resolve_route(task: str) -> dict[str, Any]:
         resolved["thinking"] = route["thinking"]
     if route.get("structured_output") in {"schema", "json"}:
         resolved["structured_output"] = route["structured_output"]
+    if task == TASK_CONTEXT_COMPILER and isinstance(route.get("model_keep_alive"), str): resolved["model_keep_alive"] = route["model_keep_alive"]
+    if task == TASK_CONTEXT_COMPILER and isinstance(route.get("unload_model_after_job"), bool): resolved["unload_model_after_job"] = route["unload_model_after_job"]
     return resolved
 
 
@@ -362,6 +364,8 @@ def run_local_llm_prompt(
         max_tokens=int(route.get("max_tokens") or local_llm_max_tokens()),
         context_length=route.get("context_length"), response_schema=response_schema,
     )
+    if is_ollama_provider(provider) and task == TASK_CONTEXT_COMPILER and route.get("model_keep_alive"):
+        payload["keep_alive"] = route["model_keep_alive"]
     request = urllib.request.Request(
         str(provider.get("endpoint") or ""),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

@@ -112,9 +112,9 @@ class ContextCompilerTests(unittest.TestCase):
         with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":True,"answer":"not json"}) as call:
             with self.assertRaises(ContextCompileError) as invalid: local_context_model("[Сотрудник-01]")
         self.assertEqual(invalid.exception.code, "local_model_invalid")
-        self.assertEqual(call.call_args.args[1], 120)
+        self.assertEqual(call.call_args.args[1], 240)
         self.assertEqual(call.call_args.args[0]["task"], "context_compiler")
-        self.assertEqual(call.call_args.args[0]["timeout"], 120)
+        self.assertEqual(call.call_args.args[0]["timeout"], 240)
         self.assertIsNone(call.call_args.args[0]["response_schema"])
         self.assertIn("Разрешённые необязательные поля", call.call_args.args[0]["prompt"])
         self.assertIn("не придумывай ответственного", call.call_args.args[0]["prompt"])

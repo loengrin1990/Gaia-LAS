@@ -85,7 +85,14 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
             def progress(done: int,total: int,count: int):
                 update_job(job_id,message=f"Собираем контекст: обработан фрагмент {done} из {total}…",progress=min(95,5+int(90*done/max(1,total))),completed_chunks=done,total_chunks=total,candidate_count=count,last_activity_at=local_now())
             def activity(current: int,total: int,attempts: int):
-                update_job(job_id,message=f"Собираем контекст: обрабатывается фрагмент {current} из {total}…",phase="compiling",current_chunk=current,total_chunks=total,model_attempts=attempts,last_activity_at=local_now())
+                if current == 0:
+                    update_job(job_id,message="Загружаем локальную модель. Первый запуск может занять несколько минут…",phase="loading_model",current_chunk=0,total_chunks=0,model_attempts=0,last_activity_at=local_now())
+                elif current == -1:
+                    update_job(job_id,message="Проверяем собранный контекст…",phase="validating",last_activity_at=local_now())
+                elif current == -2:
+                    update_job(job_id,message="Сохраняем проверенный контекст…",phase="persisting",last_activity_at=local_now())
+                else:
+                    update_job(job_id,message=f"Собираем контекст: фрагмент {current} из {total}…",phase="compiling",current_chunk=current,total_chunks=total,model_attempts=attempts,last_activity_at=local_now())
             try:
                 candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress,activity=activity)
             finally:

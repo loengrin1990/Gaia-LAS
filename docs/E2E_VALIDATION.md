@@ -47,3 +47,5 @@
 # Context compiler live smoke
 
 Перед ручной приёмкой выполните `python3 scripts/smoke_context_compiler.py`. Успех означает валидные offsets, receipt без повторного вызова модели, четыре базовых типа и metadata действия. Для диагностики профилей используйте `python3 scripts/diagnose_context_models.py`; его вывод безопасен и не содержит материалов или ответов модели.
+
+Для cold-start приёмки сначала выгрузите модель штатным Ollama API. Затем проверьте отдельные фазы loading model и compiling: превышение лимита загрузки даёт `CONTEXT_MODEL_LOAD_TIMEOUT`, а превышение лимита генерации — `CONTEXT_MODEL_TIMEOUT`; оба результата не создают кандидаты и receipt.

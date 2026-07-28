@@ -33,7 +33,7 @@ class ContextCompileController {
       let response, job; try { response=await this.fetch(url); job=await response.json(); if(!response.ok) throw new Error('poll_failed'); } catch (_) { this.jobId=''; this.message('Не удалось получить статус сборки контекста. Повторите попытку.', true); this.state('error'); return; }
       if (!this.active(generation, project)) return;
       this.message(job.message || 'Собираем проектный контекст…', job.status === 'failed'); this.state(job.status, job);
-      if (job.status === 'done') { this.jobId=''; this.render(job.result?.candidates || []); return; }
+      if (job.status === 'done') { this.jobId=''; const candidates=job.result?.candidates || []; this.render(candidates); if (!candidates.length) this.message('В материале не найдено элементов проектного контекста. Данные не изменены.', false); return; }
       if (job.status === 'cancelled') { this.jobId=''; this.message('Сборка контекста отменена. Данные не изменены.', true); return; }
       if (job.status === 'failed') { this.jobId=''; this.message(`Не удалось собрать контекст для одного из фрагментов. Данные не изменены. Код: ${job.error_code || 'CONTEXT_INTERNAL_ERROR'}.`, true); return; }
       await this.delay();

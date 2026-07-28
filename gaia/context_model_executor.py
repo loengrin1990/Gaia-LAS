@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import multiprocessing
 import time
+import json
+import urllib.request
 from typing import Any, Callable
 
 
@@ -34,6 +36,18 @@ def _safe_result(result: dict[str, Any]) -> dict[str, Any]:
 def _context_model_child(sender: Any, payload: dict[str, Any]) -> None:
     """Spawn-safe target.  It never writes prompt or model output to logs."""
     try:
+        if payload.get("operation") == "preload":
+            request = urllib.request.Request(payload["endpoint"], data=json.dumps({"model": payload["model"], "messages": [], "stream": False, "keep_alive": payload.get("keep_alive", "30m")}).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request, timeout=payload["timeout"]) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            sender.send({"kind": "result", "result": {"ok": bool(data.get("done", True)), "done_reason": str(data.get("done_reason") or ""), "load_duration": data.get("load_duration"), "total_duration": data.get("total_duration")}})
+            return
+        if payload.get("operation") == "unload":
+            request = urllib.request.Request(payload["endpoint"].replace("/api/chat", "/api/generate"), data=json.dumps({"model": payload["model"], "keep_alive": 0}).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request, timeout=payload["timeout"]) as response:
+                response.read()
+            sender.send({"kind": "result", "result": {"ok": True}})
+            return
         from .local_llm import run_local_llm_prompt
 
         result = run_local_llm_prompt(

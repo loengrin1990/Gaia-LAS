@@ -248,7 +248,7 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
             if not isinstance(model, str) or not model.strip():
                 raise ConfigError(f"Config value `local_llm.routes.{name}.model` must be a non-empty string.")
             route["model"] = model.strip()
-        numeric_keys = ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds")
+        numeric_keys = ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "model_load_timeout_seconds", "model_call_timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds")
         for key in numeric_keys:
             option_value = value.get(key)
             if option_value is None:
@@ -272,13 +272,15 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
                 raise ConfigError(f"Config value `local_llm.routes.{name}.structured_output` must be schema or json.")
             route["structured_output"] = structured_output
         if name == "context_compiler":
-            allowed = {"provider", "model", "prompt_char_limit", "max_tokens", "context_length", "temperature", "thinking", "structured_output", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"}
+            allowed = {"provider", "model", "prompt_char_limit", "max_tokens", "context_length", "temperature", "thinking", "structured_output", "timeout_seconds", "model_load_timeout_seconds", "model_call_timeout_seconds", "model_keep_alive", "unload_model_after_job", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"}
             unknown = sorted(set(value) - allowed)
             if unknown:
                 raise ConfigError(f"Config route `context_compiler` contains unsupported fields: {', '.join(unknown)}.")
             limit = int(route.get("chunk_char_limit", 4000)); prompt_limit = int(route.get("prompt_char_limit", 9000)); overlap = int(route.get("chunk_overlap_chars", 250))
             if limit >= prompt_limit - 1000 or overlap >= limit // 2:
                 raise ConfigError("Config route `context_compiler` has incompatible chunk limits.")
+            if "model_keep_alive" in value and not isinstance(value["model_keep_alive"], str): raise ConfigError("Config value `local_llm.routes.context_compiler.model_keep_alive` must be a string.")
+            if "unload_model_after_job" in value and not isinstance(value["unload_model_after_job"], bool): raise ConfigError("Config value `local_llm.routes.context_compiler.unload_model_after_job` must be boolean.")
         routes[name.strip()] = route
     return routes
 
