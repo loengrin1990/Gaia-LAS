@@ -47,6 +47,7 @@ def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes
         project=project,
         message="Задача создана.",
         progress=0,
+        timeout_seconds=job_timeout_seconds(),
     )
     with JOBS_LOCK:
         prune_completed_jobs()
@@ -64,7 +65,8 @@ def submit_context_compile_job(project: str, artifact_id: str) -> JobRecord:
         raise JobQueueFullError("Очередь обработки занята. Дождись завершения текущих задач и повтори запрос.")
     job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-ctx-" + uuid.uuid4().hex[:8]
     now = local_now()
-    job = JobRecord(id=job_id, status="created", created_at=now, updated_at=now, project=project, message="Подготавливаем материал…", progress=0, job_type="context_compile")
+    timeout_seconds = int(resolve_route(TASK_CONTEXT_COMPILER).get("job_timeout_seconds", 1800))
+    job = JobRecord(id=job_id, status="created", created_at=now, updated_at=now, project=project, message="Подготавливаем материал…", progress=0, job_type="context_compile", timeout_seconds=timeout_seconds)
     with JOBS_LOCK:
         prune_completed_jobs(); JOBS[job_id] = job; JOB_CANCEL_EVENTS[job_id] = threading.Event()
     try:
@@ -78,7 +80,7 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
     try:
         with CONTEXT_COMPILE_LOCK:
             update_job(job_id,status="running",message="Подготавливаем материал…",progress=5)
-            timeout_timer = threading.Timer(int(resolve_route(TASK_CONTEXT_COMPILER).get("job_timeout_seconds", 1800)), cancel_job, args=(job_id, "timeout"))
+            timeout_timer = threading.Timer(job_timeout_for(get_job(job_id)), cancel_job, args=(job_id, "timeout"))
             timeout_timer.daemon = True; timeout_timer.start()
             def progress(done: int,total: int,count: int):
                 update_job(job_id,message=f"Собираем контекст: фрагмент {done} из {total}…",progress=min(95,5+int(90*done/max(1,total))),completed_chunks=done,total_chunks=total,candidate_count=count)
@@ -148,6 +150,12 @@ def job_timeout_seconds() -> int:
     if SETTINGS is not None:
         return SETTINGS.analyze_job_timeout_seconds
     return RUNNING_JOB_TIMEOUT_SECONDS
+
+
+def job_timeout_for(job: JobRecord | None) -> int:
+    if job is not None and isinstance(job.timeout_seconds, int) and job.timeout_seconds > 0:
+        return job.timeout_seconds
+    return job_timeout_seconds()
 
 
 def completed_job_retention_seconds() -> int:
@@ -232,6 +240,6 @@ def mark_stale_job_failed(job: JobRecord) -> None:
     except ValueError:
         return
     age = (datetime.now() - created_at).total_seconds()
-    if age < job_timeout_seconds():
+    if age < job_timeout_for(job):
         return
     cancel_job(job.id, "timeout")

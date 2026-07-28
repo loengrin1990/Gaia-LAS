@@ -5,7 +5,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from gaia.jobs import JOBS, JOBS_LOCK, JOB_CANCEL_EVENTS, JOB_EXECUTOR, MAX_WORKERS, JobQueueFullError, cancel_job, get_job, local_now, prune_completed_jobs, submit_analyze_job
+from gaia.jobs import JOBS, JOBS_LOCK, JOB_CANCEL_EVENTS, JOB_EXECUTOR, MAX_WORKERS, JobQueueFullError, cancel_job, get_job, local_now, prune_completed_jobs, submit_analyze_job, mark_stale_job_failed
 from gaia.models import AnalysisPackage, JobRecord
 from gaia.orchestrator import PackageCancelledError
 
@@ -93,6 +93,15 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(stale.status, "cancelled")
         self.assertEqual(stale.progress, 100)
         self.assertIn("timeout", stale.error.lower())
+
+    def test_context_job_deadline_overrides_general_stale_timeout(self) -> None:
+        job=JobRecord(id="context",status="running",created_at="2026-07-28T13:45:00",updated_at="2026-07-28T13:45:00",project="p",message="running",job_type="context_compile",timeout_seconds=1800)
+        with JOBS_LOCK: JOBS[job.id]=job; JOB_CANCEL_EVENTS[job.id]=threading.Event()
+        with patch("gaia.jobs.datetime") as clock:
+            clock.now.return_value=__import__("datetime").datetime(2026,7,28,14,5,1); clock.fromisoformat.side_effect=__import__("datetime").datetime.fromisoformat
+            mark_stale_job_failed(job); self.assertEqual(job.status,"running")
+            clock.now.return_value=__import__("datetime").datetime(2026,7,28,14,15,1); mark_stale_job_failed(job)
+        self.assertEqual(job.status,"cancelled"); self.assertEqual(job.error,"CONTEXT_TIMEOUT")
 
     def test_cancelling_running_job_signals_worker_and_keeps_terminal_status(self) -> None:
         started = threading.Event()

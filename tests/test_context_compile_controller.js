@@ -8,5 +8,7 @@ const response = (body, ok=true) => ({ok, json: async()=>body});
   await controller.start('sanA'); assert.deepStrictEqual(rendered,[]); assert.strictEqual(controller.jobId,'');
   await controller.start('sanB'); assert.deepStrictEqual(rendered,[{title:'B'}]); assert.ok(!JSON.stringify(messages).includes('old'));
   assert.ok(calls.some(x=>x==='/new'));
+  let cancelCall=''; const cancelling=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async url=>{cancelCall=url;return response({});}}); cancelling.jobId='job-safe'; assert.strictEqual(await cancelling.cancel(),true); assert.strictEqual(cancelCall,'/api/jobs/job-safe/cancel');
+  const failing=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>response({error:'safe'},false)}); assert.strictEqual(await failing.start('san-error'),false); assert.strictEqual(failing.jobId,'');
   console.log('context compile controller checks passed');
 })().catch(error=>{console.error(error);process.exit(1);});

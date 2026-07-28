@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Callable
 
@@ -10,6 +11,7 @@ from .review import ReviewService
 from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
 from .context_chunking import ChunkLimitError, ContextChunk, split_context
 from .storage import atomic_write_text, path_lock
+from .runtime_diagnostics import emit as emit_runtime_diagnostic
 
 COMPILER_VERSION = "context-v2"
 PROMPT_SCHEMA_VERSION = "context-schema-v2"
@@ -43,7 +45,9 @@ def local_context_model(text: str) -> dict[str, Any]:
     schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16)))
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
-        "Каждый элемент candidates обязан иметь РОВНО ключи type, title, statement, block, confidence, requires_review. "
+        "Обязательные поля каждого кандидата: type, title, statement, block, confidence, requires_review. "
+        "Разрешённые необязательные поля: actor_ref, deadline, status, priority, reason, consequence, relations. "
+        "Добавляй необязательное поле только если его значение прямо названо в текущем фрагменте; не придумывай ответственного, срок, статус или приоритет. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
         "block: только объект {\"start\":целое,\"end\":целое} с координатами очищенного текста, 0 <= start < end <= длина текста. "
@@ -53,6 +57,7 @@ def local_context_model(text: str) -> dict[str, Any]:
     )
     from .module_assist import call_lm_studio_with_deadline
     result = call_lm_studio_with_deadline(prompt, int(route.get("timeout_seconds", 120)), "Ты локальный компилятор проектного контекста Gaia.", task=TASK_CONTEXT_COMPILER, response_schema=schema)
+    emit_runtime_diagnostic("context_compile_model", "context_compile_model", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, model=str(route.get("model", "")), prompt_chars=len(text), num_ctx=int(route.get("context_length", 0)), num_predict=int(route.get("max_tokens", 0)), prompt_eval_count=result.get("prompt_eval_count"), eval_count=result.get("eval_count"), done_reason=str(result.get("done_reason") or ""), total_duration=result.get("total_duration"), load_duration=result.get("load_duration"), prompt_eval_duration=result.get("prompt_eval_duration"), eval_duration=result.get("eval_duration"), validation="received")
     if not result.get("ok"):
         code = "timeout" if result.get("status") == "timeout" else "provider_unavailable"
         raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.", code)
@@ -70,13 +75,14 @@ class ContextCompiler:
         self.store, self.workspace_id, self.model = store, workspace_id, model or local_context_model
 
     def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None) -> list[dict[str, Any]]:
+        self._model_attempts = 0
         item = self.preflight(sanitized_id)
         extraction_id = (item.get("parents") or [""])[0]
         extraction = self.store.object_metadata(self.workspace_id, extraction_id)
         self.store.source_metadata(self.workspace_id, (extraction.get("parents") or [""])[0])
-        prior = [x for x in self.store._registry()["objects"].values() if x.get("kind") == "context" and x.get("workspace_id") == self.workspace_id and x.get("parents") == [sanitized_id] and x.get("compiler_version") == compiler_version]
         receipt = self._receipt(sanitized_id)
-        if receipt and receipt.get("status") == "complete" and receipt.get("compiler_version") == compiler_version: return [dict(x) for x in prior]
+        if receipt and receipt.get("status") == "complete" and receipt.get("compiler_version") == compiler_version:
+            return self._restore_receipt(receipt, sanitized_id, compiler_version)
         text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
         route = self._route()
         if len(text) > int(route["max_input_chars"]):
@@ -108,11 +114,14 @@ class ContextCompiler:
 
     def _route(self) -> dict[str, Any]:
         route = resolve_route(TASK_CONTEXT_COMPILER)
-        defaults = {"prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": MAX_INPUT_SIZE, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800}
+        defaults = {"prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": MAX_INPUT_SIZE, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800, "max_model_attempts": 256}
         return {**defaults, **route}
 
     def _compile_chunk(self, text: str, route: dict[str, Any], cancel_event: Any, depth: int = 0) -> list[dict[str, Any]]:
         failures: list[ContextCompileError] = []
+        self._model_attempts += 1
+        if self._model_attempts > int(route["max_model_attempts"]):
+            raise ContextCompileError("model_attempt_limit", "Превышен безопасный предел попыток сборки контекста. Данные не изменены.")
         for _ in range(int(route["retry_count"]) + 1):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             try:
@@ -171,8 +180,22 @@ class ContextCompiler:
     def _receipt(self, sanitized_id: str) -> dict[str, Any] | None:
         path=self._receipt_path(sanitized_id)
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    def _restore_receipt(self, receipt: dict[str, Any], sanitized_id: str, compiler_version: str) -> list[dict[str, Any]]:
+        if receipt.get("workspace_id") != self.workspace_id or receipt.get("sanitized_id") != sanitized_id or receipt.get("compiler_version") != compiler_version or receipt.get("prompt_schema_version") != PROMPT_SCHEMA_VERSION:
+            raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
+        context_ids = receipt.get("context_ids")
+        if not isinstance(context_ids, list) or not context_ids:
+            raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
+        result=[]
+        for context_id in context_ids:
+            if not isinstance(context_id, str): raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материал.")
+            try: record=self.store.object_metadata(self.workspace_id, context_id)
+            except ProvenanceError as exc: raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.") from exc
+            if record.get("kind") != "context": raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
+            result.append(record)
+        return result
     def _write_receipt(self, sanitized_id: str, result: list[dict[str, Any]], chunks: int, compiler_version: str, route: dict[str, Any]) -> None:
-        atomic_write_text(self._receipt_path(sanitized_id), json.dumps({"status":"complete","context_ids":[item.get("id","") for item in result],"chunk_count":chunks,"candidate_count":len(result),"compiler_version":compiler_version,"prompt_schema_version":PROMPT_SCHEMA_VERSION,"route":route.get("task", TASK_CONTEXT_COMPILER),"provider":route.get("provider", ""),"model":route.get("model", ""),"completed_at":datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False)+"\n")
+        atomic_write_text(self._receipt_path(sanitized_id), json.dumps({"status":"complete","workspace_id":self.workspace_id,"sanitized_id":sanitized_id,"context_ids":[item.get("id","") for item in result],"chunk_count":chunks,"candidate_count":len(result),"compiler_version":compiler_version,"prompt_schema_version":PROMPT_SCHEMA_VERSION,"route":route.get("task", TASK_CONTEXT_COMPILER),"provider":route.get("provider", ""),"model":route.get("model", ""),"completed_at":datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False)+"\n")
 
     def _exact_duplicate(self, candidate: dict[str, Any]) -> dict[str, Any] | None:
         norm = candidate["statement"].strip().casefold()

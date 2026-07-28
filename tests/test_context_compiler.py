@@ -115,12 +115,35 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
         self.assertEqual(call.call_args.args[1], 120)
         self.assertIn("response_schema", call.call_args.kwargs)
+        self.assertIn("Разрешённые необязательные поля", call.call_args.args[0])
+        self.assertIn("не придумывай ответственного", call.call_args.args[0])
         with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":""}):
             with self.assertRaises(ContextCompileError) as empty: local_context_model("[Сотрудник-01]")
         self.assertEqual(empty.exception.diagnostic_code,"empty_response")
         with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":"{\"candidates\":[", "done_reason":"length", "eval_count":2400}):
             with self.assertRaises(ContextCompileError) as truncated: local_context_model("[Сотрудник-01]")
         self.assertEqual(truncated.exception.diagnostic_code, "output_truncated")
+
+    def test_optional_fields_are_preserved_only_when_model_supplies_them(self):
+        tmp,s,w,san=self.setup()
+        try:
+            payload={"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True,"actor_ref":"Роль 1","deadline":"2030-01-01","status":"назначено","priority":"высокий"}]}
+            item=ContextCompiler(s,w,lambda _:payload).compile(san["artifact_id"])[0]
+            self.assertEqual(item["actor_ref"],"Роль 1"); self.assertEqual(item["deadline"],"2030-01-01"); self.assertEqual(item["explicit_status"],"назначено"); self.assertEqual(item["priority"],"высокий")
+        finally: tmp.cleanup()
+
+    def test_receipt_restores_exact_duplicates_after_restart(self):
+        tmp,s,w,san=self.setup()
+        try:
+            payload={"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}
+            first=ContextCompiler(s,w,lambda _:payload).compile(san["artifact_id"])
+            source=s.object_metadata(w,san["parents"][0])["parents"][0]; ext=s.create_extraction(w,source,"v2"); san2=protect(s,w,ext["artifact_id"],rules_version="v2")["sanitized"]
+            ReviewService(s,w,lambda _: {"status":"completed","findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
+            calls=[]
+            second=ContextCompiler(s,w,lambda text:(calls.append(text) or payload)).compile(san2["artifact_id"])
+            again=ContextCompiler(ProvenanceStore(s.root),w,lambda _:(_ for _ in ()).throw(AssertionError("model must not run"))).compile(san2["artifact_id"])
+            self.assertTrue(calls); self.assertEqual([x["id"] for x in second],[x["id"] for x in again]); self.assertEqual([x["id"] for x in first],[x["id"] for x in second]); self.assertIn(san2["artifact_id"],second[0]["source_links"])
+        finally: tmp.cleanup()
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()

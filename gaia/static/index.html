@@ -1480,6 +1480,7 @@
       </div>
     </section>
   </main>
+  <!-- context-compile-controller -->
   <script>
     let lastPrompt = "";
     let lastPackage = null;
@@ -1580,7 +1581,7 @@
       select.value = source.value;
     }
     function changeJourneyWorkspace() {
-      contextCompileGeneration++; contextCompileJobId = '';
+      contextCompileGeneration++; contextCompileJobId = ''; if (window.journeyContextCompiler) journeyContextCompiler.changeWorkspace();
       const selected = journeyProject(); const legacy = document.getElementById('project');
       if (legacy && legacy.value !== selected) { legacy.value = selected; legacy.dispatchEvent(new Event('change')); }
       journeyMaterials = []; journeyReview = null;
@@ -1683,22 +1684,13 @@
     async function startJourneyCheck(id, button) { button.disabled=true; journeyMessage('Локальная проверка выполняется…'); const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Локальная проверка недоступна.'),true);button.disabled=false;return;} journeyReview=data;journeyMessage(data.state==='ready_for_confirmation'?'Проверка завершена: дополнительных сведений не найдено':data.state==='requires_review'?'Найдены сведения, требующие проверки':'Автоматическая проверка не завершена. Проверьте очищенный текст вручную.',data.state==='manual_review_required'||data.state==='review_error');renderJourneyReview(data); }
     async function saveJourneyFinding(id, findingId, decision, button, category='') { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject(),finding_id:findingId,decision,category})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Не удалось сохранить решение.'),true);button.disabled=false;return;} if(data.new_version?.artifact_id){journeyMessage('Создана новая версия. Прежняя версия больше не действует.');await openJourneyReview(data.new_version.artifact_id);await loadJourneyMaterials();return;} await openJourneyReview(id); }
     async function confirmJourneyReview(id, button) { button.disabled=true; const response=await fetch(`/api/reviews/${encodeURIComponent(id)}/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:journeyProject()})}); const data=await response.json(); if(!response.ok){journeyMessage(journeyError(data,'Эта версия устарела. Откройте актуальную версию материала.'),true);button.disabled=false;return;} journeyMessage('Актуальная версия подтверждена. Следующее действие — собрать проектный контекст.');await openJourneyReview(id);await loadJourneyMaterials(); }
-    const waitContextCompile = milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds));
+    const journeyContextCompiler = new ContextCompileController({fetchImpl:fetch,workspace:journeyProject,render:candidates=>{showScreen('context');renderJourneyContext(candidates);},message:journeyMessage,delay:()=>new Promise(resolve=>window.setTimeout(resolve,500))});
     async function compileJourneyContext(id, button) {
-      if (contextCompileJobId) return;
-      const generation = ++contextCompileGeneration; const project = journeyProject(); button.disabled=true;
-      const response=await fetch(`/api/context/${encodeURIComponent(id)}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project})}); const data=await response.json();
-      if(!response.ok || generation!==contextCompileGeneration || project!==journeyProject()){if(generation===contextCompileGeneration)button.disabled=false;return;}
-      contextCompileJobId=data.job_id; button.textContent='Отменить сборку'; button.disabled=false;
-      button.onclick=async()=>{const current=contextCompileJobId; if(!current)return; button.disabled=true; await fetch(`/api/jobs/${encodeURIComponent(current)}/cancel`,{method:'POST'});};
-      while(generation===contextCompileGeneration && project===journeyProject() && contextCompileJobId){
-        const status=await fetch(data.status_url); const job=await status.json(); if(generation!==contextCompileGeneration || project!==journeyProject())return;
-        journeyMessage(job.message || 'Собираем проектный контекст…',job.status==='failed');
-        if(job.status==='done'){contextCompileJobId=''; showScreen('context'); renderJourneyContext(job.result?.candidates || []); journeyMessage('Контекст собран. Проверьте кандидатов.'); return;}
-        if(job.status==='cancelled'){contextCompileJobId=''; journeyMessage('Сборка контекста отменена. Данные не изменены.',true); button.disabled=false; button.textContent='Собрать проектный контекст'; button.onclick=()=>compileJourneyContext(id,button); return;}
-        if(job.status==='failed'){contextCompileJobId=''; journeyMessage(`Не удалось собрать контекст для одного из фрагментов. Данные не изменены. Код: ${job.error_code || 'CONTEXT_INTERNAL_ERROR'}.`,true); button.disabled=false; button.textContent='Собрать проектный контекст'; button.onclick=()=>compileJourneyContext(id,button); return;}
-        await waitContextCompile(500);
-      }
+      if (journeyContextCompiler.jobId) return;
+      button.disabled=true;
+      journeyContextCompiler.state=(status)=>{if(['done','failed','cancelled','error'].includes(status)){button.disabled=false;button.textContent='Собрать проектный контекст';button.onclick=()=>compileJourneyContext(id,button);}};
+      await journeyContextCompiler.start(id);
+      if (!journeyContextCompiler.jobId) button.disabled=false;
     }
     async function loadJourneyContext() { const response=await fetch(`/api/context?project=${encodeURIComponent(journeyProject())}`); const data=await response.json(); if(response.ok) renderJourneyContext(data.candidates || []); }
     function renderJourneyContext(candidates) { const root=document.getElementById('journeyContext'); root.innerHTML=''; if(!candidates.length){root.className='journey-empty';root.textContent='Контекст ещё не собран. Подтвердите материал и запустите сбор контекста.';return;} root.className=''; for(const [type,label] of Object.entries(journeyTypeLabels)){ const items=candidates.filter(item=>item.item_type===type&&item.current!==false); const group=document.createElement('section');group.className='candidate-group';group.innerHTML=`<h3>${label}</h3>`; if(!items.length){group.innerHTML += '<p class="journey-meta">Предложений пока нет.</p>';} for(const item of items) group.appendChild(journeyCandidateCard(item));root.appendChild(group);} }

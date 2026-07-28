@@ -7,8 +7,8 @@
 - [x] C. Оркестрация compiler: retry/split, дедупликация, атомарность и receipt.
 - [x] D. Асинхронная job, API, отмена и UI-прогресс.
 - [x] E. Исполняемый Node harness и сквозная проверка.
-- [ ] F. Локальный Ollama smoke на синтетических данных.
-- [ ] G. Полные регрессии, документация и один commit.
+- [x] F. Локальный Ollama smoke на синтетических данных.
+- [x] G. Полные регрессии, документация и corrective commit.
 
 ## Критерии готовности
 
@@ -16,4 +16,4 @@
 
 ## Текущий статус
 
-В работе: F–G. Завершающие проверки, живой smoke и один commit.
+Завершено: corrective review reliability. Перед commit выполнены целевые Python/API/E2E/Node-проверки, syntax check и native host build.

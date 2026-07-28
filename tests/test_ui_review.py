@@ -61,6 +61,8 @@ class UiReviewContractTests(unittest.TestCase):
     def test_ui_is_loaded_from_static_asset(self) -> None:
         self.assertTrue((Path(__file__).parents[1] / "gaia" / "static" / "index.html").exists())
         self.assertEqual(INDEX_HTML, load_index_html())
+        self.assertIn("class ContextCompileController", INDEX_HTML)
+        self.assertIn("new ContextCompileController", INDEX_HTML)
 
     def test_brand_header_uses_gaia_logo_and_desktop_window(self) -> None:
         self.assertIn('<title>Gaia</title>', INDEX_HTML)

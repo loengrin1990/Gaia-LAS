@@ -250,3 +250,4 @@ class JobRecord:
     total_chunks: int = 0
     candidate_count: int = 0
     error_code: str = ""
+    timeout_seconds: int = 0
