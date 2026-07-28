@@ -12,6 +12,7 @@ from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
 from .context_chunking import ChunkLimitError, ContextChunk, split_context
 from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
+from .context_model_executor import ContextModelExecutorError, execute_context_model_call
 
 COMPILER_VERSION = "context-v2"
 PROMPT_SCHEMA_VERSION = "context-schema-v2"
@@ -40,7 +41,7 @@ def context_response_schema(max_candidates: int) -> dict[str, Any]:
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "block", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
-def local_context_model(text: str) -> dict[str, Any]:
+def local_context_model(text: str, cancel_event: Any = None) -> dict[str, Any]:
     route = resolve_route(TASK_CONTEXT_COMPILER)
     schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16))) if route.get("structured_output", "schema") == "schema" else None
     prompt = (
@@ -60,8 +61,13 @@ def local_context_model(text: str) -> dict[str, Any]:
         "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
         "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста; не добавляй предположений.\n\n" + text
     )
-    from .local_llm import run_local_llm_prompt
-    result = run_local_llm_prompt(prompt, "Ты локальный компилятор проектного контекста Gaia.", timeout=int(route.get("timeout_seconds", 120)), temperature=0.0, task=TASK_CONTEXT_COMPILER, response_schema=schema)
+    try:
+        result = execute_context_model_call({"prompt": prompt, "system": "Ты локальный компилятор проектного контекста Gaia.", "timeout": int(route.get("timeout_seconds", 120)), "temperature": 0.0, "task": TASK_CONTEXT_COMPILER, "response_schema": schema}, int(route.get("timeout_seconds", 120)), cancel_event)
+    except ContextModelExecutorError as exc:
+        if exc.code == "cancelled":
+            raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.", "cancelled") from None
+        code = {"timeout": "model_timeout", "process": "model_process", "result": "model_result"}.get(exc.code, "model_process")
+        raise ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.", code) from None
     emit_runtime_diagnostic("context_compile_model", "context_compile_model", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, model=str(route.get("model", "")), prompt_chars=len(text), num_ctx=int(route.get("context_length", 0)), num_predict=int(route.get("max_tokens", 0)), prompt_eval_count=result.get("prompt_eval_count"), eval_count=result.get("eval_count"), done_reason=str(result.get("done_reason") or ""), total_duration=result.get("total_duration"), load_duration=result.get("load_duration"), prompt_eval_duration=result.get("prompt_eval_duration"), eval_duration=result.get("eval_duration"), validation="received")
     if not result.get("ok"):
         code = "timeout" if result.get("status") == "timeout" else "provider_unavailable"
@@ -79,7 +85,7 @@ class ContextCompiler:
     def __init__(self, store: ProvenanceStore, workspace_id: str, model: Callable[[str], dict[str, Any]] | None = None) -> None:
         self.store, self.workspace_id, self.model = store, workspace_id, model or local_context_model
 
-    def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None) -> list[dict[str, Any]]:
+    def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None, activity: Callable[[int, int, int], None] | None = None) -> list[dict[str, Any]]:
         self._model_attempts = 0
         item = self.preflight(sanitized_id)
         extraction_id = (item.get("parents") or [""])[0]
@@ -97,6 +103,7 @@ class ContextCompiler:
         candidates=[]
         for position, chunk in enumerate(chunks, 1):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+            if activity: activity(position, len(chunks), self._model_attempts + 1)
             local = self._compile_chunk(chunk.text, route, cancel_event)
             for candidate in local:
                 candidate["block"] = {"start": chunk.start + candidate["block"]["start"], "end": chunk.start + candidate["block"]["end"]}
@@ -130,7 +137,11 @@ class ContextCompiler:
         for _ in range(int(route["retry_count"]) + 1):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             try:
-                local = validate_candidates(self.model(text), len(text), int(route["max_candidates_per_chunk"]))
+                if self.model is local_context_model:
+                    response = self.model(text, cancel_event=cancel_event)
+                else:
+                    response = self.model(text)
+                local = validate_candidates(response, len(text), int(route["max_candidates_per_chunk"]))
                 if len(local) >= int(route["max_candidates_per_chunk"]):
                     raise CandidateValidationError("schema_candidates")
                 return local

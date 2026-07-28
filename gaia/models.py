@@ -251,3 +251,7 @@ class JobRecord:
     candidate_count: int = 0
     error_code: str = ""
     timeout_seconds: int = 0
+    phase: str = ""
+    current_chunk: int = 0
+    model_attempts: int = 0
+    last_activity_at: str = ""

@@ -79,13 +79,15 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
     event=cancel_event_for(job_id)
     try:
         with CONTEXT_COMPILE_LOCK:
-            update_job(job_id,status="running",message="Подготавливаем материал…",progress=5)
+            update_job(job_id,status="running",message="Собираем контекст: подготавливаем фрагменты…",progress=0,phase="compiling",last_activity_at=local_now())
             timeout_timer = threading.Timer(job_timeout_for(get_job(job_id)), cancel_job, args=(job_id, "timeout"))
             timeout_timer.daemon = True; timeout_timer.start()
             def progress(done: int,total: int,count: int):
-                update_job(job_id,message=f"Собираем контекст: фрагмент {done} из {total}…",progress=min(95,5+int(90*done/max(1,total))),completed_chunks=done,total_chunks=total,candidate_count=count)
+                update_job(job_id,message=f"Собираем контекст: обработан фрагмент {done} из {total}…",progress=min(95,5+int(90*done/max(1,total))),completed_chunks=done,total_chunks=total,candidate_count=count,last_activity_at=local_now())
+            def activity(current: int,total: int,attempts: int):
+                update_job(job_id,message=f"Собираем контекст: обрабатывается фрагмент {current} из {total}…",phase="compiling",current_chunk=current,total_chunks=total,model_attempts=attempts,last_activity_at=local_now())
             try:
-                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress)
+                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress,activity=activity)
             finally:
                 timeout_timer.cancel()
             if event.is_set(): cancel_job(job_id); return

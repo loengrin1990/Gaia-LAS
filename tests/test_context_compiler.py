@@ -106,39 +106,40 @@ class ContextCompilerTests(unittest.TestCase):
         finally: tmp.cleanup()
 
     def test_context_model_uses_dedicated_route_and_classifies_bad_response(self):
-        with patch("gaia.local_llm.run_local_llm_prompt", return_value={"ok":False}):
+        with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":False}):
             with self.assertRaises(ContextCompileError) as unavailable: local_context_model("[Сотрудник-01]")
         self.assertEqual(unavailable.exception.code, "local_model_unavailable")
-        with patch("gaia.local_llm.run_local_llm_prompt", return_value={"ok":True,"answer":"not json"}) as call:
+        with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":True,"answer":"not json"}) as call:
             with self.assertRaises(ContextCompileError) as invalid: local_context_model("[Сотрудник-01]")
         self.assertEqual(invalid.exception.code, "local_model_invalid")
-        self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
-        self.assertEqual(call.call_args.kwargs["timeout"], 120)
-        self.assertIsNone(call.call_args.kwargs["response_schema"])
-        self.assertIn("Разрешённые необязательные поля", call.call_args.args[0])
-        self.assertIn("не придумывай ответственного", call.call_args.args[0])
-        self.assertIn("Сопоставление optional metadata", call.call_args.args[0])
-        self.assertIn("actor_ref «[Координатор-Север]»", call.call_args.args[0])
-        self.assertIn("deadline «15 сентября 2026 года»", call.call_args.args[0])
+        self.assertEqual(call.call_args.args[1], 120)
+        self.assertEqual(call.call_args.args[0]["task"], "context_compiler")
+        self.assertEqual(call.call_args.args[0]["timeout"], 120)
+        self.assertIsNone(call.call_args.args[0]["response_schema"])
+        self.assertIn("Разрешённые необязательные поля", call.call_args.args[0]["prompt"])
+        self.assertIn("не придумывай ответственного", call.call_args.args[0]["prompt"])
+        self.assertIn("Сопоставление optional metadata", call.call_args.args[0]["prompt"])
+        self.assertIn("actor_ref «[Координатор-Север]»", call.call_args.args[0]["prompt"])
+        self.assertIn("deadline «15 сентября 2026 года»", call.call_args.args[0]["prompt"])
         from gaia.context_compiler import context_response_schema
         candidate = context_response_schema(16)["properties"]["candidates"]["items"]
         self.assertNotIn("actor_ref", candidate["required"])
         self.assertNotIn("deadline", candidate["required"])
         self.assertNotIn("status", candidate["required"])
         self.assertNotIn("priority", candidate["required"])
-        with patch("gaia.local_llm.run_local_llm_prompt", return_value={"ok":True,"answer":""}):
+        with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":True,"answer":""}):
             with self.assertRaises(ContextCompileError) as empty: local_context_model("[Сотрудник-01]")
         self.assertEqual(empty.exception.diagnostic_code,"empty_response")
-        with patch("gaia.local_llm.run_local_llm_prompt", return_value={"ok":True,"answer":"{\"candidates\":[", "done_reason":"length", "eval_count":2400}):
+        with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":True,"answer":"{\"candidates\":[", "done_reason":"length", "eval_count":2400}):
             with self.assertRaises(ContextCompileError) as truncated: local_context_model("[Сотрудник-01]")
         self.assertEqual(truncated.exception.diagnostic_code, "output_truncated")
 
     def test_context_model_can_use_json_mode_without_weakening_backend_validation(self):
         route={"task":"context_compiler","provider":"test","model":"gpt-oss:20b","structured_output":"json","max_candidates_per_chunk":16,"timeout_seconds":120}
         answer={"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}
-        with patch("gaia.context_compiler.resolve_route",return_value=route), patch("gaia.local_llm.run_local_llm_prompt",return_value={"ok":True,"answer":json.dumps(answer)}) as call:
+        with patch("gaia.context_compiler.resolve_route",return_value=route), patch("gaia.context_compiler.execute_context_model_call",return_value={"ok":True,"answer":json.dumps(answer)}) as call:
             self.assertEqual(local_context_model("Проверить материал."),answer)
-        self.assertIsNone(call.call_args.kwargs["response_schema"])
+        self.assertIsNone(call.call_args.args[0]["response_schema"])
 
     def test_optional_fields_are_preserved_only_when_model_supplies_them(self):
         tmp,s,w,san=self.setup()
