@@ -21,7 +21,7 @@ TASK_VEIL_REVIEW = "veil_review"
 TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
 TASK_PROJECT_HEALTH = "project_health"
 TASK_CONTEXT_COMPILER = "context_compiler"
-CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_8b", "prompt_char_limit": 6000, "max_tokens": 600}
+CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_8b", "prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "temperature": 0, "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": 250000, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800}
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -135,10 +135,12 @@ def resolve_route(task: str) -> dict[str, Any]:
     provider_data = provider_config(provider)
     model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)
     resolved: dict[str, Any] = {"task": task, "provider": provider, "model": model}
-    for key in ("prompt_char_limit", "max_tokens"):
+    for key in ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"):
         value = route.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             resolved[key] = value
+    if isinstance(route.get("temperature"), (int, float)) and not isinstance(route.get("temperature"), bool):
+        resolved["temperature"] = float(route["temperature"])
     return resolved
 
 
@@ -287,6 +289,7 @@ def run_lm_studio_prompt(
     task: str = TASK_HEARTH,
     provider_name: str | None = None,
     model: str | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return run_local_llm_prompt(
         prompt,
@@ -296,6 +299,7 @@ def run_lm_studio_prompt(
         task=task,
         provider_name=provider_name,
         model=model,
+        response_schema=response_schema,
     )
 
 
@@ -307,6 +311,7 @@ def run_local_llm_prompt(
     task: str = TASK_HEARTH,
     provider_name: str | None = None,
     model: str | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     route = dict(resolve_route(task))
     if provider_name:
@@ -347,8 +352,9 @@ def run_local_llm_prompt(
         route["model"],
         system,
         local_prompt,
-        temperature,
+        float(route.get("temperature", temperature)),
         max_tokens=int(route.get("max_tokens") or local_llm_max_tokens()),
+        context_length=route.get("context_length"), response_schema=response_schema,
     )
     request = urllib.request.Request(
         str(provider.get("endpoint") or ""),
@@ -369,6 +375,16 @@ def run_local_llm_prompt(
             "route": task,
             "prompt_chars_sent": len(local_prompt),
             "prompt_compacted": prompt_compacted,
+            "done": bool(data.get("done", True)) if is_ollama_provider(provider) else True,
+            "done_reason": str(data.get("done_reason") or "") if is_ollama_provider(provider) else "",
+            "prompt_eval_count": data.get("prompt_eval_count") if is_ollama_provider(provider) else None,
+            "eval_count": data.get("eval_count") if is_ollama_provider(provider) else None,
+            "total_duration": data.get("total_duration") if is_ollama_provider(provider) else None,
+            "load_duration": data.get("load_duration") if is_ollama_provider(provider) else None,
+            "prompt_eval_duration": data.get("prompt_eval_duration") if is_ollama_provider(provider) else None,
+            "eval_duration": data.get("eval_duration") if is_ollama_provider(provider) else None,
+            "num_ctx": payload.get("options", {}).get("num_ctx") if is_ollama_provider(provider) else None,
+            "num_predict": payload.get("options", {}).get("num_predict") if is_ollama_provider(provider) else None,
         }
     except urllib.error.HTTPError as exc:
         details = read_http_error_body(exc)
@@ -414,6 +430,8 @@ def local_llm_payload(
     prompt: str,
     temperature: float,
     max_tokens: int | None = None,
+    context_length: int | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     messages = [
         {"role": "system", "content": system},
@@ -429,9 +447,9 @@ def local_llm_payload(
             "think": bool(provider.get("thinking", False)),
             "options": {"temperature": temperature},
         }
-        if provider.get("json_mode", True):
-            payload["format"] = "json"
-        context_length = provider.get("context_length")
+        if response_schema is not None: payload["format"] = response_schema
+        elif provider.get("json_mode", True): payload["format"] = "json"
+        context_length = context_length or provider.get("context_length")
         if isinstance(context_length, int) and not isinstance(context_length, bool) and context_length > 0:
             payload["options"]["num_ctx"] = context_length
         if max_tokens > 0:

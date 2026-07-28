@@ -101,7 +101,8 @@ class LocalStatusTests(unittest.TestCase):
         with patch("gaia.local_llm.route_configs", return_value={}):
             route = resolve_route(TASK_CONTEXT_COMPILER)
         self.assertEqual(route["provider"], "ollama_qwen3_8b")
-        self.assertEqual(route["max_tokens"], 600)
+        self.assertEqual(route["max_tokens"], 2400)
+        self.assertEqual(route["context_length"], 32768)
 
     def test_explicit_provider_override_does_not_require_route_edit(self) -> None:
         response = FakeResponse({"message": {"content": "ok"}})

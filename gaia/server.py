@@ -27,7 +27,7 @@ from .conversations import (
     get_conversation,
     list_conversations,
 )
-from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job
+from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job, submit_context_compile_job
 from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError, ContextService
 from .context_search import ContextSearchError, parse_params, search
@@ -614,10 +614,15 @@ class Handler(BaseHTTPRequestHandler):
         parts=urlparse(self.path).path.split("/"); object_id=parts[3] if len(parts)>=4 else ""; action=parts[4] if len(parts)>=5 else ""; payload=self.read_json(); project=str(payload.get("project") or "")
         try:
             intake=ControlledIntake()
-            if action == "compile": json_response(self,{"candidates":intake.compiler(project).compile(object_id)},202); return
+            if action == "compile":
+                intake.compiler(project).preflight(object_id)
+                job = submit_context_compile_job(project, object_id)
+                json_response(self, {"job_id": job.id, "status_url": f"/api/jobs/{job.id}", "status": "queued", "message": "Подготавливаем материал…"}, 202); return
             if action == "decision": json_response(self,intake.context(project).decide(object_id,str(payload.get("decision") or ""),str(payload.get("title") or ""),str(payload.get("statement") or ""))); return
             if action == "duplicate": json_response(self, intake.context(project).mark_duplicate(object_id, str(payload.get("target_id") or ""))); return
             if action == "conflict": json_response(self, intake.context(project).resolve_conflict(object_id, str(payload.get("resolution") or ""))); return
+        except JobQueueFullError as exc:
+            json_response(self, api_error_payload("job_queue_full", str(exc)), 429); return
         except ContextCompileError as exc:
             trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             context_compile_failure(intake, project, object_id, trace_id, exc)

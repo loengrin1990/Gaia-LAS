@@ -4,6 +4,7 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -92,6 +93,17 @@ class EndToEndValidationTests(unittest.TestCase):
                 self.assertEqual(status, 202)
                 return response
 
+            def compiled_candidates(artifact_id: str) -> list[dict[str, object]]:
+                status, started = request("POST", f"/api/context/{artifact_id}/compile", {"project": project})
+                self.assertEqual(status, 202)
+                for _ in range(50):
+                    _, job = request("GET", str(started["status_url"]))
+                    if job["status"] in {"done", "failed", "cancelled"}:
+                        self.assertEqual(job["status"], "done")
+                        return list(job["result"]["candidates"])
+                    time.sleep(0.02)
+                self.fail("Контекстная job не завершилась в тесте")
+
             try:
                 server = start_server()
                 initial = upload(first_text)
@@ -141,9 +153,7 @@ class EndToEndValidationTests(unittest.TestCase):
                 status, confirmed = request("POST", f"/api/reviews/{new_sanitized}/confirm", {"project": project})
                 self.assertEqual(status, 202)
                 self.assertEqual(confirmed["artifact_id"], new_sanitized)
-                status, first_context = request("POST", f"/api/context/{new_sanitized}/compile", {"project": project})
-                self.assertEqual(status, 202)
-                candidates = first_context["candidates"]
+                candidates = compiled_candidates(new_sanitized)
                 self.assertEqual(len(candidates), 5)
                 by_type = {item["item_type"]: item for item in candidates}
                 self.assertEqual(request("POST", f"/api/context/{by_type['requirement']['id']}/decision", {"project": project, "decision": "confirm"})[0], 200)
@@ -162,9 +172,7 @@ class EndToEndValidationTests(unittest.TestCase):
                 second_sanitized = str(second_review["artifact_id"])
                 self.assertEqual(request("POST", f"/api/reviews/{second_sanitized}/check", {"project": project})[0], 200)
                 self.assertEqual(request("POST", f"/api/reviews/{second_sanitized}/confirm", {"project": project})[0], 202)
-                status, second_context = request("POST", f"/api/context/{second_sanitized}/compile", {"project": project})
-                self.assertEqual(status, 202)
-                second_items = {item["item_type"]: item for item in second_context["candidates"]}
+                second_items = {item["item_type"]: item for item in compiled_candidates(second_sanitized)}
                 self.assertEqual(len(second_items["action"]["source_links"]), 2)
                 conflict = second_items["decision"]
                 self.assertEqual(conflict["status"], "conflicted")
@@ -218,6 +226,17 @@ class EndToEndValidationTests(unittest.TestCase):
                 connection.close()
                 return response.status, data
 
+            def compiled_candidates(artifact_id: str) -> list[dict[str, object]]:
+                status, started = request("POST", f"/api/context/{artifact_id}/compile", {"project": project})
+                self.assertEqual(status, 202)
+                for _ in range(50):
+                    _, job = request("GET", str(started["status_url"]))
+                    if job["status"] in {"done", "failed", "cancelled"}:
+                        self.assertEqual(job["status"], "done")
+                        return list(job["result"]["candidates"])
+                    time.sleep(0.02)
+                self.fail("Контекстная job не завершилась в тесте")
+
             try:
                 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -240,10 +259,8 @@ class EndToEndValidationTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertTrue(review["confirmed"])
                 self.assertEqual(review["confirmation_method"], "manual")
-                status, compiled = request("POST", f"/api/context/{artifact_id}/compile", {"project": project})
-                self.assertEqual(status, 202)
-                self.assertEqual(len(compiled["candidates"]), 1)
-                self.assertEqual(len(request("POST", f"/api/context/{artifact_id}/compile", {"project": project})[1]["candidates"]), 1)
+                self.assertEqual(len(compiled_candidates(artifact_id)), 1)
+                self.assertEqual(len(compiled_candidates(artifact_id)), 1)
             finally:
                 if server:
                     server.shutdown(); server.server_close()

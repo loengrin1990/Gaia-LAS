@@ -57,7 +57,7 @@ def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str) -> dict
     return call_local_llm_with_deadline(prompt, timeout, system, task=TASK_LORE_RERANK)
 
 
-def call_local_llm_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_LORE_RERANK) -> dict[str, Any]:
+def call_local_llm_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_LORE_RERANK, response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
     deadline = max(1, int(timeout or 1))
     result_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
 
@@ -68,6 +68,7 @@ def call_local_llm_with_deadline(prompt: str, timeout: int, system: str, task: s
             timeout=deadline,
             temperature=0.0,
             task=task,
+            response_schema=response_schema,
         )
         try:
             result_queue.put_nowait(result)

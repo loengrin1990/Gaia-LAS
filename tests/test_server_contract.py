@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from gaia.server import Handler, MAX_JSON_BODY_SIZE, MAX_MULTIPART_BODY_SIZE, MAX_UPLOAD_FILE_SIZE, MAX_UPLOAD_FILES, MULTIPART_READ_CHUNK_SIZE, SESSION_COOKIE_NAME, SESSION_TOKEN, multipart_files, multipart_value, mutation_is_authorized, parse_multipart
 from gaia.context_compiler import ContextCompileError
+from gaia.jobs import JobQueueFullError
 
 
 class ServerContractTests(unittest.TestCase):
@@ -68,24 +69,20 @@ class ServerContractTests(unittest.TestCase):
         self.assertEqual(response.call_args.args[1]["review"]["artifact_id"], "san_2")
 
     def test_context_compile_uses_existing_local_api(self) -> None:
-        compiler=Mock(); compiler.compile.return_value=[{"id":"ctx_1","item_type":"requirement"}]
-        intake=Mock(); intake.compiler.return_value=compiler
+        job=SimpleNamespace(id="job_context")
+        compiler=Mock(); intake=Mock(); intake.compiler.return_value=compiler
         handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
-        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.json_response") as response): Handler.handle_context_action(handler)
-        compiler.compile.assert_called_once_with("san_1"); self.assertEqual(response.call_args.args[1]["candidates"][0]["id"],"ctx_1")
+        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.submit_context_compile_job",return_value=job) as submit,patch("gaia.server.json_response") as response): Handler.handle_context_action(handler)
+        submit.assert_called_once_with("synthetic", "san_1"); self.assertEqual(response.call_args.args[1]["job_id"],"job_context")
 
     def test_context_compile_reports_safe_specific_error(self) -> None:
-        compiler=Mock(); compiler.compile.side_effect=ContextCompileError("local_model_invalid", "synthetic", "schema_field")
-        intake=Mock(); intake.compiler.return_value=compiler; intake.store.root=Mock()
+        compiler=Mock(); intake=Mock(); intake.compiler.return_value=compiler
         handler=SimpleNamespace(path="/api/context/san_1/compile",read_json=lambda:{"project":"synthetic"})
-        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.context_compile_failure") as diagnostic,patch("gaia.server.json_response") as response):
+        with (patch("gaia.server.ControlledIntake",return_value=intake),patch("gaia.server.submit_context_compile_job",side_effect=JobQueueFullError("busy")),patch("gaia.server.json_response") as response):
             Handler.handle_context_action(handler)
-        diagnostic.assert_called_once()
         error=response.call_args.args[1]["error"]
-        self.assertEqual(error["code"],"local_model_invalid")
-        self.assertIn("не прошёл проверку",error["message"])
-        self.assertIn("CONTEXT_SCHEMA_FIELD",error["message"])
-        self.assertNotIn("synthetic",error["message"])
+        self.assertEqual(error["code"],"job_queue_full")
+        self.assertIn("busy",error["message"])
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (

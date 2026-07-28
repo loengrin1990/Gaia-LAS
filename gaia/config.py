@@ -248,13 +248,27 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
             if not isinstance(model, str) or not model.strip():
                 raise ConfigError(f"Config value `local_llm.routes.{name}.model` must be a non-empty string.")
             route["model"] = model.strip()
-        for key in ("prompt_char_limit", "max_tokens"):
+        numeric_keys = ("prompt_char_limit", "max_tokens", "context_length", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds")
+        for key in numeric_keys:
             option_value = value.get(key)
             if option_value is None:
                 continue
             if isinstance(option_value, bool) or not isinstance(option_value, int) or option_value <= 0:
                 raise ConfigError(f"Config value `local_llm.routes.{name}.{key}` must be a positive integer.")
             route[key] = option_value
+        temperature = value.get("temperature")
+        if temperature is not None:
+            if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= float(temperature) <= 1:
+                raise ConfigError(f"Config value `local_llm.routes.{name}.temperature` must be between 0 and 1.")
+            route["temperature"] = float(temperature)
+        if name == "context_compiler":
+            allowed = {"provider", "model", "prompt_char_limit", "max_tokens", "context_length", "temperature", "timeout_seconds", "chunk_char_limit", "chunk_max_units", "chunk_overlap_chars", "max_candidates_per_chunk", "max_total_candidates", "max_input_chars", "max_chunks", "retry_count", "job_timeout_seconds"}
+            unknown = sorted(set(value) - allowed)
+            if unknown:
+                raise ConfigError(f"Config route `context_compiler` contains unsupported fields: {', '.join(unknown)}.")
+            limit = int(route.get("chunk_char_limit", 4000)); prompt_limit = int(route.get("prompt_char_limit", 9000)); overlap = int(route.get("chunk_overlap_chars", 250))
+            if limit >= prompt_limit - 1000 or overlap >= limit // 2:
+                raise ConfigError("Config route `context_compiler` has incompatible chunk limits.")
         routes[name.strip()] = route
     return routes
 

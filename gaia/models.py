@@ -245,3 +245,8 @@ class JobRecord:
     result: dict[str, Any] | None = None
     error: str = ""
     cancellation_requested: bool = False
+    job_type: str = "analysis"
+    completed_chunks: int = 0
+    total_chunks: int = 0
+    candidate_count: int = 0
+    error_code: str = ""

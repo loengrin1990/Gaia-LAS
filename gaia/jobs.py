@@ -10,6 +10,8 @@ from typing import Any
 from .models import JobRecord
 from .orchestrator import PackageCancelledError, create_package
 from .controlled_intake import ControlledIntake
+from .context_compiler import ContextCompileError
+from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
 
 
 JOBS: dict[str, JobRecord] = {}
@@ -19,6 +21,7 @@ MAX_WORKERS = 4
 MAX_QUEUED_JOBS = 8
 JOB_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="gaia-job")
 JOB_CAPACITY = threading.BoundedSemaphore(MAX_WORKERS + MAX_QUEUED_JOBS)
+CONTEXT_COMPILE_LOCK = threading.Lock()
 RUNNING_JOB_TIMEOUT_SECONDS = 900
 TERMINAL_STATUSES = {"done", "failed", "cancelled"}
 
@@ -55,6 +58,42 @@ def submit_analyze_job(project: str, query: str, uploaded: list[tuple[str, bytes
         JOB_CAPACITY.release()
         raise
     return job
+
+def submit_context_compile_job(project: str, artifact_id: str) -> JobRecord:
+    if not JOB_CAPACITY.acquire(blocking=False):
+        raise JobQueueFullError("Очередь обработки занята. Дождись завершения текущих задач и повтори запрос.")
+    job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-ctx-" + uuid.uuid4().hex[:8]
+    now = local_now()
+    job = JobRecord(id=job_id, status="created", created_at=now, updated_at=now, project=project, message="Подготавливаем материал…", progress=0, job_type="context_compile")
+    with JOBS_LOCK:
+        prune_completed_jobs(); JOBS[job_id] = job; JOB_CANCEL_EVENTS[job_id] = threading.Event()
+    try:
+        JOB_EXECUTOR.submit(_run_context_compile_job, job_id, project, artifact_id)
+    except Exception:
+        JOB_CAPACITY.release(); raise
+    return job
+
+def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> None:
+    event=cancel_event_for(job_id)
+    try:
+        with CONTEXT_COMPILE_LOCK:
+            update_job(job_id,status="running",message="Подготавливаем материал…",progress=5)
+            timeout_timer = threading.Timer(int(resolve_route(TASK_CONTEXT_COMPILER).get("job_timeout_seconds", 1800)), cancel_job, args=(job_id, "timeout"))
+            timeout_timer.daemon = True; timeout_timer.start()
+            def progress(done: int,total: int,count: int):
+                update_job(job_id,message=f"Собираем контекст: фрагмент {done} из {total}…",progress=min(95,5+int(90*done/max(1,total))),completed_chunks=done,total_chunks=total,candidate_count=count)
+            try:
+                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress)
+            finally:
+                timeout_timer.cancel()
+            if event.is_set(): cancel_job(job_id); return
+            update_job(job_id,status="done",message="Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates},candidate_count=len(candidates))
+    except ContextCompileError as exc:
+        if exc.code=="cancelled": cancel_job(job_id)
+        else: update_job(job_id,status="failed",message="Не удалось собрать контекст для одного из фрагментов. Данные не изменены.",progress=100,error_code=f"CONTEXT_{(exc.diagnostic_code or exc.code).upper()}",error=f"CONTEXT_{(exc.diagnostic_code or exc.code).upper()}")
+    except Exception: update_job(job_id,status="failed",message="Не удалось собрать контекст. Данные не изменены.",progress=100,error_code="CONTEXT_INTERNAL_ERROR",error="CONTEXT_INTERNAL_ERROR")
+    finally:
+        JOB_CAPACITY.release()
 
 
 def run_analyze_job(job_id: str, project: str, query: str, uploaded: list[tuple[str, bytes]], profile_id: str | None, intake: dict[str, Any] | None = None) -> None:
@@ -149,11 +188,11 @@ def cancel_job(job_id: str, reason: str = "cancelled") -> JobRecord | None:
         job.status = "cancelled"
         job.progress = 100
         if reason == "timeout":
-            job.message = "Задача остановлена по лимиту времени; активная транскрибация завершена."
-            job.error = "Job timeout. Проверь тяжелые вложения или увеличь processing.analyze_job_timeout_seconds."
+            job.message = "Сборка контекста остановлена по лимиту времени. Данные не изменены." if job.job_type == "context_compile" else "Задача остановлена по лимиту времени; активная транскрибация завершена."
+            job.error = "CONTEXT_TIMEOUT" if job.job_type == "context_compile" else "Job timeout. Проверь тяжелые вложения или увеличь processing.analyze_job_timeout_seconds."
         else:
-            job.message = "Задача отменена; активная транскрибация завершена."
-            job.error = "Job cancelled by user."
+            job.message = "Сборка контекста отменена. Данные не изменены." if job.job_type == "context_compile" else "Задача отменена; активная транскрибация завершена."
+            job.error = "CONTEXT_CANCELLED" if job.job_type == "context_compile" else "Job cancelled by user."
         job.updated_at = local_now()
         return job
 

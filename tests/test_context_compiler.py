@@ -5,6 +5,7 @@ import http.client
 import hashlib
 import json
 import threading
+import time
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
@@ -84,8 +85,24 @@ class ContextCompilerTests(unittest.TestCase):
         try:
             existing=ContextCompiler(s,w,lambda text:{"candidates":[{"type":"requirement","title":"Требование","statement":"Сохранить локальную проверку.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}).compile(san["artifact_id"])[0]
             ContextService(s,w).decide(existing["id"],"confirm")
-            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v2")
+            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v3")
             self.assertEqual(ContextService(s,w).get(existing["id"])["status"],"confirmed")
+        finally: tmp.cleanup()
+
+    def test_large_material_retries_then_splits_without_partial_records(self):
+        tmp,s,w,san=self.setup()
+        try:
+            path=s.root / "sanitized" / w / f"{san['artifact_id']}.txt"
+            path.write_text((("Требование: проверить локальную версию. " + "деталь " * 70 + "\n\n") * 30), encoding="utf-8")
+            calls=[]
+            def model(text):
+                calls.append(len(text))
+                if len(text) > 1200: return {"candidates": [{"type":"requirement","title":"Слишком много","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}] * 16}
+                return {"candidates":[{"type":"requirement","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"medium","requires_review":True}]}
+            items=ContextCompiler(s,w,model).compile(san["artifact_id"])
+            self.assertEqual(len(items),1); self.assertTrue(any(value > 1200 for value in calls)); self.assertGreater(len(calls), 2)
+            self.assertGreaterEqual(items[0]["block_links"][0]["start"],0)
+            self.assertLessEqual(items[0]["block_links"][0]["end"],len(path.read_text(encoding="utf-8")))
         finally: tmp.cleanup()
 
     def test_context_model_uses_dedicated_route_and_classifies_bad_response(self):
@@ -96,10 +113,14 @@ class ContextCompilerTests(unittest.TestCase):
             with self.assertRaises(ContextCompileError) as invalid: local_context_model("[Сотрудник-01]")
         self.assertEqual(invalid.exception.code, "local_model_invalid")
         self.assertEqual(call.call_args.kwargs["task"], "context_compiler")
-        self.assertEqual(call.call_args.args[1], 45)
+        self.assertEqual(call.call_args.args[1], 120)
+        self.assertIn("response_schema", call.call_args.kwargs)
         with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":""}):
             with self.assertRaises(ContextCompileError) as empty: local_context_model("[Сотрудник-01]")
         self.assertEqual(empty.exception.diagnostic_code,"empty_response")
+        with patch("gaia.module_assist.call_lm_studio_with_deadline", return_value={"ok":True,"answer":"{\"candidates\":[", "done_reason":"length", "eval_count":2400}):
+            with self.assertRaises(ContextCompileError) as truncated: local_context_model("[Сотрудник-01]")
+        self.assertEqual(truncated.exception.diagnostic_code, "output_truncated")
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()
@@ -120,7 +141,7 @@ class ContextCompilerTests(unittest.TestCase):
             action=next(x for x in second if x["item_type"]=="action")
             self.assertEqual(len(action["source_links"]),2)
             # A conflicting decision remains separate and cannot displace the confirmed old one.
-            conflict=ContextCompiler(s,w,lambda text:{"candidates":[{**model(text)["candidates"][0],"statement":"Использовать иной локальный маршрут."}]}).compile(san2["artifact_id"],compiler_version="context-v2")[0]
+            conflict=ContextCompiler(s,w,lambda text:{"candidates":[{**model(text)["candidates"][0],"statement":"Использовать иной локальный маршрут."}]}).compile(san2["artifact_id"],compiler_version="context-v3")[0]
             self.assertEqual(s.object_metadata(w,first[0]["id"])["status"],"confirmed")
             self.assertEqual(ContextService(s,w).get(conflict["id"])["status"],"conflicted")
             service.resolve_conflict(conflict["id"],"keep_both")
@@ -181,7 +202,12 @@ class ContextCompilerTests(unittest.TestCase):
                     headers={"Host":f"127.0.0.1:{port}","Origin":f"http://127.0.0.1:{port}","Cookie":f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}","Content-Type":"application/json"}
                     connection.request(method,path,body,headers); response=connection.getresponse(); data=json.loads(response.read()); connection.close(); return response.status,data
                 status,data=request("POST",f"/api/context/{san['artifact_id']}/compile",{"project":project})
-                self.assertEqual(status,202); self.assertEqual(len(data["candidates"]),5)
+                self.assertEqual(status,202); self.assertEqual(data["status"], "queued")
+                for _ in range(30):
+                    status, job = request("GET", data["status_url"])
+                    if job["status"] in {"done", "failed", "cancelled"}: break
+                    time.sleep(0.03)
+                self.assertEqual(job["status"], "done"); self.assertEqual(len(job["result"]["candidates"]),5)
                 status,listed=request("GET",f"/api/context?project={project}")
                 self.assertEqual(status,200); self.assertEqual(len(listed["candidates"]),5)
                 candidate_id=listed["candidates"][0]["id"]

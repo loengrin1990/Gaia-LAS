@@ -12,8 +12,8 @@ ALLOWED_PROJECT_SEVERITY = {"info", "warning", "critical"}
 SCRIBE_CATEGORIES = ("decisions", "rules", "risks", "open_questions", "technical_facts", "exclude")
 
 
-def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_SCRIBE_CLASSIFIER) -> dict[str, Any]:
-    return call_local_llm_with_deadline(prompt, timeout, system, task=task)
+def call_lm_studio_with_deadline(prompt: str, timeout: int, system: str, task: str = TASK_SCRIBE_CLASSIFIER, response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
+    return call_local_llm_with_deadline(prompt, timeout, system, task=task, response_schema=response_schema)
 
 
 def review_masking_with_local_llm(label: str, masked_text: str, rule_summary: dict[str, Any], timeout: int) -> dict[str, Any] | None:
