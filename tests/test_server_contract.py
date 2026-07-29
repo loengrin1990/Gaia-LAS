@@ -12,6 +12,18 @@ from gaia.jobs import JobQueueFullError
 
 
 class ServerContractTests(unittest.TestCase):
+    def test_session_refresh_accepts_loopback_without_old_cookie_and_never_returns_token(self) -> None:
+        handler=SimpleNamespace(client_address=("127.0.0.1",1),headers={"Host":"127.0.0.1:8787","Origin":"http://127.0.0.1:8787","Content-Type":"application/json","X-Gaia-Session-Refresh":"1","Content-Length":"2"},rfile=io.BytesIO(b"{}"))
+        with patch("gaia.server.json_response") as response:
+            Handler.handle_session_refresh(handler)
+        payload=response.call_args.args[1]
+        self.assertEqual(response.call_args.args[2],200); self.assertEqual(payload["status"],"ready"); self.assertIn("runtime_id",payload); self.assertNotIn("token",payload); self.assertIn("HttpOnly",response.call_args.kwargs["set_cookie"])
+
+    def test_session_refresh_rejects_wrong_origin_or_header(self) -> None:
+        for headers in ({"Host":"127.0.0.1:8787","Origin":"http://evil","Content-Type":"application/json","X-Gaia-Session-Refresh":"1"},{"Host":"127.0.0.1:8787","Origin":"http://127.0.0.1:8787","Content-Type":"application/json"}):
+            with self.subTest(headers=headers), patch("gaia.server.json_response") as response:
+                Handler.handle_session_refresh(SimpleNamespace(client_address=("127.0.0.1",1),headers=headers,rfile=io.BytesIO()))
+            self.assertEqual(response.call_args.args[2],403)
     def test_review_check_does_not_submit_analysis_before_confirmation(self) -> None:
         service = Mock(); service.start.return_value = {"artifact_id": "san_1", "state": "requires_review", "cleaned_text": "[PERSON_1]"}
         intake = Mock(); intake.review.return_value = service

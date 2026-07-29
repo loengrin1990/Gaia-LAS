@@ -1482,6 +1482,28 @@
   </main>
   <!-- context-compile-controller -->
   <script>
+    const gaiaNativeFetch = window.fetch.bind(window);
+    let gaiaRuntimeId = '';
+    async function gaiaSafeJson(response) { try { return await response.clone().json(); } catch (_) { return null; } }
+    async function gaiaSessionRefresh() {
+      const response = await gaiaNativeFetch('/api/session/refresh', {method:'POST',headers:{'Content-Type':'application/json','X-Gaia-Session-Refresh':'1'},body:'{}'});
+      const data = await gaiaSafeJson(response);
+      if (!response.ok || !data || data.status !== 'ready' || typeof data.runtime_id !== 'string') throw new Error('session_refresh_failed');
+      gaiaRuntimeId=data.runtime_id; return data;
+    }
+    async function gaiaMutationFetch(input, init={}) {
+      const method=String(init.method || (input && input.method) || 'GET').toUpperCase();
+      if (!['POST','PATCH','PUT','DELETE'].includes(method)) return gaiaNativeFetch(input,init);
+      const first=await gaiaNativeFetch(input,init); const payload=await gaiaSafeJson(first);
+      if (!(first.status===403 && payload?.error?.code==='mutation_not_authorized')) return first;
+      if (init.signal?.aborted) throw new DOMException('Aborted','AbortError');
+      try { await gaiaSessionRefresh(); } catch (_) { throw new Error('session_refresh_failed'); }
+      if (init.signal?.aborted) throw new DOMException('Aborted','AbortError');
+      const retry=await gaiaNativeFetch(input,init); if (!retry.ok && retry.status===403) { /* exact-once: never refresh again */ }
+      return retry;
+    }
+    window.fetch = gaiaMutationFetch;
+    document.addEventListener('DOMContentLoaded', async()=>{ try { await gaiaSessionRefresh(); } catch (_) { const node=document.getElementById('journeyMessage'); if(node) { node.textContent='Не удалось установить локальную сессию Gaia. Перезапустите приложение.'; node.className='journey-message error'; } } }, {once:true});
     let lastPrompt = "";
     let lastPackage = null;
     let currentJobId = "";

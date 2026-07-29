@@ -86,13 +86,15 @@ class UploadCapacityError(ValueError):
     pass
 
 
-def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200) -> None:
+def json_response(handler: BaseHTTPRequestHandler, payload: Any, status: int = 200, set_cookie: str = "") -> None:
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store, max-age=0")
     handler.send_header("Pragma", "no-cache")
     handler.send_header("Content-Length", str(len(body)))
+    if set_cookie:
+        handler.send_header("Set-Cookie", set_cookie)
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -206,6 +208,16 @@ def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
     return bool(token and secrets.compare_digest(token.value, SESSION_TOKEN))
 
 
+def session_refresh_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+    """Accept only an explicit same-origin loopback refresh request."""
+    try:
+        loopback = ip_address(str(handler.client_address[0])).is_loopback
+    except (AttributeError, ValueError):
+        return False
+    host = handler.headers.get("Host", "")
+    return bool(loopback and host and handler.headers.get("Origin", "") == f"http://{host}" and handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json" and handler.headers.get("X-Gaia-Session-Refresh", "") == "1")
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/" or self.path.startswith("/?"):
@@ -279,6 +291,9 @@ class Handler(BaseHTTPRequestHandler):
         error_response(self, "not_found", "not found", 404)
 
     def do_POST(self) -> None:
+        if self.path == "/api/session/refresh":
+            self.handle_session_refresh()
+            return
         if not mutation_is_authorized(self):
             error_response(self, "mutation_not_authorized", "Открой Gaia в локальном браузере и повтори действие.", 403)
             return
@@ -286,6 +301,25 @@ class Handler(BaseHTTPRequestHandler):
             self.dispatch_POST()
         except ValueError as exc:
             error_response(self, "invalid_request", str(exc), 400)
+
+    def handle_session_refresh(self) -> None:
+        trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+        if not session_refresh_is_authorized(self):
+            emit_runtime_diagnostic("local_session", "session_refresh_failed", trace_id, operation_class="session_refresh", http_status=403, error_code="refresh_not_authorized", attempt=1)
+            json_response(self, api_error_payload("session_refresh_not_authorized", "Не удалось обновить локальную сессию Gaia."), 403); return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length < 0 or length > 2:
+                raise ValueError("invalid_body")
+            raw = self.rfile.read(length) if length else b""
+            if raw and raw.strip() not in {b"{}"}:
+                raise ValueError("invalid_body")
+        except Exception:
+            emit_runtime_diagnostic("local_session", "session_refresh_failed", trace_id, operation_class="session_refresh", http_status=400, error_code="invalid_body", attempt=1)
+            json_response(self, api_error_payload("session_refresh_invalid", "Не удалось обновить локальную сессию Gaia."), 400); return
+        runtime_id = str(runtime_fingerprint().get("runtime_id", ""))
+        emit_runtime_diagnostic("local_session", "session_refresh_succeeded", trace_id, operation_class="session_refresh", http_status=200, attempt=1)
+        json_response(self, {"status":"ready", "runtime_id":runtime_id}, 200, set_cookie=session_cookie())
 
     def dispatch_POST(self) -> None:
         route = urlparse(self.path).path

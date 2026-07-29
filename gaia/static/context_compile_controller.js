@@ -24,8 +24,8 @@ class ContextCompileController {
       if (!data || typeof data.job_id!=='string' || !data.job_id || typeof data.status_url!=='string' || !data.status_url) throw new Error('invalid_job');
       if (!this.active(generation, project)) return false;
       this.jobId = data.job_id; this.phase=''; await this.poll(data.status_url, generation, project); return true;
-    } catch (_) {
-      this.jobId=''; this.phase=''; if (this.active(generation, project)) { this.message('Не удалось начать сборку проектного контекста. Повторите попытку.', true); this.state('error'); }
+    } catch (error) {
+      this.jobId=''; this.phase=''; if (this.active(generation, project)) { this.message(error?.message==='session_refresh_failed'?'Локальная сессия Gaia устарела и не была восстановлена. Перезапустите приложение.':'Не удалось начать сборку проектного контекста. Повторите попытку.', true); this.state('error'); }
       return false;
     } finally { clearTimeout(timer); }
   }
