@@ -21,11 +21,15 @@ class UiReviewContractTests(unittest.TestCase):
     def test_project_summary_uses_read_only_overview_and_keeps_it_during_search(self) -> None:
         for text in (
             'id="contextOverview"',
+            'id="contextSearchSummary"',
             '/api/context/overview?project=',
             'Контекст собран, но его элементы ещё не подтверждены.',
             'Только после этого они появятся в сводке и поиске.',
             'В подтверждённом контексте ответственные пока не указаны.',
             'function contextMetadataBadges',
+            'function contextSearchDescription()',
+            'Поиск выполнен, совпадений нет. Измените формулировку запроса или сбросьте фильтры.',
+            '<legend>Типы элементов</legend>',
             'runContextSearch(false);',
         ):
             self.assertIn(text, INDEX_HTML)

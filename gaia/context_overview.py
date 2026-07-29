@@ -22,8 +22,6 @@ def overview(items: list[dict[str, Any]]) -> dict[str, Any]:
     counts = {item_type: sum(item.get("item_type") == item_type for item in confirmed) for item_type in ITEM_TYPES}
     actions = [item for item in confirmed if item.get("item_type") == "action"]
     attention = {
-        "risks": counts["risk"],
-        "open_questions": counts["open_question"],
         "actions_without_actor": sum(not str(item.get("actor_ref") or "").strip() for item in actions),
         "actions_without_deadline": sum(not str(item.get("deadline") or "").strip() for item in actions),
         "related_items": sum(bool(item.get("relation_ids")) for item in confirmed),

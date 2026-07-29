@@ -73,6 +73,16 @@ class ContextSearchTests(unittest.TestCase):
         self.assertEqual([row["item_type"] for row in search(entries, self.params(sort="title_asc"))["results"]], ["risk", "decision", "action"])
         self.assertEqual(search(entries, self.params())["facets"]["actors"], [{"value": "[Роль]", "count": 1}])
 
+    def test_actor_facets_do_not_leak_rejected_or_other_workspace_values(self) -> None:
+        entries = [
+            item("safe", actor_ref="[Безопасная роль]"),
+            item("rejected", actor_ref="Исходное имя", status="rejected"),
+            item("old", actor_ref="Исходное имя", current=False),
+        ]
+        payload = search(entries, self.params())
+        self.assertEqual(payload["facets"]["actors"], [{"value": "[Безопасная роль]", "count": 1}])
+        self.assertNotIn("Исходное имя", str(payload))
+
     def test_relevance_title_and_exact_title_rank_first(self) -> None:
         entries = [item("statement", title="Другое", statement="локальный маршрут"), item("title", title="Локальный маршрут")]
         results = search(entries, self.params(q="локальный маршрут"))["results"]

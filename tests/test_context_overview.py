@@ -44,7 +44,7 @@ class ContextOverviewTests(unittest.TestCase):
             item("with", item_type="action", deadline="до пятницы", actor_ref="[Роль]", relation_ids=["related"]),
         ])
         self.assertEqual([row["title"] for row in payload["highlights"]["actions"]], ["with", "without"])
-        self.assertEqual(payload["attention"], {"risks": 0, "open_questions": 0, "actions_without_actor": 1, "actions_without_deadline": 1, "related_items": 1})
+        self.assertEqual(payload["attention"], {"actions_without_actor": 1, "actions_without_deadline": 1, "related_items": 1})
         self.assertEqual(payload["actors"], [{"value": "[Роль]", "count": 1}])
         forbidden = {"id", "workspace_id", "source_links", "relation_ids", "block", "model", "prompt"}
         self.assertFalse(forbidden & set(payload["highlights"]["actions"][0]))
@@ -57,8 +57,8 @@ class ContextOverviewTests(unittest.TestCase):
             item("question", item_type="open_question"),
         ])
         self.assertEqual(payload["actors"], [{"value": "[Роль проекта]", "count": 1}])
-        self.assertEqual(payload["attention"]["risks"], 1)
-        self.assertEqual(payload["attention"]["open_questions"], 1)
+        self.assertEqual(payload["counts"]["risk"], 1)
+        self.assertEqual(payload["counts"]["open_question"], 1)
 
     def test_limits_are_enforced(self) -> None:
         payload = overview([item(f"risk-{i}", item_type="risk", updated_at=f"2026-07-{i:02d}T00:00:00") for i in range(1, 8)])

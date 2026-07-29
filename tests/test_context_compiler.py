@@ -164,6 +164,15 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(ContextService(s,w).list(),[])
         finally: tmp.cleanup()
 
+    def test_safe_alias_from_cleaned_text_is_preserved_as_actor_ref(self):
+        tmp,s,w,san=self.setup()
+        try:
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text("[Координатор-Север] согласует материал.", encoding="utf-8")
+            payload={"candidates":[{"type":"action","title":"Согласовать","statement":"Согласовать материал.","block":{"start":0,"end":11},"confidence":"high","requires_review":True,"actor_ref":"[Координатор-Север]"}]}
+            result=ContextCompiler(s,w,lambda _:payload).compile(san["artifact_id"])
+            self.assertEqual(result[0]["actor_ref"],"[Координатор-Север]")
+        finally: tmp.cleanup()
+
     def test_receipt_restores_exact_duplicates_after_restart(self):
         tmp,s,w,san=self.setup()
         try:
