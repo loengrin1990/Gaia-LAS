@@ -31,6 +31,7 @@ from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_an
 from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError, ContextService
 from .context_search import ContextSearchError, parse_params, search
+from .context_overview import overview
 from .provenance import ProvenanceError
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .launchers import close_gaia_window, launch_gaia_window, launch_module
@@ -583,6 +584,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_context_get(self) -> None:
         route = urlparse(self.path); parts=route.path.split("/"); project=parse_qs(route.query).get("project",[""])[0]
+        if route.path == "/api/context/overview":
+            started = datetime.now().timestamp(); trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
+            workspace_hash = hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12]
+            try:
+                if not project.strip():
+                    error_response(self, "invalid_context_overview", "Выберите рабочее пространство для сводки.", 400); return
+                intake = ControlledIntake(create_metadata=False)
+                workspace_id = intake.existing_workspace(project)
+                payload = overview(ContextService(intake.store, workspace_id).list() if workspace_id else [])
+                emit_runtime_diagnostic("context_overview", "context_overview", trace_id, workspace_hash=workspace_hash, confirmed_count=payload["workflow"]["confirmed"], pending_count=payload["workflow"]["pending_total"], duration_ms=int((datetime.now().timestamp()-started)*1000))
+                json_response(self, payload); return
+            except Exception:
+                emit_runtime_diagnostic("context_overview", "context_overview", trace_id, workspace_hash=workspace_hash, error_code="context_overview_failed")
+                error_response(self, "context_overview_failed", "Не удалось загрузить сводку проекта. Данные не изменены.", 500); return
         if route.path == "/api/context/search":
             started = datetime.now().timestamp(); trace_id = f"gaia-{uuid.uuid4().hex[:12]}"
             try:

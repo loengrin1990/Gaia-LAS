@@ -46,6 +46,18 @@ class ContextSearchTests(unittest.TestCase):
             self.assertEqual(search(entries, self.params(q=value))["total"], 1)
         self.assertEqual(search(entries, self.params(q="елка отсутствует"))["total"], 0)
 
+    def test_russian_word_forms_are_conservative_and_keep_exact_markers(self) -> None:
+        entries = [
+            item("booking", title="Правила бронирование переговорные", statement="ОРБИТА-ЛИМОН", actor_ref="СЕВЕР-КЕДР"),
+            item("risk", title="Риск"),
+        ]
+        for query in ("бронированию", "переговорной", "ёжик"):
+            if query == "ёжик":
+                entries[0]["statement"] = "ежик ОРБИТА-ЛИМОН"
+            self.assertEqual(search(entries, self.params(q=query))["total"], 1)
+        self.assertEqual(search(entries, self.params(q="рис"))["total"], 0)
+        self.assertEqual(search(entries, self.params(q="ОРБИТА-ЛИМОН СЕВЕР-КЕДР"))["total"], 1)
+
     def test_filters_pagination_sorting_and_facets_are_deterministic(self) -> None:
         entries = [
             item("b", item_type="action", title="Бета", actor_ref="[Роль]", deadline="сегодня", relation_ids=["x"], updated_at="2026-07-02T00:00:00"),

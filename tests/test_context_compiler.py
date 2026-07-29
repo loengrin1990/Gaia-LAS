@@ -144,9 +144,24 @@ class ContextCompilerTests(unittest.TestCase):
     def test_optional_fields_are_preserved_only_when_model_supplies_them(self):
         tmp,s,w,san=self.setup()
         try:
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text("Роль 1 назначено до 2030-01-01. Приоритет высокий.", encoding="utf-8")
             payload={"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True,"actor_ref":"Роль 1","deadline":"2030-01-01","status":"назначено","priority":"высокий"}]}
             item=ContextCompiler(s,w,lambda _:payload).compile(san["artifact_id"])[0]
             self.assertEqual(item["actor_ref"],"Роль 1"); self.assertEqual(item["deadline"],"2030-01-01"); self.assertEqual(item["explicit_status"],"назначено"); self.assertEqual(item["priority"],"высокий")
+            confirmed=ContextService(s,w).decide(item["id"],"confirm")
+            edited=ContextService(s,w).decide(confirmed["id"],"edit","Уточнённая проверка","Проверить уточнённый материал.")
+            self.assertEqual(edited["actor_ref"],"Роль 1"); self.assertEqual(edited["deadline"],"2030-01-01")
+            self.assertEqual(edited["explicit_status"],"назначено"); self.assertEqual(edited["priority"],"высокий")
+        finally: tmp.cleanup()
+
+    def test_optional_metadata_not_present_in_cleaned_fragment_is_rejected(self):
+        tmp,s,w,san=self.setup()
+        try:
+            payload={"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True,"actor_ref":"Иван Иванов"}]}
+            with self.assertRaises(ContextCompileError) as rejected:
+                ContextCompiler(s,w,lambda _:payload).compile(san["artifact_id"])
+            self.assertEqual(rejected.exception.diagnostic_code,"metadata_not_in_fragment")
+            self.assertEqual(ContextService(s,w).list(),[])
         finally: tmp.cleanup()
 
     def test_receipt_restores_exact_duplicates_after_restart(self):

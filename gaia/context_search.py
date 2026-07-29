@@ -124,7 +124,7 @@ def _matches(item: Mapping[str, Any], params: SearchParams) -> bool:
     if params.related == "none" and has_related:
         return False
     fields = [normalize(item.get(field)) for field in SEARCH_FIELDS]
-    return all(any(term in field for field in fields) for term in params.terms)
+    return all(any(_term_matches(term, field) for field in fields) for term in params.terms)
 
 
 def _score(item: Mapping[str, Any], params: SearchParams) -> int:
@@ -135,11 +135,11 @@ def _score(item: Mapping[str, Any], params: SearchParams) -> int:
     metadata = [normalize(item.get(field)) for field in SEARCH_FIELDS[2:]]
     score = SCORE_EXACT_TITLE if title == params.query else 0
     for term in params.terms:
-        if term in title:
+        if _term_matches(term, title):
             score += SCORE_TITLE_TERM
-        if term in statement:
+        if _term_matches(term, statement):
             score += SCORE_STATEMENT_TERM
-        score += sum(SCORE_METADATA_TERM for field in metadata if term in field)
+        score += sum(SCORE_METADATA_TERM for field in metadata if _term_matches(term, field))
     return score
 
 
@@ -177,6 +177,19 @@ def _facets(corpus: list[Mapping[str, Any]]) -> dict[str, Any]:
             previous = actors.get(key, (display, 0))
             actors[key] = (previous[0], previous[1] + 1)
     return {"types": types, "actors": [{"value": value, "count": count} for _, (value, count) in sorted(actors.items())]}
+
+
+def _term_matches(term: str, field: str) -> bool:
+    if len(term) < 5:
+        # Short tokens must be whole words: a query such as «рис» must not
+        # silently broaden into every «риск».
+        return term in field.split()
+    if term in field:
+        return True
+    # Conservative deterministic Russian word-form matching.  A shared four
+    # character base is enough for common endings, but never broadens short terms.
+    base = term[:4]
+    return any(len(word) >= 5 and word.startswith(base) for word in field.split())
 
 
 def _one(query: Mapping[str, list[str]], key: str, default: str) -> str:

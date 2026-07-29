@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+import unicodedata
 from datetime import datetime
 from typing import Any, Callable
 
@@ -197,6 +198,7 @@ class ContextCompiler:
                 else:
                     response = self.model(text)
                 local = validate_candidates(response, len(text), int(route["max_candidates_per_chunk"]))
+                _validate_optional_metadata_source(local, text)
                 if len(local) >= int(route["max_candidates_per_chunk"]):
                     raise CandidateValidationError("schema_candidates")
                 return local
@@ -403,3 +405,18 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
             raise CandidateValidationError("schema_relations")
         result.append(dict(item))
     return result
+
+
+def _metadata_normalize(value: object) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold().replace("ё", "е")
+    return " ".join("".join(char if char.isalnum() else " " for char in text).split())
+
+
+def _validate_optional_metadata_source(candidates: list[dict[str, Any]], text: str) -> None:
+    """Keep visible actor references tied to the cleaned fragment, never a model invention."""
+    fragment = _metadata_normalize(text)
+    for candidate in candidates:
+        value = candidate.get("actor_ref")
+        normalized = _metadata_normalize(value)
+        if value and (not normalized or normalized not in fragment):
+            raise CandidateValidationError("metadata_not_in_fragment")

@@ -18,6 +18,21 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertNotIn("window.prompt", INDEX_HTML)
         self.assertNotIn("window.confirm", INDEX_HTML)
 
+    def test_project_summary_uses_read_only_overview_and_keeps_it_during_search(self) -> None:
+        for text in (
+            'id="contextOverview"',
+            '/api/context/overview?project=',
+            'Контекст собран, но его элементы ещё не подтверждены.',
+            'Только после этого они появятся в сводке и поиске.',
+            'В подтверждённом контексте ответственные пока не указаны.',
+            'function contextMetadataBadges',
+            'runContextSearch(false);',
+        ):
+            self.assertIn(text, INDEX_HTML)
+        self.assertIn("function clearContextSearchState(clearOverview=false)", INDEX_HTML)
+        self.assertIn("function applyContextOverviewFilter(kind)", INDEX_HTML)
+        self.assertNotIn("loadJourneySummary(); });\n    document.getElementById('contextSearchClear')", INDEX_HTML)
+
     def test_stage_six_journey_uses_business_sections_and_central_statuses(self) -> None:
         for label in ("Материалы", "Проверка", "Контекст проекта", "Сводка"):
             self.assertIn(label, INDEX_HTML)
