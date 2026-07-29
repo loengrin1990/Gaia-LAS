@@ -927,7 +927,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"[{timestamp}] {format % args}")
+        try:
+            print(f"[{timestamp}] {format % args}")
+        except OSError:
+            # A detached local backend can outlive the terminal that owned its
+            # stdout. Request logging must never abort an otherwise valid API
+            # response before its headers are sent.
+            pass
 
 
 def content_length(value: str | None) -> int:
