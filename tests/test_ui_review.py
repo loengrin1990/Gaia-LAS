@@ -63,6 +63,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertEqual(INDEX_HTML, load_index_html())
         self.assertIn("class ContextCompileController", INDEX_HTML)
         self.assertIn("new ContextCompileController", INDEX_HTML)
+        self.assertIn("fetchImpl:window.fetch.bind(window)", INDEX_HTML)
 
     def test_brand_header_uses_gaia_logo_and_desktop_window(self) -> None:
         self.assertIn('<title>Gaia</title>', INDEX_HTML)

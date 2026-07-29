@@ -1,31 +1,49 @@
 /* Small UI-state controller; kept dependency-free for browser and Node checks. */
 class ContextCompileController {
-  constructor({fetchImpl, workspace, render, message, delay, state}) {
+  constructor({fetchImpl, workspace, render, message, delay, state, onDiagnostic}) {
     this.fetch = fetchImpl;
     this.workspace = workspace;
     this.render = render;
     this.message = message;
     this.delay = delay || (() => Promise.resolve());
     this.state = state || (() => {});
+    this.onDiagnostic = onDiagnostic || (() => {});
     this.generation = 0;
     this.jobId = '';
     this.phase = '';
   }
   active(generation, project) { return generation === this.generation && project === this.workspace(); }
+  startupDiagnostic(event, startedAt, fields={}) {
+    const safeFields = {event, operation:'context_compile', duration_ms:Math.max(0, Math.round(Date.now()-startedAt))};
+    if (Number.isInteger(fields.http_status)) safeFields.http_status = fields.http_status;
+    if (fields.error_code) safeFields.error_code = fields.error_code;
+    try { this.onDiagnostic(event, safeFields); } catch (_) {}
+  }
+  startupMessage(errorCode) {
+    if (errorCode === 'request_invocation_failed') return 'Не удалось запустить запрос сборки контекста. Перезапустите Gaia и повторите действие.';
+    if (errorCode === 'request_rejected') return 'Не удалось связаться с локальным сервисом Gaia. Проверьте, что приложение готово к работе.';
+    return 'Не удалось начать сборку проектного контекста. Данные не изменены.';
+  }
   async start(artifactId) {
     if (this.jobId) return false;
-    const generation = ++this.generation; const project = this.workspace();
+    const generation = ++this.generation; const project = this.workspace(); const startedAt=Date.now();
     let timer; const controller=typeof AbortController==='undefined'?null:new AbortController();
+    let response; let errorCode='request_invocation_failed';
     try {
       timer=setTimeout(()=>controller?.abort(), 15000);
-      const response = await this.fetch(`/api/context/${encodeURIComponent(artifactId)}/compile`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({project}), signal:controller?.signal});
-      let data; try { data=await response.json(); } catch (_) { throw new Error('invalid_response'); }
-      if (!response.ok) throw new Error('request_failed');
-      if (!data || typeof data.job_id!=='string' || !data.job_id || typeof data.status_url!=='string' || !data.status_url) throw new Error('invalid_job');
+      let request;
+      try { request=this.fetch(`/api/context/${encodeURIComponent(artifactId)}/compile`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({project}), signal:controller?.signal}); }
+      catch (_) { throw null; }
+      try { response=await request; } catch (_) { errorCode='request_rejected'; throw null; }
+      let data; try { data=await response.json(); } catch (_) { errorCode='invalid_response'; throw null; }
+      if (!response.ok) { errorCode='http_rejected'; throw null; }
+      if (!data || typeof data.job_id!=='string' || !data.job_id || typeof data.status_url!=='string' || !data.status_url) { errorCode='invalid_job_contract'; throw null; }
+      this.startupDiagnostic('request_succeeded', startedAt, {http_status:response.status});
       if (!this.active(generation, project)) return false;
       this.jobId = data.job_id; this.phase=''; await this.poll(data.status_url, generation, project); return true;
     } catch (_) {
-      this.jobId=''; this.phase=''; if (this.active(generation, project)) { this.message('Не удалось начать сборку проектного контекста. Повторите попытку.', true); this.state('error'); }
+      this.startupDiagnostic('request_failed', startedAt, {error_code:errorCode, http_status:response?.status});
+      this.jobId=''; this.phase=''; if (this.active(generation, project)) { this.message(this.startupMessage(errorCode), true); this.state('error'); }
       return false;
     } finally { clearTimeout(timer); }
   }

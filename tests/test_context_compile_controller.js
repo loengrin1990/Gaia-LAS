@@ -1,6 +1,6 @@
 const assert = require('assert');
 const {ContextCompileController} = require('../gaia/static/context_compile_controller.js');
-const response = (body, ok=true) => ({ok, json: async()=>body});
+const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: async()=>body});
 (async()=>{
   let workspace='A', rendered=[], messages=[], calls=[];
   const queue=[response({job_id:'old',status_url:'/old'}), response({status:'running',message:'Собираем контекст: фрагмент 1 из 2…'}), response({job_id:'new',status_url:'/new'}), response({status:'done',message:'Контекст собран. Проверьте кандидатов.',result:{candidates:[{title:'B'}]}})];
@@ -10,8 +10,14 @@ const response = (body, ok=true) => ({ok, json: async()=>body});
   assert.ok(calls.some(x=>x==='/new'));
   let cancelCall=''; const cancelling=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async url=>{cancelCall=url;return response({});}}); cancelling.jobId='job-safe'; assert.strictEqual(await cancelling.cancel(),true); assert.strictEqual(cancelCall,'/api/jobs/job-safe/cancel');
   let lateCancelCall=''; let lateMessage=''; const finalizing=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:x=>lateMessage=x,fetchImpl:async url=>{lateCancelCall=url;return response({});}}); finalizing.jobId='job-finalizing'; finalizing.phase='finalizing'; assert.strictEqual(await finalizing.cancel(),false); assert.strictEqual(lateCancelCall,''); assert.strictEqual(lateMessage,'Сохранение контекста уже завершается. Дождитесь результата.');
-  const failing=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>response({error:'safe'},false)}); assert.strictEqual(await failing.start('san-error'),false); assert.strictEqual(failing.jobId,'');
-  const rejected=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>{throw new Error('network')}}); assert.strictEqual(await rejected.start('san-error'),false); assert.strictEqual(rejected.jobId,'');
-  const invalid=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:async()=>({ok:true,json:async()=>({})})}); assert.strictEqual(await invalid.start('san-error'),false); assert.strictEqual(invalid.jobId,'');
+  const diagnostics=[]; const states=[]; const failureCase=async(fetchImpl, expectedCode, expectedMessage)=>{ const messages=[]; const controller=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:(message)=>messages.push(message),state:state=>states.push(state),fetchImpl,onDiagnostic:(event,fields)=>diagnostics.push([event,fields])}); assert.strictEqual(await controller.start('artifact-never-logged'),false); assert.strictEqual(controller.jobId,''); assert.strictEqual(controller.phase,''); assert.strictEqual(messages.at(-1),expectedMessage); assert.strictEqual(diagnostics.at(-1)[0],'request_failed'); assert.strictEqual(diagnostics.at(-1)[1].error_code,expectedCode); assert.ok(!JSON.stringify(diagnostics.at(-1)).includes('artifact-never-logged')); };
+  let receiverCalls=0; const receiver={fetch(url){ if(this!==receiver) throw new TypeError('wrong receiver'); receiverCalls++; return Promise.resolve(url==='/receiver-job' ? response({status:'done',result:{candidates:[]}}) : response({job_id:'receiver-job',status_url:'/receiver-job'})); }};
+  await failureCase(receiver.fetch, 'request_invocation_failed', 'Не удалось запустить запрос сборки контекста. Перезапустите Gaia и повторите действие.');
+  const receiverDiagnostics=[]; const bound=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},fetchImpl:receiver.fetch.bind(receiver),onDiagnostic:(event,fields)=>receiverDiagnostics.push([event,fields])}); await bound.start('receiver-artifact'); assert.ok(receiverCalls>=2); assert.ok(receiverDiagnostics.some(([event,fields])=>event==='request_succeeded' && fields.http_status===202));
+  await failureCase(()=>Promise.reject(new Error('network')), 'request_rejected', 'Не удалось связаться с локальным сервисом Gaia. Проверьте, что приложение готово к работе.');
+  await failureCase(()=>response({},false,403), 'http_rejected', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
+  await failureCase(()=>({ok:true,status:202,json:async()=>{throw new Error('bad json');}}), 'invalid_response', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
+  await failureCase(()=>response({},true,202), 'invalid_job_contract', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
+  assert.ok(states.filter(state=>state==='error').length>=5);
   console.log('context compile controller checks passed');
 })().catch(error=>{console.error(error);process.exit(1);});
