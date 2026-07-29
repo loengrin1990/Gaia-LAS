@@ -162,6 +162,14 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertTrue(calls); self.assertEqual([x["id"] for x in second],[x["id"] for x in again]); self.assertEqual([x["id"] for x in first],[x["id"] for x in second]); self.assertIn(san2["artifact_id"],second[0]["source_links"])
         finally: tmp.cleanup()
 
+    def test_empty_complete_receipt_is_idempotent(self):
+        tmp,s,w,san=self.setup()
+        try:
+            first=ContextCompiler(s,w,lambda _: {"candidates":[]}).compile(san["artifact_id"])
+            again=ContextCompiler(ProvenanceStore(s.root),w,lambda _: (_ for _ in ()).throw(AssertionError("model must not run"))).compile(san["artifact_id"])
+            self.assertEqual(first,[]); self.assertEqual(again,[])
+        finally: tmp.cleanup()
+
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()
         try:

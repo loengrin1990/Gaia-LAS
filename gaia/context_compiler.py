@@ -230,8 +230,10 @@ class ContextCompiler:
         if receipt.get("workspace_id") != self.workspace_id or receipt.get("sanitized_id") != sanitized_id or receipt.get("compiler_version") != compiler_version or receipt.get("prompt_schema_version") != PROMPT_SCHEMA_VERSION:
             raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
         context_ids = receipt.get("context_ids")
-        if not isinstance(context_ids, list) or not context_ids:
+        if not isinstance(context_ids, list):
             raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
+        if not context_ids:
+            return []
         result=[]
         for context_id in context_ids:
             if not isinstance(context_id, str): raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материал.")
