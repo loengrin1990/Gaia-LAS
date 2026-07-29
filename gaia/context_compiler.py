@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Callable
@@ -97,33 +98,48 @@ class ContextCompiler:
         if receipt and receipt.get("status") == "complete" and receipt.get("compiler_version") == compiler_version:
             return self._restore_receipt(receipt, sanitized_id, compiler_version)
         route = self._route()
-        if self._uses_local_provider:
-            if activity: activity(0, 0, 0)
-            self._preload(route, cancel_event)
-        text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
-        if len(text) > int(route["max_input_chars"]):
-            raise ContextCompileError("context_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку. Данные не изменены.")
-        try: chunks = split_context(text, int(route["chunk_char_limit"]), int(route["chunk_max_units"]), int(route["chunk_overlap_chars"]), int(route["max_chunks"]))
-        except ChunkLimitError as exc: raise ContextCompileError("chunk_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку.") from exc
-        candidates=[]
-        for position, chunk in enumerate(chunks, 1):
+        lifecycle_started = False
+        terminal_reason = "internal_error"
+        try:
+            if self._uses_local_provider:
+                # From this point on the local model may have been loaded, even when
+                # preload itself fails.  The finally block is the single cleanup edge.
+                lifecycle_started = True
+                if activity: activity(0, 0, 0)
+                self._preload(route, cancel_event)
+            text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
+            if len(text) > int(route["max_input_chars"]):
+                raise ContextCompileError("context_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку. Данные не изменены.")
+            try: chunks = split_context(text, int(route["chunk_char_limit"]), int(route["chunk_max_units"]), int(route["chunk_overlap_chars"]), int(route["max_chunks"]))
+            except ChunkLimitError as exc: raise ContextCompileError("chunk_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку.") from exc
+            candidates=[]
+            for position, chunk in enumerate(chunks, 1):
+                if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+                if activity: activity(position, len(chunks), self._model_attempts + 1)
+                local = self._compile_chunk(chunk.text, route, cancel_event)
+                for candidate in local:
+                    candidate["block"] = {"start": chunk.start + candidate["block"]["start"], "end": chunk.start + candidate["block"]["end"]}
+                candidates.extend(local)
+                if len(candidates) > int(route["max_total_candidates"]): raise ContextCompileError("total_candidate_limit", "Слишком много элементов контекста. Данные не изменены.")
+                if progress: progress(position, len(chunks), len(candidates))
+            if activity: activity(-1, len(chunks), self._model_attempts)
+            candidates = _deduplicate_candidates(candidates)
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
-            if activity: activity(position, len(chunks), self._model_attempts + 1)
-            local = self._compile_chunk(chunk.text, route, cancel_event)
-            for candidate in local:
-                candidate["block"] = {"start": chunk.start + candidate["block"]["start"], "end": chunk.start + candidate["block"]["end"]}
-            candidates.extend(local)
-            if len(candidates) > int(route["max_total_candidates"]): raise ContextCompileError("total_candidate_limit", "Слишком много элементов контекста. Данные не изменены.")
-            if progress: progress(position, len(chunks), len(candidates))
-        if activity: activity(-1, len(chunks), self._model_attempts)
-        candidates = _deduplicate_candidates(candidates)
-        if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
-        if activity: activity(-2, len(chunks), self._model_attempts)
-        result = self._persist_all(item, sanitized_id, candidates, compiler_version, route, cancel_event)
-        self._write_receipt(sanitized_id, result, len(chunks), compiler_version, route)
-        if self._uses_local_provider:
-            self._unload(route)
-        return result
+            if activity: activity(-2, len(chunks), self._model_attempts)
+            result = self._persist_all(item, sanitized_id, candidates, compiler_version, route, cancel_event)
+            if activity: activity(-3, len(chunks), self._model_attempts)
+            self._write_receipt(sanitized_id, result, len(chunks), compiler_version, route)
+            terminal_reason = "success"
+            return result
+        except ContextCompileError as exc:
+            terminal_reason = exc.diagnostic_code or exc.code
+            raise
+        except Exception:
+            terminal_reason = "internal_error"
+            raise
+        finally:
+            if lifecycle_started:
+                self._unload(route, terminal_reason)
 
     def preflight(self, sanitized_id: str) -> dict[str, Any]:
         item = self.store.object_metadata(self.workspace_id, sanitized_id)
@@ -150,14 +166,23 @@ class ContextCompiler:
             raise ContextCompileError("local_model_unavailable", "Локальная модель не успела загрузиться. Данные не изменены.", code) from None
         if not result.get("ok"): raise ContextCompileError("local_model_unavailable", "Локальная модель не успела загрузиться. Данные не изменены.", "model_load_timeout")
 
-    def _unload(self, route: dict[str, Any]) -> None:
-        if not route.get("unload_model_after_job"): return
+    def _unload(self, route: dict[str, Any], terminal_reason: str) -> None:
+        if not route.get("unload_model_after_job"):
+            emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=False, succeeded=False, failed=False, elapsed_ms=0, terminal_reason=terminal_reason)
+            return
         provider = provider_config(str(route["provider"]))
-        if provider.get("type") != "ollama": return
+        if provider.get("type") != "ollama":
+            emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=False, succeeded=False, failed=False, elapsed_ms=0, terminal_reason=terminal_reason)
+            return
+        started = time.monotonic()
         try:
             execute_context_model_call({"operation": "unload", "endpoint": str(provider.get("endpoint")), "model": str(route["model"]), "timeout": 15}, 15)
-        except ContextModelExecutorError:
-            pass
+        except Exception:
+            # Cleanup is deliberately best effort: it cannot overwrite the actual
+            # compiler outcome, including a successful persisted receipt.
+            emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=True, failed=True, succeeded=False, elapsed_ms=int((time.monotonic()-started)*1000), terminal_reason=terminal_reason)
+        else:
+            emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=True, failed=False, succeeded=True, elapsed_ms=int((time.monotonic()-started)*1000), terminal_reason=terminal_reason)
 
     def _compile_chunk(self, text: str, route: dict[str, Any], cancel_event: Any, depth: int = 0) -> list[dict[str, Any]]:
         failures: list[ContextCompileError] = []

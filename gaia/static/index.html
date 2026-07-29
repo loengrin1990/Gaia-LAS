@@ -1688,7 +1688,12 @@
     async function compileJourneyContext(id, button) {
       if (journeyContextCompiler.jobId) return;
       button.disabled=true;
-      journeyContextCompiler.state=(status)=>{if(['done','failed','cancelled','error'].includes(status)){button.disabled=false;button.textContent='Собрать проектный контекст';button.onclick=()=>compileJourneyContext(id,button);}};
+      journeyContextCompiler.state=(status,job)=>{
+        const phase=job?.phase || '';
+        if(['done','failed','cancelled','error'].includes(status)){button.disabled=false;button.textContent='Собрать проектный контекст';button.onclick=()=>compileJourneyContext(id,button);return;}
+        if(['persisting','finalizing'].includes(phase)){button.disabled=true;button.textContent='Сохранение контекста завершается…';button.onclick=null;return;}
+        button.disabled=false;button.textContent='Отменить сборку';button.onclick=async()=>{button.disabled=true;await journeyContextCompiler.cancel();if(journeyContextCompiler.jobId&& !['persisting','finalizing'].includes(journeyContextCompiler.phase))button.disabled=false;};
+      };
       try { await journeyContextCompiler.start(id); } finally { if (!journeyContextCompiler.jobId) button.disabled=false; }
     }
     async function loadJourneyContext() { const response=await fetch(`/api/context?project=${encodeURIComponent(journeyProject())}`); const data=await response.json(); if(response.ok) renderJourneyContext(data.candidates || []); }

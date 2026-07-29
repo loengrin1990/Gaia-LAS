@@ -122,6 +122,24 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(final.status, "cancelled")
         self.assertTrue(final.cancellation_requested)
 
+    def test_context_compile_cancel_is_rejected_after_persisting_but_analysis_is_unchanged(self) -> None:
+        context=JobRecord(id="ctx-late",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="saving",progress=90,job_type="context_compile",phase="persisting")
+        analysis=JobRecord(id="analysis-late",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="running",progress=10)
+        with JOBS_LOCK:
+            JOBS[context.id]=context; JOB_CANCEL_EVENTS[context.id]=threading.Event()
+            JOBS[analysis.id]=analysis; JOB_CANCEL_EVENTS[analysis.id]=threading.Event()
+        self.assertEqual(cancel_job(context.id).status,"running")
+        self.assertFalse(JOB_CANCEL_EVENTS[context.id].is_set())
+        self.assertEqual(context.message,"Сохранение контекста уже завершается. Дождитесь результата.")
+        self.assertEqual(cancel_job(analysis.id).status,"cancelled")
+
+    def test_context_compile_cancel_before_persisting_remains_cancelled(self) -> None:
+        context=JobRecord(id="ctx-early",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="working",progress=20,job_type="context_compile",phase="compiling")
+        with JOBS_LOCK:
+            JOBS[context.id]=context; JOB_CANCEL_EVENTS[context.id]=threading.Event()
+        self.assertEqual(cancel_job(context.id).status,"cancelled")
+        self.assertTrue(JOB_CANCEL_EVENTS[context.id].is_set())
+
     def test_completed_jobs_expire_from_memory(self) -> None:
         old = JobRecord(
             id="old",

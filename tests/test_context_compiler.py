@@ -170,6 +170,70 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(first,[]); self.assertEqual(again,[])
         finally: tmp.cleanup()
 
+    def test_local_model_lifecycle_unloads_once_after_success_and_empty_success(self):
+        for payload in ({"candidates":[]}, {"candidates":[{"type":"action","title":"Проверка","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}):
+            with self.subTest(empty=not payload["candidates"]):
+                tmp,s,w,san=self.setup()
+                try:
+                    compiler=ContextCompiler(s,w)
+                    compiler.model=lambda text, cancel_event=None: payload
+                    with patch.object(compiler,"_preload") as preload, patch.object(compiler,"_unload") as unload:
+                        compiler.compile(san["artifact_id"])
+                    preload.assert_called_once(); unload.assert_called_once_with(compiler._route(), "success")
+                finally: tmp.cleanup()
+
+    def test_local_model_lifecycle_unloads_after_preload_model_schema_and_persistence_failures(self):
+        cases=[]
+        cases.append(("preload", lambda compiler: patch.object(compiler,"_preload",side_effect=ContextCompileError("local_model_unavailable","safe","model_load_timeout"))))
+        cases.append(("model", lambda compiler: patch.object(compiler,"_compile_chunk",side_effect=ContextCompileError("local_model_unavailable","safe","model_timeout"))))
+        cases.append(("schema", lambda compiler: patch.object(compiler,"_compile_chunk",side_effect=ContextCompileError("local_model_invalid","safe","json_parse"))))
+        cases.append(("persistence", lambda compiler: patch.object(compiler,"_persist_all",side_effect=RuntimeError("synthetic"))))
+        for name, operation in cases:
+            with self.subTest(name=name):
+                tmp,s,w,san=self.setup()
+                try:
+                    compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: {"candidates":[]}
+                    with operation(compiler), patch.object(compiler,"_unload") as unload:
+                        with self.assertRaises(Exception): compiler.compile(san["artifact_id"])
+                    unload.assert_called_once()
+                finally: tmp.cleanup()
+
+    def test_cancellation_between_chunks_unloads_without_persistence(self):
+        tmp,s,w,san=self.setup()
+        try:
+            compiler=ContextCompiler(s,w); cancelled=threading.Event(); calls=[]
+            def model(text, cancel_event=None):
+                calls.append(text); cancelled.set()
+                return {"candidates":[]}
+            compiler.model=model
+            chunks=[__import__("gaia.context_chunking",fromlist=["ContextChunk"]).ContextChunk(0,"first",0,5,"test"), __import__("gaia.context_chunking",fromlist=["ContextChunk"]).ContextChunk(1,"second",5,11,"test")]
+            with patch("gaia.context_compiler.split_context",return_value=chunks), patch.object(compiler,"_persist_all") as persist, patch.object(compiler,"_unload") as unload:
+                with self.assertRaises(ContextCompileError) as stopped: compiler.compile(san["artifact_id"],cancel_event=cancelled)
+            self.assertEqual(stopped.exception.code,"cancelled"); self.assertEqual(len(calls),1); persist.assert_not_called(); unload.assert_called_once()
+        finally: tmp.cleanup()
+
+    def test_receipt_fast_path_skips_local_model_lifecycle(self):
+        tmp,s,w,san=self.setup()
+        try:
+            ContextCompiler(s,w,lambda text: {"candidates":[]}).compile(san["artifact_id"])
+            compiler=ContextCompiler(s,w)
+            with patch.object(compiler,"_preload") as preload, patch.object(compiler,"_unload") as unload:
+                self.assertEqual(compiler.compile(san["artifact_id"]),[])
+            preload.assert_not_called(); unload.assert_not_called()
+        finally: tmp.cleanup()
+
+    def test_unload_failure_never_masks_compiler_outcome(self):
+        tmp,s,w,san=self.setup()
+        try:
+            compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: {"candidates":[]}
+            with patch.object(compiler,"_preload"), patch("gaia.context_compiler.provider_config",return_value={"type":"ollama","endpoint":"http://127.0.0.1:1"}), patch("gaia.context_compiler.execute_context_model_call",side_effect=RuntimeError("unavailable")):
+                self.assertEqual(compiler.compile(san["artifact_id"]),[])
+            compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: (_ for _ in ()).throw(ContextCompileError("local_model_invalid","safe","json_parse"))
+            with patch.object(compiler,"_preload"), patch("gaia.context_compiler.provider_config",return_value={"type":"ollama","endpoint":"http://127.0.0.1:1"}), patch("gaia.context_compiler.execute_context_model_call",side_effect=RuntimeError("unavailable")):
+                with self.assertRaises(ContextCompileError) as failed: compiler.compile(san["artifact_id"],compiler_version="context-v3")
+            self.assertEqual(failed.exception.diagnostic_code,"json_parse")
+        finally: tmp.cleanup()
+
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
         tmp,s,w,san=self.setup()
         try:
