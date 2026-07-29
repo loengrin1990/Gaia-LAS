@@ -74,7 +74,7 @@ class EndToEndValidationTests(unittest.TestCase):
                     body = None
                 else:
                     body = json.dumps(payload).encode("utf-8")
-                headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}", "Content-Type": content_type}
+                headers = {"Host": "127.0.0.1:8787", "Origin": "http://127.0.0.1:8787", "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}", "Content-Type": content_type}
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
                 connection.request(method, path, body, headers)
                 response = connection.getresponse()
@@ -218,7 +218,7 @@ class EndToEndValidationTests(unittest.TestCase):
                 assert server is not None
                 body = payload if isinstance(payload, bytes) else (json.dumps(payload).encode("utf-8") if payload is not None else None)
                 port = server.server_address[1]
-                headers = {"Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}", "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}", "Content-Type": content_type}
+                headers = {"Host": "127.0.0.1:8787", "Origin": "http://127.0.0.1:8787", "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}", "Content-Type": content_type}
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
                 connection.request(method, path, body, headers)
                 response = connection.getresponse()

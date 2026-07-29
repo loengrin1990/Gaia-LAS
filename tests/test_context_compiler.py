@@ -311,7 +311,7 @@ class ContextCompilerTests(unittest.TestCase):
                 def request(method,path,payload=None):
                     connection=http.client.HTTPConnection("127.0.0.1",port,timeout=3)
                     body=json.dumps(payload).encode() if payload is not None else None
-                    headers={"Host":f"127.0.0.1:{port}","Origin":f"http://127.0.0.1:{port}","Cookie":f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}","Content-Type":"application/json"}
+                    headers={"Host":"127.0.0.1:8787","Origin":"http://127.0.0.1:8787","Cookie":f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}","Content-Type":"application/json"}
                     connection.request(method,path,body,headers); response=connection.getresponse(); data=json.loads(response.read()); connection.close(); return response.status,data
                 status,data=request("POST",f"/api/context/{san['artifact_id']}/compile",{"project":project})
                 self.assertEqual(status,202); self.assertEqual(data["status"], "queued")

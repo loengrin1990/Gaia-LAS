@@ -188,16 +188,25 @@ def session_cookie() -> str:
     return f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
 
 
-def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+def configured_loopback_origin() -> tuple[str, str]:
+    """Canonical Host and Origin; never trust request supplied Host values."""
+    host = str(SETTINGS.host)
+    authority = f"[{host}]:{SETTINGS.port}" if ":" in host and not host.startswith("[") else f"{host}:{SETTINGS.port}"
+    return authority, f"http://{authority}"
+
+
+def has_configured_loopback_origin(handler: BaseHTTPRequestHandler) -> bool:
     try:
-        is_loopback = ip_address(str(handler.client_address[0])).is_loopback
+        loopback = ip_address(str(handler.client_address[0])).is_loopback
     except (AttributeError, ValueError):
         return False
-    if not is_loopback:
-        return False
-    host = handler.headers.get("Host", "")
-    origin = handler.headers.get("Origin", "")
-    if not host or origin != f"http://{host}":
+    host, origin = configured_loopback_origin()
+    fetch_site = handler.headers.get("Sec-Fetch-Site", "")
+    return bool(loopback and handler.headers.get("Host", "") == host and handler.headers.get("Origin", "") == origin and (not fetch_site or fetch_site in {"same-origin", "none"}))
+
+
+def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+    if not has_configured_loopback_origin(handler):
         return False
     cookie = SimpleCookie()
     try:
@@ -210,12 +219,7 @@ def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
 
 def session_refresh_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
     """Accept only an explicit same-origin loopback refresh request."""
-    try:
-        loopback = ip_address(str(handler.client_address[0])).is_loopback
-    except (AttributeError, ValueError):
-        return False
-    host = handler.headers.get("Host", "")
-    return bool(loopback and host and handler.headers.get("Origin", "") == f"http://{host}" and handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json" and handler.headers.get("X-Gaia-Session-Refresh", "") == "1")
+    return bool(has_configured_loopback_origin(handler) and handler.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json" and handler.headers.get("X-Gaia-Session-Refresh", "") == "1")
 
 
 class Handler(BaseHTTPRequestHandler):
