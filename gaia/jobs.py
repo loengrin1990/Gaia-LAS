@@ -208,7 +208,7 @@ def cancel_job(job_id: str, reason: str = "cancelled") -> JobRecord | None:
             return None
         if job.status in TERMINAL_STATUSES:
             return job
-        if job.job_type == "context_compile" and reason != "timeout" and job.phase in {"persisting", "finalizing"}:
+        if job.job_type == "context_compile" and job.phase in {"persisting", "finalizing"}:
             job.message = "Сохранение контекста уже завершается. Дождитесь результата."
             job.updated_at = local_now()
             return job

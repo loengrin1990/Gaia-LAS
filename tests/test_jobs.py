@@ -5,9 +5,10 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from gaia.jobs import JOBS, JOBS_LOCK, JOB_CANCEL_EVENTS, JOB_EXECUTOR, MAX_WORKERS, JobQueueFullError, cancel_job, get_job, local_now, prune_completed_jobs, submit_analyze_job, mark_stale_job_failed
+from gaia.jobs import JOBS, JOBS_LOCK, JOB_CANCEL_EVENTS, JOB_EXECUTOR, JOB_CAPACITY, MAX_WORKERS, JobQueueFullError, _run_context_compile_job, cancel_job, get_job, local_now, prune_completed_jobs, submit_analyze_job, mark_stale_job_failed
 from gaia.models import AnalysisPackage, JobRecord
 from gaia.orchestrator import PackageCancelledError
+from gaia.context_compiler import ContextCompileError
 
 
 def fake_package() -> AnalysisPackage:
@@ -103,6 +104,16 @@ class JobQueueTests(unittest.TestCase):
             clock.now.return_value=__import__("datetime").datetime(2026,7,28,14,15,1); mark_stale_job_failed(job)
         self.assertEqual(job.status,"cancelled"); self.assertEqual(job.error,"CONTEXT_TIMEOUT")
 
+    def test_stale_context_job_in_finalizing_uses_the_same_late_timeout_contract(self) -> None:
+        job=JobRecord(id="context-finalizing",status="running",created_at="2026-07-28T13:45:00",updated_at="2026-07-28T13:45:00",project="p",message="saving",job_type="context_compile",timeout_seconds=1800,phase="finalizing")
+        with JOBS_LOCK: JOBS[job.id]=job; JOB_CANCEL_EVENTS[job.id]=threading.Event()
+        with patch("gaia.jobs.datetime") as clock:
+            clock.now.return_value=__import__("datetime").datetime(2026,7,28,14,15,1); clock.fromisoformat.side_effect=__import__("datetime").datetime.fromisoformat
+            mark_stale_job_failed(job)
+        self.assertEqual(job.status,"running")
+        self.assertFalse(JOB_CANCEL_EVENTS[job.id].is_set())
+        self.assertEqual(job.message,"Сохранение контекста уже завершается. Дождитесь результата.")
+
     def test_cancelling_running_job_signals_worker_and_keeps_terminal_status(self) -> None:
         started = threading.Event()
 
@@ -132,6 +143,48 @@ class JobQueueTests(unittest.TestCase):
         self.assertFalse(JOB_CANCEL_EVENTS[context.id].is_set())
         self.assertEqual(context.message,"Сохранение контекста уже завершается. Дождитесь результата.")
         self.assertEqual(cancel_job(analysis.id).status,"cancelled")
+
+    def test_context_compile_timeout_in_compiling_cancels_and_signals_event(self) -> None:
+        context=JobRecord(id="ctx-timeout-early",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="working",progress=20,job_type="context_compile",phase="compiling")
+        with JOBS_LOCK:
+            JOBS[context.id]=context; JOB_CANCEL_EVENTS[context.id]=threading.Event()
+        self.assertEqual(cancel_job(context.id,"timeout").status,"cancelled")
+        self.assertTrue(JOB_CANCEL_EVENTS[context.id].is_set())
+        self.assertEqual(context.error,"CONTEXT_TIMEOUT")
+
+    def test_context_compile_timeout_is_rejected_after_persisting_or_finalizing(self) -> None:
+        for phase in ("persisting", "finalizing"):
+            with self.subTest(phase=phase):
+                context=JobRecord(id=f"ctx-timeout-{phase}",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="saving",progress=95,job_type="context_compile",phase=phase)
+                with JOBS_LOCK:
+                    JOBS[context.id]=context; JOB_CANCEL_EVENTS[context.id]=threading.Event()
+                self.assertEqual(cancel_job(context.id,"timeout").status,"running")
+                self.assertFalse(JOB_CANCEL_EVENTS[context.id].is_set())
+                self.assertEqual(context.message,"Сохранение контекста уже завершается. Дождитесь результата.")
+
+    def test_late_context_timeout_allows_worker_done_or_failed_result(self) -> None:
+        for outcome in ("done", "failed"):
+            with self.subTest(outcome=outcome):
+                job_id=f"ctx-late-{outcome}"
+                job=JobRecord(id=job_id,status="running",created_at=local_now(),updated_at=local_now(),project="p",message="working",progress=50,job_type="context_compile",timeout_seconds=60)
+                with JOBS_LOCK:
+                    JOBS[job_id]=job; JOB_CANCEL_EVENTS[job_id]=threading.Event()
+                class Compiler:
+                    def compile(self, artifact_id, cancel_event=None, progress=None, activity=None):
+                        activity(-2, 1, 1)
+                        cancel_job(job_id,"timeout")
+                        activity(-3, 1, 1)
+                        if outcome == "failed": raise ContextCompileError("local_model_invalid","safe","receipt_write")
+                        return [{"id":"candidate"}]
+                class Intake:
+                    def compiler(self, project): return Compiler()
+                self.assertTrue(JOB_CAPACITY.acquire(blocking=False))
+                with patch("gaia.jobs.ControlledIntake",return_value=Intake()):
+                    _run_context_compile_job(job_id,"p","artifact")
+                final=get_job(job_id)
+                self.assertEqual(final.status,outcome)
+                self.assertFalse(JOB_CANCEL_EVENTS[job_id].is_set())
+                self.assertNotIn("Данные не изменены",final.message)
 
     def test_context_compile_cancel_before_persisting_remains_cancelled(self) -> None:
         context=JobRecord(id="ctx-early",status="running",created_at=local_now(),updated_at=local_now(),project="p",message="working",progress=20,job_type="context_compile",phase="compiling")
