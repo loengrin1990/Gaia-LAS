@@ -98,12 +98,20 @@ class LocalStatusTests(unittest.TestCase):
         self.assertEqual(payload["options"]["num_predict"], 300)
 
     def test_context_compiler_uses_a_bounded_builtin_route_when_not_configured(self) -> None:
-        with patch("gaia.local_llm.route_configs", return_value={}):
+        with patch("gaia.local_llm.route_configs", return_value={}), patch("gaia.local_llm.SETTINGS", None):
             route = resolve_route(TASK_CONTEXT_COMPILER)
         self.assertEqual(route["provider"], "ollama_qwen3_14b")
         self.assertEqual(route["max_tokens"], 2400)
         self.assertEqual(route["context_length"], 16384)
         self.assertEqual(route["model"], "qwen3:14b")
+
+    def test_builtin_context_provider_uses_ollama_when_config_omits_it(self) -> None:
+        response = FakeResponse({"message": {"content": "ok"}})
+        with patch("gaia.local_llm.SETTINGS", None), patch("gaia.local_llm.urllib.request.urlopen", return_value=response) as urlopen:
+            status = run_lm_studio_prompt("test", "system", task=TASK_CONTEXT_COMPILER)
+        self.assertTrue(status["ok"])
+        self.assertEqual(urlopen.call_args.args[0].full_url, "http://127.0.0.1:11434/api/chat")
+        self.assertEqual(json.loads(urlopen.call_args.args[0].data.decode("utf-8"))["model"], "qwen3:14b")
 
     def test_explicit_provider_override_does_not_require_route_edit(self) -> None:
         response = FakeResponse({"message": {"content": "ok"}})

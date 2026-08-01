@@ -22,6 +22,7 @@ TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
 TASK_PROJECT_HEALTH = "project_health"
 TASK_CONTEXT_COMPILER = "context_compiler"
 CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_14b", "model": "qwen3:14b", "prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 16384, "temperature": 0, "thinking": False, "structured_output": "schema", "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 1, "chunk_overlap_chars": 0, "max_candidates_per_chunk": 1, "max_total_candidates": 512, "max_input_chars": 250000, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800}
+BUILTIN_CONTEXT_COMPILER_PROVIDER = {"type": "ollama", "endpoint": "http://127.0.0.1:11434/api/chat", "model": "qwen3:14b", "thinking": False, "json_mode": True, "context_length": 16384, "enabled": True}
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -73,7 +74,7 @@ def is_timeout_error(exc: BaseException) -> bool:
 
 def provider_configs() -> dict[str, dict[str, Any]]:
     if SETTINGS is None:
-        return {
+        providers = {
             DEFAULT_PROVIDER_NAME: {
                 "type": "openai_compatible",
                 "endpoint": "http://127.0.0.1:1234/v1/chat/completions",
@@ -81,17 +82,22 @@ def provider_configs() -> dict[str, dict[str, Any]]:
                 "enabled": True,
             }
         }
+        providers.setdefault("ollama_qwen3_14b", dict(BUILTIN_CONTEXT_COMPILER_PROVIDER))
+        return providers
     providers = getattr(SETTINGS, "local_llm_providers", None)
     if isinstance(providers, dict) and providers:
-        return providers
-    return {
+        result = dict(providers)
+    else:
+        result = {
         DEFAULT_PROVIDER_NAME: {
             "type": "openai_compatible",
             "endpoint": SETTINGS.lm_studio_endpoint,
             "model": DEFAULT_PROVIDER_MODEL,
             "enabled": True,
         }
-    }
+        }
+    result.setdefault("ollama_qwen3_14b", dict(BUILTIN_CONTEXT_COMPILER_PROVIDER))
+    return result
 
 
 def default_provider_name() -> str:

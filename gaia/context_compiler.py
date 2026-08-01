@@ -106,7 +106,7 @@ class ContextCompiler:
             if len(text) > int(route["max_input_chars"]):
                 raise ContextCompileError("context_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку. Данные не изменены.")
             try: chunks = split_context(text, int(route["chunk_char_limit"]), int(route["chunk_max_units"]), int(route["chunk_overlap_chars"]), int(route["max_chunks"]))
-            except ChunkLimitError as exc: raise ContextCompileError("chunk_limit", "Материал слишком большой для одной сборки проектного контекста. Разделите его по главам или разделам и повторите обработку.") from exc
+            except ChunkLimitError as exc: raise ContextCompileError("chunk_limit", "Материал содержит слишком много смысловых единиц для одной сборки контекста. Разделите его по главам или разделам и повторите обработку.") from exc
             candidates=[]
             for position, chunk in enumerate(chunks, 1):
                 if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
@@ -199,8 +199,13 @@ class ContextCompiler:
                     raise CandidateValidationError("schema_candidates")
                 return local
             except CandidateValidationError as exc:
-                code = "evidence_mismatch" if exc.diagnostic_code == "evidence_mismatch" else exc.diagnostic_code
-                failures.append(ContextCompileError("context_evidence_mismatch" if code == "evidence_mismatch" else "local_model_invalid", "Не удалось точно подтвердить фрагмент-основание. Данные не изменены." if code == "evidence_mismatch" else "Локальный компилятор вернул результат, который не прошёл проверку.", code))
+                code = exc.diagnostic_code
+                evidence_error = code in {"evidence_mismatch", "evidence_ambiguous"}
+                failures.append(ContextCompileError(
+                    "context_evidence_ambiguous" if code == "evidence_ambiguous" else "context_evidence_mismatch" if code == "evidence_mismatch" else "local_model_invalid",
+                    "Не удалось однозначно подтвердить фрагмент-основание. Данные не изменены." if code == "evidence_ambiguous" else "Не удалось точно подтвердить фрагмент-основание. Данные не изменены." if evidence_error else "Локальный компилятор вернул результат, который не прошёл проверку.",
+                    code,
+                ))
             except ContextCompileError as exc:
                 if exc.diagnostic_code in {"empty_response", "output_truncated", "json_parse", "schema_top_level", "schema_candidates", "schema_required_fields", "schema_unknown_field", "block_coordinates", "result_too_large"}:
                     failures.append(exc)
@@ -418,11 +423,21 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
         candidate = dict(candidate)
         if "evidence_quote" in candidate:
             quote = candidate.pop("evidence_quote")
-            local_start = unit.text.find(quote)
-            if local_start < 0:
+            matches = [match.start() for match in re.finditer(re.escape(quote), unit.text)]
+            if not matches:
                 raise CandidateValidationError("evidence_mismatch")
+            if len(matches) > 1:
+                raise CandidateValidationError("evidence_ambiguous")
+            local_start = matches[0]
             candidate["block"] = {"start": unit.start + local_start, "end": unit.start + local_start + len(quote)}
             candidate["type"] = unit.section_type_hint or candidate["type"]
+            # These fields have no deterministic grounding rule in the Stage 7
+            # evidence contract.  Historical records and injected legacy test
+            # doubles remain readable; new evidence-based extraction never stores
+            # a model-supplied causal statement or proposed relation.
+            candidate.pop("reason", None)
+            candidate.pop("consequence", None)
+            candidate.pop(RELATIONS_FIELD, None)
             candidate.update(_ground_metadata(quote))
         else:
             # Compatibility only for injected deterministic test doubles; production
@@ -437,9 +452,10 @@ def _ground_metadata(evidence: str) -> dict[str, Any]:
     actor = re.search(r"\[[^\]\n]{1,120}\]", evidence)
     # A bracketed pseudonym is accepted only when an explicit responsibility or
     # appointment construction is present; unresolved responsibility is not one.
-    unresolved = re.search(r"ответственн\w*\s+пока\s+не\s+(?:назначен|определ[её]н)", evidence, re.I)
+    unresolved = re.search(r"ответственн\w*(?:\s+\[[^\]\n]+\])?\s+(?:пока\s+)?не\s+(?:назначен|определ[её]н)", evidence, re.I)
     actor_value = actor.group(0) if actor and not unresolved and re.search(r"(?:ответственн\w*|владельц\w*|назнач\w*|долж\w*)", evidence, re.I) else ""
     deadline = re.search(r"\bдо\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bназначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bза\s+[а-яё0-9]+\s+рабоч\w*\s+дн\w*\s+до\s+запуска\b", evidence, re.I)
     status = re.search(r"\bСтатус:\s*([^\n.;]+)", evidence, re.I)
     priority = re.search(r"\bПриоритет:\s*([^\n.;]+)", evidence, re.I)
-    return {"actor_ref": actor_value or None, "deadline": deadline.group(0) if deadline else None, "status": status.group(1).strip() if status else None, "priority": priority.group(1).strip() if priority else None}
+    negated_deadline = deadline and re.search(r"\bне\s+назначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b", evidence, re.I)
+    return {"actor_ref": actor_value or None, "deadline": deadline.group(0) if deadline and not negated_deadline else None, "status": status.group(1).strip() if status else None, "priority": priority.group(1).strip() if priority else None}

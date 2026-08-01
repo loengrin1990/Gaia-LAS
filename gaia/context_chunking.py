@@ -38,8 +38,10 @@ def split_context(text: str, chunk_char_limit: int, chunk_max_units: int, overla
     if chunk_char_limit <= 0 or chunk_max_units <= 0 or overlap_chars < 0 or overlap_chars >= chunk_char_limit:
         raise ChunkLimitError("Некорректные ограничения фрагментов.")
     units = _semantic_units(text, chunk_char_limit)
+    # One returned chunk is exactly one semantic unit and exactly one model call.
+    # ``max_chunks`` is kept as the configuration compatibility name.
     if len(units) > max_chunks:
-        raise ChunkLimitError("Материал содержит слишком много фрагментов.")
+        raise ChunkLimitError("Материал содержит слишком много смысловых единиц.")
     return [ContextChunk(index, value, start, start + len(value), boundary, heading, stack, hint)
             for index, (start, value, boundary, heading, stack, hint) in enumerate(units)]
 
@@ -67,20 +69,36 @@ def _semantic_units(text: str, limit: int) -> list[tuple[int, str, str, str, tup
 
 def _headings(text: str) -> list[tuple[int, int, str, int, str | None]]:
     result: list[tuple[int, int, str, int, str | None]] = []
-    for match in re.finditer(r"(?m)^(?P<marker>#{1,6}\s+)?(?P<title>[^\n]+?)\s*$", text):
-        marker, title = match.group("marker"), match.group("title")
-        typed = canonical_section_type(match.group())
+    fence_marker = ""
+    for match in re.finditer(r"(?m)^.*(?:\n|\Z)", text):
+        line = match.group().rstrip("\r\n")
+        fence = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})", line)
+        if fence:
+            marker = fence.group(1)
+            if not fence_marker:
+                fence_marker = marker[0]
+            elif marker[0] == fence_marker:
+                fence_marker = ""
+            continue
+        if fence_marker:
+            continue
+        heading = re.fullmatch(r"(?P<marker>#{1,6}\s+)?(?P<title>[^\n]+?)\s*", line)
+        if not heading:
+            continue
+        marker, title = heading.group("marker"), heading.group("title")
+        typed = canonical_section_type(line)
         # Plain lines are headings only when they are canonical typed headings.
         if not marker and not typed:
             continue
         level = len(marker.strip()) if marker else 1
-        result.append((match.start(), match.end(), title.strip(), level, typed))
+        result.append((match.start(), match.start() + len(line), title.strip(), level, typed))
     return result
 
 
 def _is_heading_block(value: str) -> bool:
     stripped = value.strip()
-    return bool(re.fullmatch(r"(?:#{1,6}\s+)?[^\n]+", stripped) and (stripped.startswith("#") or canonical_section_type(stripped)))
+    markdown_heading = re.fullmatch(r"#{1,6}\s+\S[^\n]*", stripped)
+    return bool(markdown_heading or canonical_section_type(stripped))
 
 
 def _section_context(headings: list[tuple[int, int, str, int, str | None]], position: int) -> tuple[str, tuple[str, ...], str | None]:

@@ -32,6 +32,32 @@ class ContextCompilerTests(unittest.TestCase):
             _ground_candidates([{"type":"decision","title":"Пилот","statement":"Пилот.","evidence_quote":"Пилот назначен.","confidence":"high","requires_review":True}], ContextChunk(0, "Пилотный запуск назначен.", 0, 25, "paragraph"))
         self.assertEqual(rejected.exception.diagnostic_code, "evidence_mismatch")
 
+    def test_ambiguous_evidence_retries_then_uses_the_unique_quote(self):
+        tmp,s,w,san=self.setup()
+        try:
+            text = "Повтор. Повтор. Уникальный фрагмент."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(text, encoding="utf-8")
+            responses = iter([
+                {"candidates":[{"type":"decision","title":"Повтор","statement":"Первый ответ.","evidence_quote":"Повтор.","confidence":"high","requires_review":True}]},
+                {"candidates":[{"type":"decision","title":"Уникально","statement":"Второй ответ.","evidence_quote":"Уникальный фрагмент.","confidence":"high","requires_review":True}]},
+            ])
+            item = ContextCompiler(s,w,lambda _: next(responses)).compile(san["artifact_id"])[0]
+            self.assertEqual(item["block_links"][0]["start"], text.index("Уникальный"))
+        finally: tmp.cleanup()
+
+    def test_repeated_ambiguous_evidence_fails_without_partial_persistence(self):
+        tmp,s,w,san=self.setup()
+        try:
+            text = "Повтор. Повтор."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(text, encoding="utf-8")
+            payload = {"candidates":[{"type":"decision","title":"Повтор","statement":"Ответ.","evidence_quote":"Повтор.","confidence":"high","requires_review":True}]}
+            with self.assertRaises(ContextCompileError) as rejected:
+                ContextCompiler(s,w,lambda _: payload).compile(san["artifact_id"])
+            self.assertEqual(rejected.exception.code, "context_evidence_ambiguous")
+            self.assertEqual(rejected.exception.diagnostic_code, "evidence_ambiguous")
+            self.assertEqual(ContextService(s,w).list(), [])
+        finally: tmp.cleanup()
+
     def test_local_metadata_is_limited_to_exact_evidence(self):
         text = "Владельцем процесса назначен [Координатор-Север] до 10 сентября 2026 года. Статус: назначено. Приоритет: высокий."
         grounded = _ground_candidates([{"type":"action","title":"Назначение","statement":"Назначить.","evidence_quote":text,"confidence":"high","requires_review":True}], ContextChunk(0, text, 0, len(text), "paragraph"))[0]
@@ -39,6 +65,37 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(grounded["deadline"], "до 10 сентября 2026 года")
         self.assertEqual(grounded["status"], "назначено")
         self.assertEqual(grounded["priority"], "высокий")
+
+    def test_negative_actor_and_deadline_are_not_grounded(self):
+        for text in (
+            "Ответственный [Координатор-Север] не назначен.",
+            "Ответственный [Координатор-Север] пока не назначен.",
+            "Пилотный запуск не назначен на 1 октября 2026 года.",
+        ):
+            with self.subTest(text=text):
+                grounded = _ground_candidates([{"type":"action","title":"Проверка","statement":"Проверить.","evidence_quote":text,"confidence":"high","requires_review":True}], ContextChunk(0, text, 0, len(text), "paragraph"))[0]
+                self.assertIsNone(grounded["actor_ref"])
+                self.assertIsNone(grounded["deadline"])
+
+    def test_positive_actor_and_deadline_grounding_is_preserved(self):
+        cases = (
+            ("[Координатор-Север] должен проверить материал до 10 сентября 2026 года.", "[Координатор-Север]", "до 10 сентября 2026 года"),
+            ("Владельцем процесса назначен [Координатор-Север].", "[Координатор-Север]", None),
+            ("Пилотный запуск назначен на 1 октября 2026 года.", None, "назначен на 1 октября 2026 года"),
+        )
+        for text, actor, deadline in cases:
+            with self.subTest(text=text):
+                grounded = _ground_candidates([{"type":"action","title":"Проверка","statement":"Проверить.","evidence_quote":text,"confidence":"high","requires_review":True}], ContextChunk(0, text, 0, len(text), "paragraph"))[0]
+                self.assertEqual(grounded["actor_ref"], actor)
+                self.assertEqual(grounded["deadline"], deadline)
+
+    def test_evidence_path_drops_ungrounded_reason_consequence_and_relations(self):
+        text = "Проверить материал."
+        candidate = {"type":"action","title":"Проверка","statement":"Проверить материал.","evidence_quote":text,"confidence":"high","requires_review":True,"reason":"галлюцинация","consequence":"галлюцинация","relations":["галлюцинация"]}
+        grounded = _ground_candidates([candidate], ContextChunk(0, text, 0, len(text), "paragraph"))[0]
+        self.assertNotIn("reason", grounded)
+        self.assertNotIn("consequence", grounded)
+        self.assertNotIn("relations", grounded)
     def setup(self):
         tmp=tempfile.TemporaryDirectory(); s=ProvenanceStore(Path(tmp.name)); w=s.create_workspace(); src=s.accept_bytes(w,b"[PERSON_1] decided: use local review. Risk: delay.","text/plain"); ext=s.create_extraction(w,src["source_id"],"v1"); san=protect(s,w,ext["artifact_id"])["sanitized"]
         ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san["artifact_id"]); ReviewService(s,w).confirm(san["artifact_id"])

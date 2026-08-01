@@ -36,3 +36,31 @@ class ContextChunkingTests(unittest.TestCase):
         units = split_context(text, 200, 1, 0, 10)
         self.assertEqual([(unit.section_type_hint, unit.text.strip()) for unit in units], [("decision", "Первое решение."), ("risk", "Возможна задержка.")])
         self.assertEqual(units[1].start, text.index("Возможна"))
+
+    def test_limit_counts_semantic_units_and_never_truncates(self) -> None:
+        text = "\n\n".join(f"Единица {index}." for index in range(81))
+        with self.assertRaisesRegex(ChunkLimitError, "смысловых единиц"):
+            split_context(text, 200, 1, 0, 80)
+
+    def test_fenced_headings_do_not_change_structure_or_offsets(self) -> None:
+        text = "```\nРЕШЕНИЯ\n# РЕШЕНИЯ\n```\n\nТекст после блока.\n\n~~~python\n# РЕШЕНИЯ\n~~~\n\nЕщё текст."
+        units = split_context(text, 300, 1, 0, 10)
+        after = next(unit for unit in units if "Текст после" in unit.text)
+        later = next(unit for unit in units if "Ещё текст" in unit.text)
+        self.assertIsNone(after.section_type_hint)
+        self.assertIsNone(later.section_type_hint)
+        self.assertEqual(after.text, text[after.start:after.end])
+        self.assertEqual(later.text, text[later.start:later.end])
+
+    def test_only_valid_markdown_heading_hides_a_heading_line(self) -> None:
+        text = "#hashtag important text\n\nРЕШЕНИЯ ПРОБЛЕМЫ\n\n# РЕШЕНИЯ\n\nРешение принято.\n\n## РЕШЕНИЯ\n\nВторое решение.\n\n####### text"
+        units = split_context(text, 300, 1, 0, 10)
+        self.assertEqual(units[0].text.strip(), "#hashtag important text")
+        self.assertEqual(units[0].start, text.index("#hashtag"))
+        self.assertEqual(units[1].text.strip(), "РЕШЕНИЯ ПРОБЛЕМЫ")
+        self.assertIsNone(units[1].section_type_hint)
+        self.assertEqual(units[2].section_type_hint, "decision")
+        self.assertEqual(units[3].section_type_hint, "decision")
+        self.assertEqual(units[4].text.strip(), "####### text")
+        for unit in units:
+            self.assertEqual(unit.text, text[unit.start:unit.end])
