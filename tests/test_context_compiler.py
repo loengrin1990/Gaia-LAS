@@ -19,6 +19,13 @@ from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 
 class ContextCompilerTests(unittest.TestCase):
+    def _compile_test_double_batch(self, store, workspace_id, artifact_id, model, compiler_version="context-v3"):
+        """Exercise generic persistence with an injected test double, never the production model route."""
+        compiler = ContextCompiler(store, workspace_id, model)
+        test_route = {**compiler._route(), "max_candidates_per_chunk": 32}
+        with patch.object(compiler, "_route", return_value=test_route):
+            return compiler.compile(artifact_id, compiler_version=compiler_version)
+
     def test_exact_evidence_is_grounded_and_typed_section_wins(self):
         text = "Пилотный запуск назначен на 1 октября 2026 года."
         candidate = {"type":"action","title":"Пилот","statement":"Пилотный запуск.","evidence_quote":text,"confidence":"high","requires_review":True}
@@ -111,9 +118,9 @@ class ContextCompilerTests(unittest.TestCase):
                     {"type":"risk","title":"Задержка","statement":"Есть риск задержки.","block":{"start":0,"end":8},"confidence":"medium","requires_review":True},
                     {"type":"open_question","title":"Срок","statement":"Срок не указан.","block":{"start":0,"end":5},"confidence":"low","requires_review":True},
                     {"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":6},"confidence":"medium","requires_review":True}]}
-            compiler=ContextCompiler(s,w,model); items=compiler.compile(san["artifact_id"])
+            items=self._compile_test_double_batch(s,w,san["artifact_id"],model)
             self.assertEqual(len(items),5); self.assertEqual(seen, ["[PERSON_1] decided: use local review. Risk: delay."])
-            self.assertEqual(len(compiler.compile(san["artifact_id"])),5)
+            self.assertEqual(len(self._compile_test_double_batch(s,w,san["artifact_id"],model)),5)
             service=ContextService(s,w); confirmed=service.decide(items[0]["id"],"confirm"); self.assertEqual(service.summary()["requirement"][0]["title"], confirmed["title"])
             edited=service.decide(confirmed["id"],"edit","Новая версия","Уточнённое требование."); self.assertTrue(edited["current"]); self.assertFalse(s.object_metadata(w,confirmed["id"])["current"])
             with self.assertRaisesRegex(ProvenanceError, "устарела"):
@@ -172,6 +179,33 @@ class ContextCompilerTests(unittest.TestCase):
         for field, value in (("title", ""), ("title", "x" * 161), ("statement", ""), ("statement", "y" * 1201), ("confidence", "other"), ("requires_review", False)):
             with self.subTest(field=field), self.assertRaises(CandidateValidationError):
                 validate_candidates({"candidates":[{**valid, field:value}]}, 20)
+
+    def test_relations_transport_schema_omits_pattern_but_validator_rejects_blank_values(self):
+        from gaia.context_compiler import context_response_schema
+        relation_schema = context_response_schema(1)["properties"]["candidates"]["items"]["properties"]["relations"]["items"]
+        self.assertEqual(relation_schema, {"type":"string", "minLength":1, "maxLength":160})
+        valid = {"type":"action", "title":"Проверка", "statement":"Проверить материал.", "evidence_quote":"основание", "confidence":"high", "requires_review":True}
+        self.assertEqual(validate_candidates({"candidates":[{**valid, "relations":["Связанный элемент"]}]}, 20)[0]["relations"], ["Связанный элемент"])
+        for relation in ("", "   ", "\t\n"):
+            with self.subTest(relation=repr(relation)), self.assertRaises(CandidateValidationError) as rejected:
+                validate_candidates({"candidates":[{**valid, "relations":[relation]}]}, 20)
+            self.assertEqual(rejected.exception.diagnostic_code, "schema_relations")
+
+    def test_production_route_rejects_multiple_candidates_before_persistence(self):
+        tmp,s,w,san=self.setup()
+        try:
+            response = {"candidates":[
+                {"type":"requirement","title":"Первое","statement":"Первое требование.","evidence_quote":"[PERSON_1] decided: use local review. Risk: delay.","confidence":"high","requires_review":True},
+                {"type":"risk","title":"Второе","statement":"Второй риск.","evidence_quote":"[PERSON_1] decided: use local review. Risk: delay.","confidence":"medium","requires_review":True},
+            ]}
+            with patch("gaia.context_compiler.local_context_model", return_value=response):
+                compiler = ContextCompiler(s,w)
+                self.assertEqual(compiler._route()["max_candidates_per_chunk"], 1)
+                with self.assertRaises(ContextCompileError) as rejected:
+                    compiler.compile(san["artifact_id"])
+            self.assertEqual(rejected.exception.diagnostic_code, "schema_candidates")
+            self.assertEqual(ContextService(s,w).list(), [])
+        finally: tmp.cleanup()
 
     def test_model_failure_is_safe_and_does_not_change_existing_context(self):
         tmp,s,w,san=self.setup()
@@ -355,18 +389,18 @@ class ContextCompilerTests(unittest.TestCase):
                     {"type":"decision","title":"Маршрут","statement":"Использовать локальный маршрут.","block":{"start":0,"end":8},"confidence":"high","requires_review":True},
                     {"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":8},"confidence":"medium","requires_review":True},
                 ]}
-            first=ContextCompiler(s,w,model).compile(san["artifact_id"])
+            first=self._compile_test_double_batch(s,w,san["artifact_id"],model)
             service=ContextService(s,w); service.decide(first[0]["id"],"confirm")
             # A second confirmed material carrying the exact same action adds provenance, not a copy.
             source_id=s.object_metadata(w,san["parents"][0])["parents"][0]
             ext=s.create_extraction(w,source_id,"v2")
             san2=protect(s,w,ext["artifact_id"],rules_version="v2")["sanitized"]
             ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(san2["artifact_id"]); ReviewService(s,w).confirm(san2["artifact_id"])
-            second=ContextCompiler(s,w,model).compile(san2["artifact_id"])
+            second=self._compile_test_double_batch(s,w,san2["artifact_id"],model)
             action=next(x for x in second if x["item_type"]=="action")
             self.assertEqual(len(action["source_links"]),2)
             # A conflicting decision remains separate and cannot displace the confirmed old one.
-            conflict=ContextCompiler(s,w,lambda text:{"candidates":[{**model(text)["candidates"][0],"statement":"Использовать иной локальный маршрут."}]}).compile(san2["artifact_id"],compiler_version="context-v4")[0]
+            conflict=self._compile_test_double_batch(s,w,san2["artifact_id"],lambda text:{"candidates":[{**model(text)["candidates"][0],"statement":"Использовать иной локальный маршрут."}]},compiler_version="context-v4")[0]
             self.assertEqual(s.object_metadata(w,first[0]["id"])["status"],"confirmed")
             self.assertEqual(ContextService(s,w).get(conflict["id"])["status"],"conflicted")
             service.resolve_conflict(conflict["id"],"keep_both")
@@ -381,10 +415,10 @@ class ContextCompilerTests(unittest.TestCase):
     def test_duplicate_marking_and_no_optional_invention(self):
         tmp,s,w,san=self.setup()
         try:
-            result=ContextCompiler(s,w,lambda text:{"candidates":[
+            result=self._compile_test_double_batch(s,w,san["artifact_id"],lambda text:{"candidates":[
                 {"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":6},"confidence":"medium","requires_review":True},
                 {"type":"risk","title":"Риск копия","statement":"Другой риск задержки.","block":{"start":0,"end":6},"confidence":"medium","requires_review":True},
-            ]}).compile(san["artifact_id"])
+            ]})
             self.assertNotIn("actor_ref",result[0]); self.assertNotIn("deadline",result[0]); self.assertNotIn("reason",result[0])
             service=ContextService(s,w); service.decide(result[0]["id"],"confirm")
             service.mark_duplicate(result[1]["id"],result[0]["id"])

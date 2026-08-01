@@ -48,7 +48,7 @@ def context_response_schema(max_candidates: int) -> dict[str, Any]:
     }
     for field in OPTIONAL:
         properties[field] = {"type": "string"}
-    properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S"}, "maxItems": 8}
+    properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 8}
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_quote", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 

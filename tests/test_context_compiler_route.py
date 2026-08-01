@@ -22,6 +22,7 @@ class ContextCompilerRouteTests(unittest.TestCase):
         self.assertEqual(route["structured_output"], "schema")
         self.assertFalse(route["thinking"])
         self.assertEqual(route["context_length"], 16384)
+        self.assertEqual(route["max_candidates_per_chunk"], 1)
 
     def test_context_route_can_override_thinking_without_affecting_other_routes(self) -> None:
         provider={"type":"ollama", "thinking":False, "json_mode":True, "endpoint":"http://127.0.0.1:1"}
