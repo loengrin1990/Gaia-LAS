@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -254,6 +254,9 @@ class JobRecord:
     phase: str = ""
     current_chunk: int = 0
     model_attempts: int = 0
+    # Legacy: semantic units entered. model_call_count counts every model call, including retries.
+    model_call_count: int = 0
+    last_unit_attempts: list[dict[str, Any]] = field(default_factory=list)
     last_activity_at: str = ""
     workspace_id: str = ""
     artifact_id: str = ""

@@ -13,7 +13,7 @@ from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
 from gaia.review import ReviewService
 from gaia.context_compiler import CandidateValidationError, ContextCompiler, ContextService, validate_candidates
-from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates
+from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _safe_attempt_category
 from gaia.context_chunking import ContextChunk
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
@@ -48,8 +48,10 @@ class ContextCompilerTests(unittest.TestCase):
                 {"candidates":[{"type":"decision","title":"Повтор","statement":"Первый ответ.","evidence_quote":"Повтор.","confidence":"high","requires_review":True}]},
                 {"candidates":[{"type":"decision","title":"Уникально","statement":"Второй ответ.","evidence_quote":"Уникальный фрагмент.","confidence":"high","requires_review":True}]},
             ])
-            item = ContextCompiler(s,w,lambda _: next(responses)).compile(san["artifact_id"])[0]
+            telemetry=[]
+            item = ContextCompiler(s,w,lambda _: next(responses)).compile(san["artifact_id"], retry_telemetry=lambda *event: telemetry.append(event))[0]
             self.assertEqual(item["block_links"][0]["start"], text.index("Уникальный"))
+            self.assertEqual([event for event in telemetry if event[-1] is not None], [(1, 1, 1, "evidence_ambiguous"), (1, 2, 2, "exact")])
         finally: tmp.cleanup()
 
     def test_repeated_ambiguous_evidence_fails_without_partial_persistence(self):
@@ -64,6 +66,11 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(rejected.exception.diagnostic_code, "evidence_ambiguous")
             self.assertEqual(ContextService(s,w).list(), [])
         finally: tmp.cleanup()
+
+    def test_retry_telemetry_distinguishes_missing_empty_and_not_found(self):
+        self.assertEqual(_safe_attempt_category({"candidates":[{}]}, "evidence_mismatch"), "evidence_missing")
+        self.assertEqual(_safe_attempt_category({"candidates":[{"evidence_quote":""}]}, "evidence_mismatch"), "evidence_empty")
+        self.assertEqual(_safe_attempt_category({"candidates":[{"evidence_quote":"outside"}]}, "evidence_mismatch"), "evidence_not_found")
 
     def test_local_metadata_is_limited_to_exact_evidence(self):
         text = "Владельцем процесса назначен [Координатор-Север] до 10 сентября 2026 года. Статус: назначено. Приоритет: высокий."

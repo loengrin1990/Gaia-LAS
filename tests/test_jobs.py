@@ -170,7 +170,7 @@ class JobQueueTests(unittest.TestCase):
                 with JOBS_LOCK:
                     JOBS[job_id]=job; JOB_CANCEL_EVENTS[job_id]=threading.Event()
                 class Compiler:
-                    def compile(self, artifact_id, cancel_event=None, progress=None, activity=None):
+                    def compile(self, artifact_id, cancel_event=None, progress=None, activity=None, retry_telemetry=None):
                         activity(-2, 1, 1)
                         cancel_job(job_id,"timeout")
                         activity(-3, 1, 1)

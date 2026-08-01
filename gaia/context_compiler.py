@@ -52,6 +52,18 @@ def context_response_schema(max_candidates: int) -> dict[str, Any]:
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_quote", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
+def _safe_attempt_category(response: Any, diagnostic_code: str) -> str:
+    """Return a fixed, content-free category; never persist model/source values."""
+    if diagnostic_code == "evidence_ambiguous": return "evidence_ambiguous"
+    if diagnostic_code != "evidence_mismatch": return "schema"
+    candidates = response.get("candidates") if isinstance(response, dict) else None
+    if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict): return "schema"
+    if "evidence_quote" not in candidates[0]: return "evidence_missing"
+    quote = candidates[0].get("evidence_quote")
+    if isinstance(quote, str) and not quote: return "evidence_empty"
+    return "evidence_not_found"
+
+
 def local_context_model(text: str, cancel_event: Any = None, section_type_hint: str | None = None) -> dict[str, Any]:
     route = resolve_route(TASK_CONTEXT_COMPILER)
     schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16))) if route.get("structured_output", "schema") == "schema" else None
@@ -93,8 +105,9 @@ class ContextCompiler:
         self.store, self.workspace_id, self.model = store, workspace_id, model or local_context_model
         self._uses_local_provider = model is None and getattr(self.model, "__module__", "") == __name__
 
-    def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None, activity: Callable[[int, int, int], None] | None = None) -> list[dict[str, Any]]:
-        self._model_attempts = 0
+    def compile(self, sanitized_id: str, compiler_version: str = COMPILER_VERSION, cancel_event: Any = None, progress: Callable[[int, int, int], None] | None = None, activity: Callable[[int, int, int], None] | None = None, retry_telemetry: Callable[[int, int, int, str | None], None] | None = None) -> list[dict[str, Any]]:
+        self._model_attempts = 0  # Legacy counter: semantic units entered, not model calls.
+        self._model_call_count = 0
         item = self.preflight(sanitized_id)
         extraction_id = (item.get("parents") or [""])[0]
         extraction = self.store.object_metadata(self.workspace_id, extraction_id)
@@ -121,7 +134,7 @@ class ContextCompiler:
             for position, chunk in enumerate(chunks, 1):
                 if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
                 if activity: activity(position, len(chunks), self._model_attempts + 1)
-                local = self._compile_chunk(chunk, route, cancel_event)
+                local = self._compile_chunk(chunk, route, cancel_event, retry_telemetry)
                 candidates.extend(local)
                 if len(candidates) > int(route["max_total_candidates"]): raise ContextCompileError("total_candidate_limit", "Слишком много элементов контекста. Данные не изменены.")
                 if progress: progress(position, len(chunks), len(candidates))
@@ -187,13 +200,16 @@ class ContextCompiler:
         else:
             emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=True, failed=False, succeeded=True, elapsed_ms=int((time.monotonic()-started)*1000), terminal_reason=terminal_reason)
 
-    def _compile_chunk(self, unit: ContextChunk, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
+    def _compile_chunk(self, unit: ContextChunk, route: dict[str, Any], cancel_event: Any, retry_telemetry: Callable[[int, int, int, str | None], None] | None = None) -> list[dict[str, Any]]:
         failures: list[ContextCompileError] = []
         self._model_attempts += 1
         if self._model_attempts > int(route["max_model_attempts"]):
             raise ContextCompileError("model_attempt_limit", "Превышен безопасный предел попыток сборки контекста. Данные не изменены.")
-        for _ in range(int(route["retry_count"]) + 1):
+        for call_number in range(1, int(route["retry_count"]) + 2):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+            self._model_call_count += 1
+            if retry_telemetry: retry_telemetry(unit.index + 1, call_number, self._model_call_count, None)
+            response = None
             try:
                 production_model = self.model is local_context_model
                 if production_model:
@@ -207,9 +223,12 @@ class ContextCompiler:
                 local = _ground_candidates(local, unit)
                 if len(local) > int(route["max_candidates_per_chunk"]):
                     raise CandidateValidationError("schema_candidates")
+                if retry_telemetry: retry_telemetry(unit.index + 1, call_number, self._model_call_count, "exact")
                 return local
             except CandidateValidationError as exc:
                 code = exc.diagnostic_code
+                category = _safe_attempt_category(response if "response" in locals() else None, code)
+                if retry_telemetry: retry_telemetry(unit.index + 1, call_number, self._model_call_count, category)
                 evidence_error = code in {"evidence_mismatch", "evidence_ambiguous"}
                 failures.append(ContextCompileError(
                     "context_evidence_ambiguous" if code == "evidence_ambiguous" else "context_evidence_mismatch" if code == "evidence_mismatch" else "local_model_invalid",
@@ -217,12 +236,16 @@ class ContextCompiler:
                     code,
                 ))
             except ContextCompileError as exc:
+                category = "provider" if exc.diagnostic_code in {"provider_unavailable", "model_timeout", "model_process", "model_result"} else "schema"
+                if retry_telemetry: retry_telemetry(unit.index + 1, call_number, self._model_call_count, category)
                 if exc.diagnostic_code in {"empty_response", "output_truncated", "json_parse", "schema_top_level", "schema_candidates", "schema_required_fields", "schema_unknown_field", "block_coordinates", "result_too_large"}:
                     failures.append(exc)
                 else: raise
-            except Exception as exc:
+            except Exception:
+                if retry_telemetry: retry_telemetry(unit.index + 1, call_number, self._model_call_count, "other_safe")
                 failures.append(ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.", "provider_unavailable"))
         raise failures[-1]
+
 
     def _persist_all(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
         if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")

@@ -98,8 +98,14 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
                     update_job(job_id,message="Завершаем сохранение контекста…",phase="finalizing",last_activity_at=local_now())
                 else:
                     update_job(job_id,message=f"Собираем контекст: фрагмент {current} из {total}…",phase="compiling",current_chunk=current,total_chunks=total,model_attempts=attempts,last_activity_at=local_now())
+            def retry_telemetry(unit: int, call: int, model_call_count: int, category: str | None):
+                job = get_job(job_id)
+                prior = [] if job is None or job.current_chunk != unit else list(job.last_unit_attempts)
+                if category is not None:
+                    prior.append({"unit": unit, "call": call, "category": category})
+                update_job(job_id,current_chunk=unit,model_call_count=model_call_count,last_unit_attempts=prior[-2:],last_activity_at=local_now())
             try:
-                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress,activity=activity)
+                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress,activity=activity,retry_telemetry=retry_telemetry)
             finally:
                 timeout_timer.cancel()
             if event.is_set(): cancel_job(job_id); return

@@ -6,7 +6,8 @@ from typing import Any
 from .storage import atomic_write_text, path_lock
 
 TERMINAL = {"done", "complete_empty", "failed", "cancelled", "interrupted"}
-SAFE_FIELDS = ("status","phase","error_code","diagnostic_code","created_at","started_at","updated_at","last_activity_at","finished_at","current_chunk","completed_chunks","total_chunks","progress","model_attempts","candidate_count","cancellation_requested")
+# model_attempts is the legacy count of semantic units entered; model_call_count includes retries.
+SAFE_FIELDS = ("status","phase","error_code","diagnostic_code","created_at","started_at","updated_at","last_activity_at","finished_at","current_chunk","completed_chunks","total_chunks","progress","model_attempts","model_call_count","last_unit_attempts","candidate_count","cancellation_requested")
 def safe_message(status: str, error_code: str = "") -> str:
     code=error_code.upper()
     if status=="complete_empty": return "Сборка завершена успешно, но элементов проектного контекста не найдено."
