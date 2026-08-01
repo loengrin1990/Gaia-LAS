@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from gaia.config import ConfigError, config_version, validate_local_endpoint, validate_loopback_host
+from gaia.config import ConfigError, config_version, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
 
 
 class ConfigContractTests(unittest.TestCase):
@@ -43,6 +43,15 @@ class ConfigContractTests(unittest.TestCase):
         self.assertEqual(route["structured_output"], "schema")
         self.assertEqual(route["temperature"], 0)
         self.assertEqual(route["context_length"], 16384)
+
+    def test_context_compiler_allows_zero_overlap_but_not_negative_overlap(self) -> None:
+        providers = {"ollama_qwen3_14b": {}}
+        route = {"provider":"ollama_qwen3_14b", "prompt_char_limit":9000, "chunk_char_limit":4000, "chunk_overlap_chars":0}
+        loaded = load_local_llm_routes({"routes":{"context_compiler":route}}, providers, "ollama_qwen3_14b")
+        self.assertEqual(loaded["context_compiler"]["chunk_overlap_chars"], 0)
+        route["chunk_overlap_chars"] = -1
+        with self.assertRaisesRegex(ConfigError, "non-negative integer"):
+            load_local_llm_routes({"routes":{"context_compiler":route}}, providers, "ollama_qwen3_14b")
 
 
 if __name__ == "__main__":

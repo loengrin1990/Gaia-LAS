@@ -253,8 +253,10 @@ def load_local_llm_routes(local_llm: dict[str, Any], providers: dict[str, dict[s
             option_value = value.get(key)
             if option_value is None:
                 continue
-            if isinstance(option_value, bool) or not isinstance(option_value, int) or option_value <= 0:
-                raise ConfigError(f"Config value `local_llm.routes.{name}.{key}` must be a positive integer.")
+            allows_zero = key == "chunk_overlap_chars"
+            if isinstance(option_value, bool) or not isinstance(option_value, int) or option_value < 0 or (not allows_zero and option_value == 0):
+                requirement = "a non-negative integer" if allows_zero else "a positive integer"
+                raise ConfigError(f"Config value `local_llm.routes.{name}.{key}` must be {requirement}.")
             route[key] = option_value
         temperature = value.get("temperature")
         if temperature is not None:
