@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from gaia.context_compiler import context_response_schema
-from gaia.local_llm import local_llm_payload, run_local_llm_prompt
+from gaia.local_llm import TASK_CONTEXT_COMPILER, local_llm_payload, resolve_route, run_local_llm_prompt
 
 
 class ContextCompilerRouteTests(unittest.TestCase):
@@ -12,7 +12,16 @@ class ContextCompilerRouteTests(unittest.TestCase):
         provider={"type":"ollama", "thinking":False, "json_mode":True, "context_length":8192}
         schema=context_response_schema(16)
         payload=local_llm_payload(provider,"qwen3.5:9b","system","prompt",0,max_tokens=2400,context_length=32768,response_schema=schema)
-        self.assertEqual(payload["format"],schema); self.assertEqual(payload["options"]["num_ctx"],32768); self.assertEqual(payload["options"]["num_predict"],2400); self.assertEqual(payload["options"]["temperature"],0)
+        self.assertEqual(payload["format"],schema); self.assertIsInstance(payload["format"],dict); self.assertNotEqual(payload["format"],"json"); self.assertFalse(payload["think"]); self.assertEqual(payload["options"]["num_ctx"],32768); self.assertEqual(payload["options"]["num_predict"],2400); self.assertEqual(payload["options"]["temperature"],0)
+
+    def test_default_context_route_uses_qwen_schema_without_thinking(self) -> None:
+        with patch("gaia.local_llm.route_configs", return_value={}), patch("gaia.local_llm.SETTINGS", None):
+            route = resolve_route(TASK_CONTEXT_COMPILER)
+        self.assertEqual(route["provider"], "ollama_qwen3_14b")
+        self.assertEqual(route["model"], "qwen3:14b")
+        self.assertEqual(route["structured_output"], "schema")
+        self.assertFalse(route["thinking"])
+        self.assertEqual(route["context_length"], 16384)
 
     def test_context_route_can_override_thinking_without_affecting_other_routes(self) -> None:
         provider={"type":"ollama", "thinking":False, "json_mode":True, "endpoint":"http://127.0.0.1:1"}

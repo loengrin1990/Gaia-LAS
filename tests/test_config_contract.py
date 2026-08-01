@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from gaia.config import ConfigError, config_version, validate_local_endpoint, validate_loopback_host
@@ -29,6 +31,18 @@ class ConfigContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "loopback IP"):
             validate_loopback_host("0.0.0.0", "server.host")
         validate_loopback_host("127.0.0.1", "server.host")
+
+    def test_example_context_compiler_route_matches_the_stage_7_contract(self) -> None:
+        payload = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))
+        provider = payload["local_llm"]["providers"]["ollama_qwen3_14b"]
+        route = payload["local_llm"]["routes"]["context_compiler"]
+        self.assertEqual(provider["endpoint"], "http://127.0.0.1:11434/api/chat")
+        self.assertEqual(route["provider"], "ollama_qwen3_14b")
+        self.assertEqual(route["model"], "qwen3:14b")
+        self.assertFalse(route["thinking"])
+        self.assertEqual(route["structured_output"], "schema")
+        self.assertEqual(route["temperature"], 0)
+        self.assertEqual(route["context_length"], 16384)
 
 
 if __name__ == "__main__":

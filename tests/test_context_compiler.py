@@ -158,6 +158,21 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(ContextService(s,w).list(),[])
         finally: tmp.cleanup()
 
+    def test_schema_declares_the_same_field_boundaries_as_the_validator(self):
+        from gaia.context_compiler import context_response_schema
+        candidate = context_response_schema(1)["properties"]["candidates"]["items"]
+        properties = candidate["properties"]
+        self.assertEqual(properties["title"], {"type":"string", "minLength":1, "maxLength":160})
+        self.assertEqual(properties["statement"], {"type":"string", "minLength":1, "maxLength":1200})
+        self.assertEqual(properties["evidence_quote"]["minLength"], 1)
+        self.assertEqual(properties["confidence"]["enum"], ["low", "medium", "high"])
+        self.assertTrue(properties["requires_review"]["const"])
+        valid = {"type":"action", "title":"x" * 160, "statement":"y" * 1200, "evidence_quote":"основание", "confidence":"high", "requires_review":True}
+        self.assertEqual(validate_candidates({"candidates":[valid]}, 20), [valid])
+        for field, value in (("title", ""), ("title", "x" * 161), ("statement", ""), ("statement", "y" * 1201), ("confidence", "other"), ("requires_review", False)):
+            with self.subTest(field=field), self.assertRaises(CandidateValidationError):
+                validate_candidates({"candidates":[{**valid, field:value}]}, 20)
+
     def test_model_failure_is_safe_and_does_not_change_existing_context(self):
         tmp,s,w,san=self.setup()
         try:

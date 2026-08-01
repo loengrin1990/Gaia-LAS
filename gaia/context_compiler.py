@@ -38,8 +38,17 @@ class CandidateValidationError(ProvenanceError):
         self.diagnostic_code = diagnostic_code
 
 def context_response_schema(max_candidates: int) -> dict[str, Any]:
-    properties = {"type": {"enum": sorted(TYPES)}, "title": {"type": "string"}, "statement": {"type": "string"}, "evidence_quote": {"type": "string"}, "confidence": {"enum": ["low", "medium", "high"]}, "requires_review": {"const": True}}
-    properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
+    properties = {
+        "type": {"type": "string", "enum": sorted(TYPES)},
+        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+        "statement": {"type": "string", "minLength": 1, "maxLength": 1200},
+        "evidence_quote": {"type": "string", "minLength": 1},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "requires_review": {"type": "boolean", "const": True},
+    }
+    for field in OPTIONAL:
+        properties[field] = {"type": "string"}
+    properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S"}, "maxItems": 8}
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_quote", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
@@ -49,6 +58,7 @@ def local_context_model(text: str, cancel_event: Any = None, section_type_hint: 
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
         "Обязательные поля каждого кандидата: type, title, statement, evidence_quote, confidence, requires_review. "
+        "title — непустая строка не длиннее 160 символов; statement — непустая строка не длиннее 1200 символов. "
         "evidence_quote обязан быть точной непрерывной Unicode-подстрокой текущего фрагмента; не возвращай координаты и не перефразируй evidence_quote. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
