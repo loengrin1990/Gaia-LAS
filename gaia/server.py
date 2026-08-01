@@ -27,9 +27,10 @@ from .conversations import (
     get_conversation,
     list_conversations,
 )
-from .jobs import JobQueueFullError, cancel_job, get_job, job_to_dict, submit_analyze_job, submit_context_compile_job
+from .jobs import JobQueueFullError, active_context_job, cancel_job, get_job, job_to_dict, submit_analyze_job, submit_context_compile_job
+from .context_attempts import ContextAttemptStore, safe_message
 from .controlled_intake import ControlledIntake
-from .context_compiler import ContextCompileError, ContextService
+from .context_compiler import ContextCompileError, ContextCompiler, ContextService
 from .context_search import ContextSearchError, parse_params, search
 from .context_overview import overview
 from .provenance import ProvenanceError
@@ -616,13 +617,23 @@ class Handler(BaseHTTPRequestHandler):
                 emit_runtime_diagnostic("context_search", "context_search", trace_id, workspace_hash=hashlib.sha256(project.strip().encode("utf-8")).hexdigest()[:12], error_code="internal_error", exception_type=type(exc).__name__)
                 error_response(self, "context_search_failed", "Не удалось выполнить поиск. Данные не изменены. Повторите попытку.", 500); return
         try:
-            service=ControlledIntake().context(project)
-            if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
+            intake=ControlledIntake()
             if len(parts) >= 5 and parts[4] == "status":
-                candidates = [item for item in service.list() if parts[3] in item.get("parents", [])]
-                receipt = ControlledIntake().compiler(project)._receipt(parts[3])
-                empty = bool(receipt and receipt.get("status") == "complete" and receipt.get("candidate_count") == 0)
-                json_response(self, {"status": "ready" if candidates else "complete_empty" if empty else "not_started", "candidate_count": len(candidates)}); return
+                workspace=intake.existing_workspace(project)
+                if not workspace:
+                    json_response(self, {"status":"not_started","candidate_count":0,"user_message":""}); return
+                active=active_context_job(workspace, parts[3])
+                receipt=ContextCompiler(intake.store, workspace)._receipt(parts[3])
+                if active:
+                    payload=job_to_dict(active)
+                elif receipt and receipt.get("status") == "complete":
+                    payload={"status":"complete_empty" if receipt.get("candidate_count") == 0 else "done","candidate_count":receipt.get("candidate_count",0),"completed_at":receipt.get("completed_at","")}
+                else:
+                    payload=ContextAttemptStore(intake.store).get(workspace,parts[3]) or {"status":"not_started","candidate_count":0}
+                payload["user_message"]=safe_message(str(payload.get("status") or ""),str(payload.get("error_code") or "")) if payload.get("status") != "not_started" else ""
+                json_response(self,payload); return
+            service=intake.context(project)
+            if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
             if len(parts) >= 4: json_response(self, service.get(parts[3])); return
             json_response(self, {"candidates": service.list()})
         except ProvenanceError: error_response(self,"context_not_found","Контекст недоступен в этом рабочем пространстве.",404)

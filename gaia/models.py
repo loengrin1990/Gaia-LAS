@@ -255,3 +255,8 @@ class JobRecord:
     current_chunk: int = 0
     model_attempts: int = 0
     last_activity_at: str = ""
+    workspace_id: str = ""
+    artifact_id: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    diagnostic_code: str = ""

@@ -12,6 +12,7 @@ from .orchestrator import PackageCancelledError, create_package
 from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError
 from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
+from .context_attempts import ContextAttemptStore
 
 
 JOBS: dict[str, JobRecord] = {}
@@ -23,7 +24,7 @@ JOB_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="g
 JOB_CAPACITY = threading.BoundedSemaphore(MAX_WORKERS + MAX_QUEUED_JOBS)
 CONTEXT_COMPILE_LOCK = threading.Lock()
 RUNNING_JOB_TIMEOUT_SECONDS = 900
-TERMINAL_STATUSES = {"done", "failed", "cancelled"}
+TERMINAL_STATUSES = {"done", "complete_empty", "failed", "cancelled", "interrupted"}
 
 
 class JobQueueFullError(RuntimeError):
@@ -66,9 +67,11 @@ def submit_context_compile_job(project: str, artifact_id: str) -> JobRecord:
     job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-ctx-" + uuid.uuid4().hex[:8]
     now = local_now()
     timeout_seconds = int(resolve_route(TASK_CONTEXT_COMPILER).get("job_timeout_seconds", 1800))
-    job = JobRecord(id=job_id, status="created", created_at=now, updated_at=now, project=project, message="Подготавливаем материал…", progress=0, job_type="context_compile", timeout_seconds=timeout_seconds)
+    workspace_id = ControlledIntake().existing_workspace(project) or ""
+    job = JobRecord(id=job_id, status="created", created_at=now, updated_at=now, project=project, message="Подготавливаем материал…", progress=0, job_type="context_compile", timeout_seconds=timeout_seconds, workspace_id=workspace_id, artifact_id=artifact_id)
     with JOBS_LOCK:
         prune_completed_jobs(); JOBS[job_id] = job; JOB_CANCEL_EVENTS[job_id] = threading.Event()
+    _persist_context_attempt(job)
     try:
         JOB_EXECUTOR.submit(_run_context_compile_job, job_id, project, artifact_id)
     except Exception:
@@ -79,7 +82,7 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
     event=cancel_event_for(job_id)
     try:
         with CONTEXT_COMPILE_LOCK:
-            update_job(job_id,status="running",message="Собираем контекст: подготавливаем фрагменты…",progress=0,phase="compiling",last_activity_at=local_now())
+            update_job(job_id,status="running",message="Собираем контекст: подготавливаем фрагменты…",progress=0,phase="compiling",started_at=local_now(),last_activity_at=local_now())
             timeout_timer = threading.Timer(job_timeout_for(get_job(job_id)), cancel_job, args=(job_id, "timeout"))
             timeout_timer.daemon = True; timeout_timer.start()
             def progress(done: int,total: int,count: int):
@@ -100,17 +103,17 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
             finally:
                 timeout_timer.cancel()
             if event.is_set(): cancel_job(job_id); return
-            update_job(job_id,status="done",message="Сборка контекста завершена: проектный контекст не найден." if not candidates else "Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates,"context_status":"complete_empty" if not candidates else "ready"},candidate_count=len(candidates))
+            update_job(job_id,status="complete_empty" if not candidates else "done",message="Сборка контекста завершена: проектный контекст не найден." if not candidates else "Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates,"context_status":"complete_empty" if not candidates else "ready"},candidate_count=len(candidates),finished_at=local_now())
     except ContextCompileError as exc:
         if exc.code=="cancelled": cancel_job(job_id)
         else:
             current = get_job(job_id)
             late = current is not None and current.phase in {"persisting", "finalizing"}
-            update_job(job_id,status="failed",message="Не удалось завершить сохранение контекста. Проверьте результаты контекста перед повторной сборкой." if late else "Не удалось собрать контекст для одного из фрагментов. Данные не изменены.",progress=100,error_code=f"CONTEXT_{(exc.diagnostic_code or exc.code).upper()}",error=f"CONTEXT_{(exc.diagnostic_code or exc.code).upper()}")
+            code=f"CONTEXT_{(exc.diagnostic_code or exc.code).upper()}"; update_job(job_id,status="failed",message="Не удалось завершить сохранение контекста. Проверьте результаты контекста перед повторной сборкой." if late else "Не удалось собрать контекст для одного из фрагментов. Данные не изменены.",progress=100,error_code=code,error=code,diagnostic_code=str(exc.diagnostic_code or ""),finished_at=local_now())
     except Exception:
         current = get_job(job_id)
         late = current is not None and current.phase in {"persisting", "finalizing"}
-        update_job(job_id,status="failed",message="Не удалось завершить сохранение контекста. Проверьте результаты контекста перед повторной сборкой." if late else "Не удалось собрать контекст. Данные не изменены.",progress=100,error_code="CONTEXT_INTERNAL_ERROR",error="CONTEXT_INTERNAL_ERROR")
+        update_job(job_id,status="failed",message="Не удалось завершить сохранение контекста. Проверьте результаты контекста перед повторной сборкой." if late else "Не удалось собрать контекст. Данные не изменены.",progress=100,error_code="CONTEXT_INTERNAL_ERROR",error="CONTEXT_INTERNAL_ERROR",finished_at=local_now())
     finally:
         JOB_CAPACITY.release()
 
@@ -223,6 +226,8 @@ def cancel_job(job_id: str, reason: str = "cancelled") -> JobRecord | None:
             job.message = "Сборка контекста отменена. Данные не изменены." if job.job_type == "context_compile" else "Задача отменена; активная транскрибация завершена."
             job.error = "CONTEXT_CANCELLED" if job.job_type == "context_compile" else "Job cancelled by user."
         job.updated_at = local_now()
+        if job.job_type == "context_compile":
+            job.finished_at = job.updated_at; _persist_context_attempt(job)
         return job
 
 
@@ -236,6 +241,15 @@ def update_job(job_id: str, **changes: Any) -> None:
         for key, value in changes.items():
             setattr(job, key, value)
         job.updated_at = local_now()
+        if job.job_type == "context_compile": _persist_context_attempt(job)
+
+def _persist_context_attempt(job: JobRecord) -> None:
+    if job.workspace_id and job.artifact_id:
+        ContextAttemptStore(ControlledIntake().store).save(job.workspace_id, job.artifact_id, job.__dict__)
+
+def active_context_job(workspace_id: str, artifact_id: str) -> JobRecord | None:
+    with JOBS_LOCK:
+        return next((job for job in JOBS.values() if job.job_type == "context_compile" and job.workspace_id == workspace_id and job.artifact_id == artifact_id and job.status not in TERMINAL_STATUSES), None)
 
 
 def get_job(job_id: str) -> JobRecord | None:
