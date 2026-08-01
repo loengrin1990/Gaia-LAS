@@ -21,7 +21,7 @@ TASK_VEIL_REVIEW = "veil_review"
 TASK_SCRIBE_CLASSIFIER = "scribe_classifier"
 TASK_PROJECT_HEALTH = "project_health"
 TASK_CONTEXT_COMPILER = "context_compiler"
-CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_8b", "prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 32768, "temperature": 0, "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 12, "chunk_overlap_chars": 250, "max_candidates_per_chunk": 16, "max_total_candidates": 512, "max_input_chars": 250000, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800}
+CONTEXT_COMPILER_DEFAULT_ROUTE = {"provider": "ollama_qwen3_14b", "model": "qwen3:14b", "prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 16384, "temperature": 0, "thinking": False, "structured_output": "schema", "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 1, "chunk_overlap_chars": 0, "max_candidates_per_chunk": 1, "max_total_candidates": 512, "max_input_chars": 250000, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800}
 LOCAL_CONTEXT_MARKER = "# Эффективный контекст, выбранный Lore\n"
 LOCAL_SOURCES_MARKER = "\n# Источники выбора Lore\n"
 STRUCTURED_LOCAL_SYSTEM = (
@@ -130,7 +130,7 @@ def provider_endpoint(name: str) -> str:
 
 def resolve_route(task: str) -> dict[str, Any]:
     routes = route_configs()
-    route = routes.get(task, CONTEXT_COMPILER_DEFAULT_ROUTE if task == TASK_CONTEXT_COMPILER and "ollama_qwen3_8b" in provider_configs() else {})
+    route = routes.get(task, CONTEXT_COMPILER_DEFAULT_ROUTE if task == TASK_CONTEXT_COMPILER else {})
     provider = str(route.get("provider") or default_provider_name())
     provider_data = provider_config(provider)
     model = str(route.get("model") or provider_data.get("model") or DEFAULT_PROVIDER_MODEL)

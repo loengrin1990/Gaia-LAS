@@ -163,6 +163,7 @@ def _project(item: Mapping[str, Any]) -> dict[str, Any]:
         "statement": item.get("statement", ""), "actor_ref": item.get("actor_ref", ""),
         "deadline": item.get("deadline", ""), "explicit_status": item.get("explicit_status", ""),
         "priority": item.get("priority", ""), "updated_at": item.get("updated_at", ""),
+        "created_at": item.get("created_at", ""), "confirmed_at": item.get("confirmed_at", ""),
         "source_count": len(item.get("source_links") or []), "has_related": bool(item.get("relation_ids")),
     }
 

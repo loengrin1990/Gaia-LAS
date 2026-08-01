@@ -620,7 +620,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
             if len(parts) >= 5 and parts[4] == "status":
                 candidates = [item for item in service.list() if parts[3] in item.get("parents", [])]
-                json_response(self, {"status": "ready" if candidates else "not_started", "candidate_count": len(candidates)}); return
+                receipt = ControlledIntake().compiler(project)._receipt(parts[3])
+                empty = bool(receipt and receipt.get("status") == "complete" and receipt.get("candidate_count") == 0)
+                json_response(self, {"status": "ready" if candidates else "complete_empty" if empty else "not_started", "candidate_count": len(candidates)}); return
             if len(parts) >= 4: json_response(self, service.get(parts[3])); return
             json_response(self, {"candidates": service.list()})
         except ProvenanceError: error_response(self,"context_not_found","Контекст недоступен в этом рабочем пространстве.",404)

@@ -100,7 +100,7 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
             finally:
                 timeout_timer.cancel()
             if event.is_set(): cancel_job(job_id); return
-            update_job(job_id,status="done",message="Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates},candidate_count=len(candidates))
+            update_job(job_id,status="done",message="Сборка контекста завершена: проектный контекст не найден." if not candidates else "Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates,"context_status":"complete_empty" if not candidates else "ready"},candidate_count=len(candidates))
     except ContextCompileError as exc:
         if exc.code=="cancelled": cancel_job(job_id)
         else:

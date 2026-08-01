@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 import unicodedata
@@ -16,8 +17,8 @@ from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .context_model_executor import ContextModelExecutorError, execute_context_model_call
 
-COMPILER_VERSION = "context-v2"
-PROMPT_SCHEMA_VERSION = "context-schema-v2"
+COMPILER_VERSION = "context-v3"
+PROMPT_SCHEMA_VERSION = "context-schema-v3"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
 RELATIONS_FIELD = "relations"
@@ -37,31 +38,24 @@ class CandidateValidationError(ProvenanceError):
         self.diagnostic_code = diagnostic_code
 
 def context_response_schema(max_candidates: int) -> dict[str, Any]:
-    properties = {"type": {"enum": sorted(TYPES)}, "title": {"type": "string"}, "statement": {"type": "string"}, "block": {"type": "object", "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}, "required": ["start", "end"], "additionalProperties": False}, "confidence": {"enum": ["low", "medium", "high"]}, "requires_review": {"const": True}}
-    properties.update({key: {"type": "string"} for key in OPTIONAL})
+    properties = {"type": {"enum": sorted(TYPES)}, "title": {"type": "string"}, "statement": {"type": "string"}, "evidence_quote": {"type": "string"}, "confidence": {"enum": ["low", "medium", "high"]}, "requires_review": {"const": True}}
     properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string"}, "maxItems": 8}
-    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "block", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
+    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_quote", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
-def local_context_model(text: str, cancel_event: Any = None) -> dict[str, Any]:
+def local_context_model(text: str, cancel_event: Any = None, section_type_hint: str | None = None) -> dict[str, Any]:
     route = resolve_route(TASK_CONTEXT_COMPILER)
     schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16))) if route.get("structured_output", "schema") == "schema" else None
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
-        "Обязательные поля каждого кандидата: type, title, statement, block, confidence, requires_review. "
-        "Разрешённые необязательные поля: actor_ref, deadline, status, priority, reason, consequence, relations. "
-        "Добавляй необязательное поле только если его значение прямо названо в текущем фрагменте; не придумывай ответственного, срок, статус или приоритет. "
-        "Сопоставление optional metadata: «[Координатор-Север] должен согласовать до 15 сентября 2026 года. Статус: назначено. Приоритет: высокий.» "
-        "даёт actor_ref «[Координатор-Север]», deadline «15 сентября 2026 года», status «назначено», priority «высокий». "
-        "«владельцем процесса назначен [Координатор-Орбита]» даёт actor_ref «[Координатор-Орбита]»; "
-        "«до 1 октября 2026 года» даёт deadline «1 октября 2026 года»; "
-        "«Ответственный за контроль: [Инженер-Север]» даёт actor_ref «[Инженер-Север]». "
+        "Обязательные поля каждого кандидата: type, title, statement, evidence_quote, confidence, requires_review. "
+        "evidence_quote обязан быть точной непрерывной Unicode-подстрокой текущего фрагмента; не возвращай координаты и не перефразируй evidence_quote. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
-        "block: только объект {\"start\":целое,\"end\":целое} с координатами очищенного текста, 0 <= start < end <= длина текста. "
         "Не используй русские enum, пробелы в ключах или ключи requirement, solution, risk, question, action как замену структуры кандидата. "
-        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"block\":{\"start\":0,\"end\":10},\"confidence\":\"high\",\"requires_review\":true}]}. "
-        "Извлеки только явно сказанные требования, решения, риски, вопросы и действия из очищенного текста; не добавляй предположений.\n\n" + text
+        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_quote\":\"Проверить материал.\",\"confidence\":\"high\",\"requires_review\":true}]}. "
+        + (f"Тип задан структурой документа: {section_type_hint}. Не классифицируй его заново; возвращай только этот type. " if section_type_hint else "Извлеки только явно сказанные требования, решения, риски, вопросы и действия; ")
+        + "не добавляй предположений.\n\n" + text
     )
     try:
         timeout = int(route.get("model_call_timeout_seconds", route.get("timeout_seconds", 120)))
@@ -117,9 +111,7 @@ class ContextCompiler:
             for position, chunk in enumerate(chunks, 1):
                 if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
                 if activity: activity(position, len(chunks), self._model_attempts + 1)
-                local = self._compile_chunk(chunk.text, route, cancel_event)
-                for candidate in local:
-                    candidate["block"] = {"start": chunk.start + candidate["block"]["start"], "end": chunk.start + candidate["block"]["end"]}
+                local = self._compile_chunk(chunk, route, cancel_event)
                 candidates.extend(local)
                 if len(candidates) > int(route["max_total_candidates"]): raise ContextCompileError("total_candidate_limit", "Слишком много элементов контекста. Данные не изменены.")
                 if progress: progress(position, len(chunks), len(candidates))
@@ -185,7 +177,7 @@ class ContextCompiler:
         else:
             emit_runtime_diagnostic("context_compile_model", "context_compile_model_unload", f"gaia-{uuid.uuid4().hex[:12]}", route=TASK_CONTEXT_COMPILER, attempted=True, failed=False, succeeded=True, elapsed_ms=int((time.monotonic()-started)*1000), terminal_reason=terminal_reason)
 
-    def _compile_chunk(self, text: str, route: dict[str, Any], cancel_event: Any, depth: int = 0) -> list[dict[str, Any]]:
+    def _compile_chunk(self, unit: ContextChunk, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
         failures: list[ContextCompileError] = []
         self._model_attempts += 1
         if self._model_attempts > int(route["max_model_attempts"]):
@@ -193,37 +185,29 @@ class ContextCompiler:
         for _ in range(int(route["retry_count"]) + 1):
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             try:
-                if self._uses_local_provider:
-                    response = self.model(text, cancel_event=cancel_event)
+                production_model = self.model is local_context_model
+                if production_model:
+                    response = self.model(unit.text, cancel_event=cancel_event, section_type_hint=unit.section_type_hint)
                 else:
-                    response = self.model(text)
-                local = validate_candidates(response, len(text), int(route["max_candidates_per_chunk"]))
-                _validate_optional_metadata_source(local, text)
-                if len(local) >= int(route["max_candidates_per_chunk"]):
+                    try:
+                        response = self.model(unit.text, cancel_event=cancel_event)
+                    except TypeError:
+                        response = self.model(unit.text)
+                local = validate_candidates(response, len(unit.text), int(route["max_candidates_per_chunk"] if production_model else MAX_CANDIDATES), allow_legacy=not production_model)
+                local = _ground_candidates(local, unit)
+                if len(local) > int(route["max_candidates_per_chunk"]):
                     raise CandidateValidationError("schema_candidates")
                 return local
             except CandidateValidationError as exc:
-                failures.append(ContextCompileError("local_model_invalid", "Локальный компилятор вернул результат, который не прошёл проверку.", exc.diagnostic_code))
+                code = "evidence_mismatch" if exc.diagnostic_code == "evidence_mismatch" else exc.diagnostic_code
+                failures.append(ContextCompileError("context_evidence_mismatch" if code == "evidence_mismatch" else "local_model_invalid", "Не удалось точно подтвердить фрагмент-основание. Данные не изменены." if code == "evidence_mismatch" else "Локальный компилятор вернул результат, который не прошёл проверку.", code))
             except ContextCompileError as exc:
                 if exc.diagnostic_code in {"empty_response", "output_truncated", "json_parse", "schema_top_level", "schema_candidates", "schema_required_fields", "schema_unknown_field", "block_coordinates", "result_too_large"}:
                     failures.append(exc)
                 else: raise
             except Exception as exc:
                 failures.append(ContextCompileError("local_model_unavailable", "Локальный компилятор контекста недоступен.", "provider_unavailable"))
-        minimum, max_depth = 500, 4
-        if len(text) <= minimum or depth >= max_depth:
-            raise failures[-1]
-        midpoint = len(text) // 2
-        boundaries = [text.rfind("\n\n", 0, midpoint), text.find("\n\n", midpoint)]
-        cut = max((point for point in boundaries if point > 0), key=lambda point: -abs(point - midpoint), default=midpoint)
-        if cut <= 0 or cut >= len(text): cut = midpoint
-        halves = [ContextChunk(0, text[:cut], 0, cut, "retry"), ContextChunk(1, text[cut:], cut, len(text), "retry")]
-        result: list[dict[str, Any]] = []
-        for half in halves:
-            for candidate in self._compile_chunk(half.text, route, cancel_event, depth + 1):
-                candidate["block"] = {"start": half.start + candidate["block"]["start"], "end": half.start + candidate["block"]["end"]}
-                result.append(candidate)
-        return result
+        raise failures[-1]
 
     def _persist_all(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
         if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
@@ -302,7 +286,7 @@ class ContextService:
         item = self.get(context_id)
         if item.get("current") is False:
             raise ProvenanceError("Эта версия предложения устарела. Откройте актуальную версию.")
-        if decision == "confirm": self.store._update(context_id, status="confirmed", confirmation_status="confirmed", requires_review=False); return self.get(context_id)
+        if decision == "confirm": self.store._update(context_id, status="confirmed", confirmation_status="confirmed", requires_review=False, confirmed_at=datetime.now().isoformat(timespec="seconds")); return self.get(context_id)
         if decision == "reject": self.store._update(context_id, status="rejected", confirmation_status="rejected", current=False); return self.get(context_id)
         if decision == "edit":
             if not title.strip() or not statement.strip(): raise ProvenanceError("Укажите заголовок и содержание новой версии.")
@@ -380,7 +364,7 @@ def _deduplicate_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, 
             candidate["block_links"] = blocks
     return list(result.values())
 
-def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CANDIDATES) -> list[dict[str, Any]]:
+def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CANDIDATES, *, allow_legacy: bool = False) -> list[dict[str, Any]]:
     if not isinstance(payload, dict) or set(payload) != {"candidates"}:
         raise CandidateValidationError("schema_top_level")
     if not isinstance(payload["candidates"], list) or len(payload["candidates"]) > max_candidates:
@@ -388,17 +372,22 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_SIZE:
         raise CandidateValidationError("result_too_large")
     result=[]
-    required={"type","title","statement","block","confidence","requires_review"}
+    required={"type","title","statement","evidence_quote","confidence","requires_review"}
     for item in payload["candidates"]:
         if not isinstance(item,dict): raise CandidateValidationError("schema_candidate")
-        if not required.issubset(item): raise CandidateValidationError("schema_required_fields")
-        if set(item)-required-OPTIONAL-{RELATIONS_FIELD}: raise CandidateValidationError("schema_unknown_field")
+        legacy = allow_legacy and "evidence_quote" not in item and "block" in item
+        active_required = {"type","title","statement","block","confidence","requires_review"} if legacy else required
+        if not active_required.issubset(item): raise CandidateValidationError("schema_required_fields")
+        if set(item)-active_required-OPTIONAL-{RELATIONS_FIELD}: raise CandidateValidationError("schema_unknown_field")
         if item["type"] not in TYPES: raise CandidateValidationError("unknown_type")
         if (not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str)
                 or not 1<=len(item["statement"])<=1200 or item["confidence"] not in {"low","medium","high"}
                 or item["requires_review"] is not True): raise CandidateValidationError("schema_field")
-        block=item["block"]
-        if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise CandidateValidationError("block_coordinates")
+        if legacy:
+            block=item["block"]
+            if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise CandidateValidationError("block_coordinates")
+        elif not isinstance(item["evidence_quote"], str) or not item["evidence_quote"]:
+            raise CandidateValidationError("evidence_mismatch")
         for field in OPTIONAL:
             if field in item and not isinstance(item[field],str): raise CandidateValidationError("schema_optional_field")
         if RELATIONS_FIELD in item and (not isinstance(item[RELATIONS_FIELD], list) or len(item[RELATIONS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[RELATIONS_FIELD])):
@@ -420,3 +409,37 @@ def _validate_optional_metadata_source(candidates: list[dict[str, Any]], text: s
         normalized = _metadata_normalize(value)
         if value and (not normalized or normalized not in fragment):
             raise CandidateValidationError("metadata_not_in_fragment")
+
+
+def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> list[dict[str, Any]]:
+    """Map exact evidence to source offsets and derive optional metadata locally."""
+    result: list[dict[str, Any]] = []
+    for candidate in candidates:
+        candidate = dict(candidate)
+        if "evidence_quote" in candidate:
+            quote = candidate.pop("evidence_quote")
+            local_start = unit.text.find(quote)
+            if local_start < 0:
+                raise CandidateValidationError("evidence_mismatch")
+            candidate["block"] = {"start": unit.start + local_start, "end": unit.start + local_start + len(quote)}
+            candidate["type"] = unit.section_type_hint or candidate["type"]
+            candidate.update(_ground_metadata(quote))
+        else:
+            # Compatibility only for injected deterministic test doubles; production
+            # model calls always pass through the exact-evidence branch above.
+            candidate["block"] = {"start": unit.start + candidate["block"]["start"], "end": unit.start + candidate["block"]["end"]}
+            _validate_optional_metadata_source([candidate], unit.text)
+        result.append(candidate)
+    return result
+
+
+def _ground_metadata(evidence: str) -> dict[str, Any]:
+    actor = re.search(r"\[[^\]\n]{1,120}\]", evidence)
+    # A bracketed pseudonym is accepted only when an explicit responsibility or
+    # appointment construction is present; unresolved responsibility is not one.
+    unresolved = re.search(r"ответственн\w*\s+пока\s+не\s+(?:назначен|определ[её]н)", evidence, re.I)
+    actor_value = actor.group(0) if actor and not unresolved and re.search(r"(?:ответственн\w*|владельц\w*|назнач\w*|долж\w*)", evidence, re.I) else ""
+    deadline = re.search(r"\bдо\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bназначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bза\s+[а-яё0-9]+\s+рабоч\w*\s+дн\w*\s+до\s+запуска\b", evidence, re.I)
+    status = re.search(r"\bСтатус:\s*([^\n.;]+)", evidence, re.I)
+    priority = re.search(r"\bПриоритет:\s*([^\n.;]+)", evidence, re.I)
+    return {"actor_ref": actor_value or None, "deadline": deadline.group(0) if deadline else None, "status": status.group(1).strip() if status else None, "priority": priority.group(1).strip() if priority else None}

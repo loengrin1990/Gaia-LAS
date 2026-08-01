@@ -36,7 +36,7 @@ class ContextSearchTests(unittest.TestCase):
         items = [item("ok"), item("review", status="requires_review"), item("old", current=False), item("wrong", kind="sanitized")]
         payload = search(items, self.params())
         self.assertEqual(payload["total"], 1)
-        self.assertEqual(set(payload["results"][0]), {"item_type", "title", "statement", "actor_ref", "deadline", "explicit_status", "priority", "updated_at", "source_count", "has_related"})
+        self.assertEqual(set(payload["results"][0]), {"item_type", "title", "statement", "actor_ref", "deadline", "explicit_status", "priority", "updated_at", "created_at", "confirmed_at", "source_count", "has_related"})
         self.assertNotIn("id", payload["results"][0])
 
     def test_normalization_and_and_semantics_cover_visible_fields(self) -> None:

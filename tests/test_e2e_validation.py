@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from gaia.controlled_intake import ControlledIntake
 from gaia.provenance import ProvenanceStore
-from gaia.review import LocalReviewError
+from gaia.review import LocalReviewError, ReviewService
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 
 
@@ -31,35 +31,33 @@ class EndToEndValidationTests(unittest.TestCase):
         raw_markers = [email, phone, secret, organization]
         first_text = (
             f"{email}; {phone}; https://intranet.e2e.test/path; {secret}. "
-            f"{organization} решила использовать локальный маршрут. "
-            "Требование: проверять материал. Риск: задержка. Открытый вопрос: срок. "
-            "Действие: Роль_1 проверяет материал до 2030-01-01."
+            f"{organization} решила использовать локальный маршрут.\n\n"
+            "ТРЕБОВАНИЯ\n\nПроверять материал.\n\nРЕШЕНИЯ\n\nИспользовать локальный маршрут.\n\nРИСКИ\n\nЕсть риск задержки.\n\nОТКРЫТЫЕ ВОПРОСЫ\n\nСрок не указан.\n\nДЕЙСТВИЯ\n\nОтветственный [Координатор-Север] должен проверить материал до 10 сентября 2026 года."
         )
-        second_text = "Решение: использовать иной локальный маршрут. Действие: Роль_1 проверяет материал до 2030-01-01."
+        second_text = "РЕШЕНИЯ\n\nИспользовать иной локальный маршрут.\n\nДЕЙСТВИЯ\n\nОтветственный [Координатор-Север] должен проверить материал до 10 сентября 2026 года."
         server: ThreadingHTTPServer | None = None
+        review_calls = 0
 
         def review_model(text: str) -> dict[str, object]:
-            if organization in text:
-                start = text.index(organization)
-                false_start = text.index("Риск")
+            nonlocal review_calls
+            review_calls += 1
+            if review_calls == 1 and organization in text:
+                organization_start = text.index(organization)
+                verb_start = text.index("решила")
                 return {"status": "completed", "findings": [
-                    {"category": "Организация", "start": start, "end": start + len(organization), "confidence": "high", "reason_code": "residual", "requires_review": True},
-                    {"category": "Другое", "start": false_start, "end": false_start + 4, "confidence": "low", "reason_code": "false_positive", "requires_review": True},
+                    {"category": "Организация", "start": organization_start, "end": organization_start + len(organization), "confidence": "high", "reason_code": "residual", "requires_review": True},
+                    {"category": "Другое", "start": verb_start, "end": verb_start + len("решила"), "confidence": "low", "reason_code": "false_positive", "requires_review": True},
                 ]}
             return {"status": "completed", "findings": []}
 
-        def context_model(text: str) -> dict[str, object]:
-            conflict = "иной локальный" in text
-            decision = "Использовать иной локальный маршрут." if conflict else "Использовать локальный маршрут."
-            return {"candidates": [
-                {"type": "requirement", "title": "Проверка материала", "statement": "Проверять материал.", "block": {"start": 0, "end": 1}, "confidence": "high", "requires_review": True},
-                {"type": "decision", "title": "Маршрут", "statement": decision, "block": {"start": 0, "end": 1}, "confidence": "high", "requires_review": True},
-                {"type": "risk", "title": "Задержка", "statement": "Есть риск задержки.", "block": {"start": 0, "end": 1}, "confidence": "medium", "requires_review": True},
-                {"type": "open_question", "title": "Срок", "statement": "Срок не указан.", "block": {"start": 0, "end": 1}, "confidence": "low", "requires_review": True},
-                {"type": "action", "title": "Проверка", "statement": "Проверить материал.", "block": {"start": 0, "end": 1}, "confidence": "high", "requires_review": True, "actor_ref": "Роль_1", "deadline": "2030-01-01"},
-            ]}
+        def context_model(text: str, **_: object) -> dict[str, object]:
+            value = text.strip()
+            if "решила" in value:
+                return {"candidates": []}
+            title = {"Проверять материал.": "Проверка материала", "Есть риск задержки.": "Задержка", "Срок не указан.": "Срок"}.get(value, "Маршрут" if "маршрут" in value else "Проверка")
+            return {"candidates": [{"type": "action", "title": title, "statement": value, "evidence_quote": value, "confidence": "high", "requires_review": True}]}
 
-        with patch("gaia.controlled_intake.default_store", return_value=store), patch("gaia.review.local_model_review", side_effect=review_model), patch("gaia.context_compiler.local_context_model", side_effect=context_model), patch("gaia.server.submit_analyze_job", return_value=SimpleNamespace(id="job_e2e")):
+        with patch("gaia.controlled_intake.default_store", return_value=store), patch("gaia.controlled_intake.ReviewService", side_effect=lambda current_store, workspace: ReviewService(current_store, workspace, review_model)), patch("gaia.context_compiler.local_context_model", side_effect=context_model), patch("gaia.server.submit_analyze_job", return_value=SimpleNamespace(id="job_e2e")):
             def start_server() -> ThreadingHTTPServer:
                 instance = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
                 threading.Thread(target=instance.serve_forever, daemon=True).start()
@@ -205,9 +203,9 @@ class EndToEndValidationTests(unittest.TestCase):
         project = "synthetic-manual"
         server: ThreadingHTTPServer | None = None
 
-        def context_model(_: str) -> dict[str, object]:
+        def context_model(text: str, **_: object) -> dict[str, object]:
             return {"candidates": [
-                {"type": "requirement", "title": "Проверка", "statement": "Проверять материал вручную.", "block": {"start": 0, "end": 1}, "confidence": "high", "requires_review": True},
+                {"type": "requirement", "title": "Проверка", "statement": "Проверять материал вручную.", "evidence_quote": text, "confidence": "high", "requires_review": True},
             ]}
 
         def indeterminate(_: str) -> dict[str, object]:
@@ -243,7 +241,7 @@ class EndToEndValidationTests(unittest.TestCase):
                 boundary = "----manual-boundary"
                 body = (
                     f"--{boundary}\r\nContent-Disposition: form-data; name=\"project\"\r\n\r\n{project}\r\n"
-                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"manual.txt\"\r\nContent-Type: text/plain\r\n\r\nТребование: проверить материал.\r\n"
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"manual.txt\"\r\nContent-Type: text/plain\r\n\r\nТРЕБОВАНИЯ\n\nПроверять материал вручную.\r\n"
                     f"--{boundary}--\r\n"
                 ).encode("utf-8")
                 status, accepted = request("POST", "/api/analyze", body, f"multipart/form-data; boundary={boundary}")

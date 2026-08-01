@@ -100,9 +100,10 @@ class LocalStatusTests(unittest.TestCase):
     def test_context_compiler_uses_a_bounded_builtin_route_when_not_configured(self) -> None:
         with patch("gaia.local_llm.route_configs", return_value={}):
             route = resolve_route(TASK_CONTEXT_COMPILER)
-        self.assertEqual(route["provider"], "ollama_qwen3_8b")
+        self.assertEqual(route["provider"], "ollama_qwen3_14b")
         self.assertEqual(route["max_tokens"], 2400)
-        self.assertEqual(route["context_length"], 32768)
+        self.assertEqual(route["context_length"], 16384)
+        self.assertEqual(route["model"], "qwen3:14b")
 
     def test_explicit_provider_override_does_not_require_route_edit(self) -> None:
         response = FakeResponse({"message": {"content": "ok"}})
