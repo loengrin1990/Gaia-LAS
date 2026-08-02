@@ -80,16 +80,32 @@ function contextCompileUserMessage(job) {
   return job?.user_message || job?.message || 'Сборка проектного контекста выполняется.';
 }
 function reviewProgress(candidates) {
-  const current=(candidates || []).filter(item=>item.current!==false);
-  const pending=current.filter(item=>!['confirmed','rejected','superseded'].includes(item.status));
-  return {total:current.length, pending:pending.length, processed:current.length-pending.length};
+  const heads=reviewHeads(candidates);
+  const pending=heads.filter(isReviewPending);
+  return {total:heads.length, pending:pending.length, processed:heads.length-pending.length};
 }
-function nextPendingCandidate(candidates) { return (candidates || []).find(item=>item.current!==false && !['confirmed','rejected','superseded'].includes(item.status)) || null; }
+function isReviewPending(item) { return item?.current!==false && !['confirmed','rejected','superseded'].includes(item?.status); }
+function reviewHeads(candidates) {
+  const items=(candidates || []).filter(Boolean), byId=new Map(items.map(item=>[item.id,item]));
+  const roots=new Map();
+  for (const item of items) {
+    let root=item, seen=new Set();
+    while (root.supersedes_id && byId.has(root.supersedes_id) && !seen.has(root.id)) { seen.add(root.id); root=byId.get(root.supersedes_id); }
+    const key=root.id || item.id, current=roots.get(key);
+    if (!current || Number(item.version||1)>Number(current.version||1) || (Number(item.version||1)===Number(current.version||1) && String(item.created_at||'')>String(current.created_at||''))) roots.set(key,item);
+  }
+  return [...roots.entries()].filter(([,item])=>item.current!==false || ['confirmed','rejected'].includes(item.status)).sort(([leftRoot,left],[rightRoot,right])=>{
+    const leftItem=byId.get(leftRoot)||left, rightItem=byId.get(rightRoot)||right;
+    return String(leftItem.created_at||'').localeCompare(String(rightItem.created_at||'')) || String(leftRoot).localeCompare(String(rightRoot));
+  }).map(([,item])=>item);
+}
+function reviewQueue(candidates) { return reviewHeads(candidates).filter(isReviewPending); }
+function nextPendingCandidate(candidates) { return reviewQueue(candidates)[0] || null; }
 function contextCompilePresentation(job, now=Date.now()) {
   const phase={compiling:'Анализ материала',loading_model:'Загрузка локальной модели',validating:'Проверка результата',persisting:'Сохранение контекста',finalizing:'Завершение',interrupted:'Сборка прервана'}[job.phase] || 'Подготовка материала';
   const elapsed=job.started_at ? Math.max(0,Math.floor((now-Date.parse(job.started_at))/1000)) : 0;
   const label=job.status==='failed'?'Повторить сборку':(['cancelled','interrupted'].includes(job.status)?'Запустить заново':'Собрать проектный контекст');
   return {phase,progress:job.total_chunks?`Фрагмент ${job.current_chunk||job.completed_chunks||0} из ${job.total_chunks}`:'',elapsed:`Выполняется: ${elapsed} с`,activity:job.last_activity_at?'Последняя активность: только что':'',restartWarning:isContextCompileActive(job)?'Сборка выполняется. Перезапуск Gaia прервёт текущую попытку.':'',buttonLabel:label,message:contextCompileUserMessage(job)};
 }
-if (typeof window !== 'undefined') { window.ContextCompileController = ContextCompileController; window.contextCompileUserMessage = contextCompileUserMessage; window.contextCompileIsActive = isContextCompileActive; window.contextReviewProgress = reviewProgress; window.contextNextPending = nextPendingCandidate; }
-if (typeof module !== 'undefined') module.exports = {ContextCompileController, contextCompilePresentation, contextCompileUserMessage, isContextCompileActive, reviewProgress, nextPendingCandidate};
+if (typeof window !== 'undefined') { window.ContextCompileController = ContextCompileController; window.contextCompileUserMessage = contextCompileUserMessage; window.contextCompileIsActive = isContextCompileActive; window.contextReviewProgress = reviewProgress; window.contextReviewQueue = reviewQueue; window.contextNextPending = nextPendingCandidate; }
+if (typeof module !== 'undefined') module.exports = {ContextCompileController, contextCompilePresentation, contextCompileUserMessage, isContextCompileActive, reviewProgress, reviewQueue, nextPendingCandidate};

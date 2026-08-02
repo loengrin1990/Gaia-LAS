@@ -373,6 +373,7 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn('id="journeyContextProgress"', INDEX_HTML)
         self.assertIn('К следующему непроверенному', INDEX_HTML)
         self.assertIn('window.contextReviewProgress(candidates)', INDEX_HTML)
+        self.assertIn('window.contextReviewQueue(candidates)', INDEX_HTML)
         self.assertIn('window.contextNextPending(candidates)', INDEX_HTML)
         self.assertIn('function renderJourneyCompileStatus', INDEX_HTML)
         self.assertIn('function updateJourneyCompileAction', INDEX_HTML)
@@ -380,6 +381,13 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("button.className='secondary destructive'", INDEX_HTML)
         self.assertIn('button.secondary.destructive', INDEX_HTML)
         self.assertIn('journeyContextCompiler.resume(data.id', INDEX_HTML)
+
+    def test_context_refine_title_has_readable_dedicated_input_style(self) -> None:
+        self.assertIn("title.className='journey-context-edit-title'", INDEX_HTML)
+        self.assertIn('.journey-context-edit-title {', INDEX_HTML)
+        self.assertIn('background:rgba(6,15,34,.7)', INDEX_HTML)
+        self.assertIn('color:var(--ink)', INDEX_HTML)
+        self.assertIn('.journey-context-edit-title:focus', INDEX_HTML)
 
     def test_contrast_overrides_cover_all_top_level_screens(self) -> None:
         for selector in (

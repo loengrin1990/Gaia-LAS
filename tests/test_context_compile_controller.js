@@ -1,5 +1,5 @@
 const assert = require('assert');
-const {ContextCompileController, contextCompileUserMessage, reviewProgress, nextPendingCandidate} = require('../gaia/static/context_compile_controller.js');
+const {ContextCompileController, contextCompileUserMessage, reviewProgress, reviewQueue, nextPendingCandidate} = require('../gaia/static/context_compile_controller.js');
 const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: async()=>body});
 (async()=>{
   let workspace='A', rendered=[], messages=[], calls=[];
@@ -26,6 +26,16 @@ const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: a
   assert.strictEqual(nextPendingCandidate(reviewSet).id,'pending-a');
   assert.deepStrictEqual(reviewProgress([{id:'done',status:'confirmed'}]),{total:1,processed:1,pending:0});
   assert.strictEqual(nextPendingCandidate([{id:'done',status:'confirmed'}]),null);
+  const queueSet=[
+    {id:'pending',status:'requires_review',current:true,created_at:'2026-08-01T10:00:00'},
+    {id:'confirmed',status:'confirmed',current:true,created_at:'2026-08-01T10:01:00'},
+    {id:'rejected',status:'rejected',current:false,created_at:'2026-08-01T10:02:00'},
+    {id:'refined-old',status:'superseded',current:false,created_at:'2026-08-01T10:03:00',version:1},
+    {id:'refined-new',status:'requires_review',current:true,created_at:'2026-08-01T12:00:00',version:2,supersedes_id:'refined-old'}
+  ];
+  assert.deepStrictEqual(reviewProgress(queueSet),{total:4,processed:2,pending:2});
+  assert.deepStrictEqual(reviewQueue(queueSet).map(item=>item.id),['pending','refined-new']);
+  assert.strictEqual(nextPendingCandidate(queueSet).id,'pending');
   const resumedCalls=[]; const resumedStates=[]; const resumed=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},state:(status)=>resumedStates.push(status),delay:async()=>{},fetchImpl:async(url)=>{resumedCalls.push(url);return response({status:'done',result:{candidates:[]}});}});
   await resumed.resume('existing-job','/api/jobs/existing-job',{status:'running',phase:'compiling'}); assert.deepStrictEqual(resumedCalls,['/api/jobs/existing-job']); assert.deepStrictEqual(resumedStates,['running','done']);
   const interruptedCalls=[]; const interrupted=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},delay:async()=>{throw new Error('must not poll twice');},fetchImpl:async(url)=>{interruptedCalls.push(url);return interruptedCalls.length===1?response({job_id:'interrupted-job',status_url:'/api/jobs/interrupted-job'}):response({status:'interrupted'});}});
