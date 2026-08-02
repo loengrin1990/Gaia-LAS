@@ -14,7 +14,7 @@ from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
 from gaia.review import ReviewService
 from gaia.context_compiler import CandidateValidationError, ContextCompiler, ContextService, validate_candidates
-from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _safe_attempt_category
+from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _ground_metadata, _safe_attempt_category
 from gaia.context_chunking import ContextChunk, EvidenceSpan
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
@@ -126,6 +126,52 @@ class ContextCompilerTests(unittest.TestCase):
                 grounded = _ground_candidates([{"type":"action","title":"Проверка","statement":"Проверить.","evidence_quote":text,"confidence":"high","requires_review":True}], ContextChunk(0, text, 0, len(text), "paragraph"))[0]
                 self.assertEqual(grounded["actor_ref"], actor)
                 self.assertEqual(grounded["deadline"], deadline)
+
+    def test_human_deadline_expressions_are_grounded_without_date_inference(self):
+        cases = (
+            "Завершить проверку до конца августа.",
+            "Провести сверку к концу квартала.",
+            "Подготовить результаты к следующей встрече.",
+            "Подготовить результат в течение 3 дней.",
+            "Передать итог в течение двух рабочих дней.",
+            "Закрыть проверку за 3 рабочих дня до запуска.",
+            "Принять решение до старта пилота.",
+        )
+        for evidence in cases:
+            with self.subTest(evidence=evidence):
+                deadline = _ground_metadata(evidence)["deadline"]
+                self.assertIsNotNone(deadline)
+                self.assertIn(deadline, evidence)
+
+    def test_no_deadline_or_similar_non_temporal_phrase_is_not_grounded(self):
+        for evidence in (
+            "Проверить материал без срока.",
+            "Прочитать документ до конца раздела.",
+        ):
+            with self.subTest(evidence=evidence):
+                self.assertIsNone(_ground_metadata(evidence)["deadline"])
+
+    def test_deadline_is_not_inherited_from_another_evidence_span(self):
+        first = "Проверить материал."
+        second = "Завершить проверку до конца августа."
+        text = f"{first} {second}"
+        spans = (
+            EvidenceSpan("E1", first, 0, len(first), 100, 100 + len(first)),
+            EvidenceSpan("E2", second, len(first) + 1, len(text), 100 + len(first) + 1, 100 + len(text)),
+        )
+        unit = ContextChunk(0, text, 100, 100 + len(text), "paragraph", evidence_spans=spans)
+        candidate = {"type":"action", "title":"Проверка", "statement":"Проверить.", "evidence_id":"E1", "confidence":"high", "requires_review":True}
+        grounded = _ground_candidates(validate_candidates({"candidates":[candidate]}, len(text), 1, evidence_ids={"E1", "E2"}), unit)[0]
+        self.assertIsNone(grounded["deadline"])
+
+    def test_human_deadline_preserves_actor_and_exact_selected_evidence(self):
+        evidence = "[Координатор-Север] должен завершить проверку в течение 3 рабочих дней."
+        span = EvidenceSpan("E1", evidence, 0, len(evidence), 42, 42 + len(evidence))
+        unit = ContextChunk(0, evidence, 42, 42 + len(evidence), "paragraph", evidence_spans=(span,))
+        candidate = {"type":"action", "title":"Проверка", "statement":"Завершить.", "evidence_id":"E1", "confidence":"high", "requires_review":True}
+        grounded = _ground_candidates(validate_candidates({"candidates":[candidate]}, len(evidence), 1, evidence_ids={"E1"}), unit)[0]
+        self.assertEqual(grounded["actor_ref"], "[Координатор-Север]")
+        self.assertIn(grounded["deadline"], span.text)
 
     def test_evidence_path_drops_ungrounded_reason_consequence_and_relations(self):
         text = "Проверить материал."

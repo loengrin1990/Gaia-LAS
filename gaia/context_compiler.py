@@ -506,13 +506,28 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
     return result
 
 
+_CALENDAR_DEADLINE_RE = re.compile(
+    r"\bдо\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b"
+    r"|\bназначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b",
+    re.I,
+)
+_HUMAN_DEADLINE_RE = re.compile(
+    r"\b(?:до\s+конца|к\s+концу)\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря|недели|месяца|квартала|года)\b"
+    r"|\bк\s+следующей\s+встрече\b"
+    r"|\bв\s+течение\s+(?:\d+|[а-яё]+)\s+(?:рабоч\w*\s+)?(?:дн\w*|день)\b"
+    r"|\bза\s+(?:\d+|[а-яё]+)\s+(?:рабоч\w*\s+)?(?:дн\w*|день)\s+до\s+[^\n.,;:!?]{1,120}(?=[\n.,;:!?]|$)"
+    r"|\bдо\s+старта\s+[^\n.,;:!?]{1,120}(?=[\n.,;:!?]|$)",
+    re.I,
+)
+
+
 def _ground_metadata(evidence: str) -> dict[str, Any]:
     actor = re.search(r"\[[^\]\n]{1,120}\]", evidence)
     # A bracketed pseudonym is accepted only when an explicit responsibility or
     # appointment construction is present; unresolved responsibility is not one.
     unresolved = re.search(r"ответственн\w*(?:\s+\[[^\]\n]+\])?\s+(?:пока\s+)?не\s+(?:назначен|определ[её]н)", evidence, re.I)
     actor_value = actor.group(0) if actor and not unresolved and re.search(r"(?:ответственн\w*|владельц\w*|назнач\w*|долж\w*)", evidence, re.I) else ""
-    deadline = re.search(r"\bдо\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bназначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b|\bза\s+[а-яё0-9]+\s+рабоч\w*\s+дн\w*\s+до\s+запуска\b", evidence, re.I)
+    deadline = _CALENDAR_DEADLINE_RE.search(evidence) or _HUMAN_DEADLINE_RE.search(evidence)
     status = re.search(r"\bСтатус:\s*([^\n.;]+)", evidence, re.I)
     priority = re.search(r"\bПриоритет:\s*([^\n.;]+)", evidence, re.I)
     negated_deadline = deadline and re.search(r"\bне\s+назначен\w*\s+на\s+\d{1,2}\s+[а-яё]+\s+\d{4}\s+года\b", evidence, re.I)
