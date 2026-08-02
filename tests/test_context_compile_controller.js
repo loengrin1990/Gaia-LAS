@@ -1,5 +1,5 @@
 const assert = require('assert');
-const {ContextCompileController} = require('../gaia/static/context_compile_controller.js');
+const {ContextCompileController, contextCompileUserMessage, reviewProgress, nextPendingCandidate} = require('../gaia/static/context_compile_controller.js');
 const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: async()=>body});
 (async()=>{
   let workspace='A', rendered=[], messages=[], calls=[];
@@ -19,5 +19,16 @@ const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: a
   await failureCase(()=>({ok:true,status:202,json:async()=>{throw new Error('bad json');}}), 'invalid_response', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
   await failureCase(()=>response({},true,202), 'invalid_job_contract', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
   assert.ok(states.filter(state=>state==='error').length>=5);
+  assert.strictEqual(contextCompileUserMessage({status:'failed',user_message:'internal'}), 'Не удалось завершить сборку проектного контекста. Контекст не изменён.');
+  assert.strictEqual(contextCompileUserMessage({status:'complete_empty'}), 'Сборка завершена успешно, но элементов проектного контекста не найдено.');
+  const reviewSet=[{id:'confirmed',status:'confirmed'},{id:'pending-a',status:'pending'},{id:'rejected',status:'rejected'},{id:'pending-b',status:'duplicate'},{id:'old',status:'pending',current:false}];
+  assert.deepStrictEqual(reviewProgress(reviewSet),{total:4,processed:2,pending:2});
+  assert.strictEqual(nextPendingCandidate(reviewSet).id,'pending-a');
+  assert.deepStrictEqual(reviewProgress([{id:'done',status:'confirmed'}]),{total:1,processed:1,pending:0});
+  assert.strictEqual(nextPendingCandidate([{id:'done',status:'confirmed'}]),null);
+  const resumedCalls=[]; const resumedStates=[]; const resumed=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},state:(status)=>resumedStates.push(status),delay:async()=>{},fetchImpl:async(url)=>{resumedCalls.push(url);return response({status:'done',result:{candidates:[]}});}});
+  await resumed.resume('existing-job','/api/jobs/existing-job',{status:'running',phase:'compiling'}); assert.deepStrictEqual(resumedCalls,['/api/jobs/existing-job']); assert.deepStrictEqual(resumedStates,['running','done']);
+  const interruptedCalls=[]; const interrupted=new ContextCompileController({workspace:()=>workspace,render:()=>{},message:()=>{},delay:async()=>{throw new Error('must not poll twice');},fetchImpl:async(url)=>{interruptedCalls.push(url);return interruptedCalls.length===1?response({job_id:'interrupted-job',status_url:'/api/jobs/interrupted-job'}):response({status:'interrupted'});}});
+  await interrupted.start('artifact-interrupted'); assert.deepStrictEqual(interruptedCalls,['/api/context/artifact-interrupted/compile','/api/jobs/interrupted-job']); assert.strictEqual(interrupted.jobId,'');
   console.log('context compile controller checks passed');
 })().catch(error=>{console.error(error);process.exit(1);});

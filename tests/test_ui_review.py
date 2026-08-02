@@ -369,6 +369,18 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn('.dialog-busy[hidden] { display: none; }', INDEX_HTML)
         self.assertIn('id="dialogBusy" class="dialog-busy"', INDEX_HTML)
 
+    def test_context_review_keeps_compile_status_and_review_progress_in_place(self) -> None:
+        self.assertIn('id="journeyContextProgress"', INDEX_HTML)
+        self.assertIn('К следующему непроверенному', INDEX_HTML)
+        self.assertIn('window.contextReviewProgress(candidates)', INDEX_HTML)
+        self.assertIn('window.contextNextPending(candidates)', INDEX_HTML)
+        self.assertIn('function renderJourneyCompileStatus', INDEX_HTML)
+        self.assertIn('function updateJourneyCompileAction', INDEX_HTML)
+        self.assertIn("window.contextCompileUserMessage(job)", INDEX_HTML)
+        self.assertIn("button.className='secondary destructive'", INDEX_HTML)
+        self.assertIn('button.secondary.destructive', INDEX_HTML)
+        self.assertIn('journeyContextCompiler.resume(data.id', INDEX_HTML)
+
     def test_contrast_overrides_cover_all_top_level_screens(self) -> None:
         for selector in (
             '.dialog-card.local-answer',
