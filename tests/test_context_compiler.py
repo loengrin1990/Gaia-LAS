@@ -6,6 +6,7 @@ import hashlib
 import json
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
@@ -261,6 +262,36 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertGreaterEqual(items[0]["block_links"][0]["start"],0)
             self.assertLessEqual(items[0]["block_links"][0]["end"],len(path.read_text(encoding="utf-8")))
         finally: tmp.cleanup()
+
+    def test_sixty_list_items_compile_as_sixty_single_candidate_units(self):
+        tmp, store, workspace, sanitized = self.setup()
+        try:
+            sections = (("ТРЕБОВАНИЯ", "requirement"), ("РЕШЕНИЯ", "decision"), ("РИСКИ", "risk"), ("ОТКРЫТЫЕ ВОПРОСЫ", "open_question"), ("ДЕЙСТВИЯ", "action"))
+            blocks = []
+            number = 1
+            for heading, _ in sections:
+                blocks.append(heading + "\n\n" + "\n".join(f"{value}. Синтетический пункт {value}." for value in range(number, number + 12)))
+                number += 12
+            (store.root / "sanitized" / workspace / f"{sanitized['artifact_id']}.txt").write_text("\n\n".join(blocks), encoding="utf-8")
+            calls, progress = [], []
+
+            def model(text, evidence_spans=(), **_):
+                calls.append(text)
+                number = int(__import__("re").match(r"\s*(\d+)", text).group(1))
+                item_type = sections[(number - 1) // 12][1]
+                return {"candidates": [{"type": item_type, "title": f"Кандидат {number}", "statement": f"Синтетическое утверждение {number}.", "evidence_id": evidence_spans[0].id, "confidence": "high", "requires_review": True}]}
+
+            with patch("gaia.context_compiler.local_context_model", side_effect=model), patch.object(ContextCompiler, "_preload"), patch.object(ContextCompiler, "_unload"):
+                compiler = ContextCompiler(store, workspace)
+                self.assertEqual(compiler._route()["max_candidates_per_chunk"], 1)
+                items = compiler.compile(sanitized["artifact_id"], progress=lambda done, total, count: progress.append((done, total, count)))
+            self.assertEqual(len(calls), 60)
+            self.assertEqual(len(items), 60)
+            self.assertEqual(Counter(item["item_type"] for item in items), Counter({item_type: 12 for _, item_type in sections}))
+            self.assertEqual(progress[-1], (60, 60, 60))
+            self.assertTrue(all(len(item["block_links"]) == 1 for item in items))
+        finally:
+            tmp.cleanup()
 
     def test_context_model_uses_dedicated_route_and_classifies_bad_response(self):
         with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":False}):

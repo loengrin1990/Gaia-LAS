@@ -67,15 +67,16 @@ class ContextChunkingTests(unittest.TestCase):
 
     def test_list_items_keep_wrapped_lines_and_prose_uses_sentences(self) -> None:
         text = "# РЕШЕНИЯ\n\n1. Первый пункт\n   продолжение пункта\n2) Второй пункт\n\nОбычное предложение. Ещё одно."
-        list_unit, prose_unit = split_context(text, 300, 1, 0, 10)
-        spans = list_unit.evidence_spans
-        self.assertEqual([span.id for span in spans], ["E1", "E2"])
+        first_list_unit, second_list_unit, prose_unit = split_context(text, 300, 1, 0, 10)
+        spans = first_list_unit.evidence_spans
+        self.assertEqual([span.id for span in spans], ["E1"])
         self.assertIn("продолжение", spans[0].text)
         self.assertNotIn("Второй", spans[0].text)
+        self.assertEqual(second_list_unit.evidence_spans[0].text, "2) Второй пункт")
         self.assertEqual([span.text for span in prose_unit.evidence_spans], ["Обычное предложение.", "Ещё одно."])
         for span in spans:
             self.assertEqual(span.text, text[span.global_start:span.global_end])
-            self.assertEqual(span.text, list_unit.text[span.local_start:span.local_end])
+            self.assertEqual(span.text, first_list_unit.text[span.local_start:span.local_end])
 
     def test_evidence_spans_are_deterministic_bounded_and_do_not_include_headings(self) -> None:
         text = "# РИСКИ\n\n" + " ".join(f"Предложение {index}." for index in range(40))
@@ -86,3 +87,37 @@ class ContextChunkingTests(unittest.TestCase):
         self.assertTrue(all(span.text.strip() for span in first.evidence_spans))
         self.assertTrue(all("# РИСКИ" not in span.text for span in first.evidence_spans))
         self.assertEqual("".join("".join(span.text.split()) for span in first.evidence_spans), "".join(first.text.split()))
+
+    def test_adjacent_list_items_are_independent_units_with_continuations(self) -> None:
+        text = "## РЕШЕНИЯ\n\n1. Первый пункт\n   продолжение первого пункта.\n2) Второй пункт.\n- Третий пункт.\n  продолжение третьего пункта.\n* Четвёртый пункт.\n+ Пятый пункт."
+        units = split_context(text, 300, 1, 0, 10)
+        self.assertEqual(len(units), 5)
+        self.assertTrue(all(unit.boundary == "list_item" for unit in units))
+        self.assertTrue(all(unit.section_type_hint == "decision" for unit in units))
+        self.assertIn("продолжение первого", units[0].text)
+        self.assertIn("продолжение третьего", units[2].text)
+        self.assertEqual([len(unit.evidence_spans) for unit in units], [1, 1, 1, 1, 1])
+        for unit in units:
+            self.assertEqual(unit.text, text[unit.start:unit.end])
+            self.assertEqual(unit.evidence_spans[0].text, unit.text.strip())
+
+    def test_sixty_structured_items_are_independent_typed_units_under_guard(self) -> None:
+        sections = (("ТРЕБОВАНИЯ", "requirement"), ("РЕШЕНИЯ", "decision"), ("РИСКИ", "risk"), ("ОТКРЫТЫЕ ВОПРОСЫ", "open_question"), ("ДЕЙСТВИЯ", "action"))
+        blocks = []
+        number = 1
+        for heading, _ in sections:
+            items = []
+            for item in range(12):
+                tail = "\n   продолжение пункта." if item == 0 else ""
+                items.append(f"{number}. Синтетический пункт {number}.{tail}")
+                number += 1
+            blocks.append(heading + "\n\n" + "\n".join(items))
+        text = "Вводный абзац.\n\n" + "\n\n".join(blocks)
+        units = split_context(text, 1000, 1, 0, 80)
+        listed = [unit for unit in units if unit.boundary == "list_item"]
+        self.assertEqual(len(listed), 60)
+        self.assertLessEqual(len(units), 80)
+        self.assertTrue(all(len(unit.evidence_spans) == 1 for unit in listed))
+        self.assertTrue(all(unit.text == text[unit.start:unit.end] for unit in listed))
+        self.assertTrue(all(unit.evidence_spans[0].text == unit.text.strip() for unit in listed))
+        self.assertEqual([unit.section_type_hint for unit in listed], [hint for _, hint in sections for _ in range(12)])

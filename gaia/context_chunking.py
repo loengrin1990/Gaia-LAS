@@ -11,6 +11,7 @@ SECTION_TYPES = {
     "открытые вопросы": "open_question", "действия": "action",
 }
 MAX_EVIDENCE_SPANS = 12
+LIST_ITEM_RE = re.compile(r"(?m)^[ \t]*(?:[-*+]|\d+[.)])\s+")
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,26 @@ def _semantic_units(text: str, limit: int) -> list[tuple[int, str, str, str, tup
         if not value or not value.strip() or _is_heading_block(value):
             continue
         heading, stack, hint = _section_context(headings, start)
-        result.extend(_split_value(start, value, limit, heading, stack, hint))
+        result.extend(_split_list_items(start, value, limit, heading, stack, hint))
+    return result
+
+
+def _split_list_items(start: int, value: str, limit: int, heading: str, stack: tuple[str, ...], hint: str | None) -> list[tuple[int, str, str, str, tuple[str, ...], str | None]]:
+    """Keep each independent Markdown or numbered item in its own model unit."""
+    markers = list(LIST_ITEM_RE.finditer(value))
+    if not markers:
+        return _split_value(start, value, limit, heading, stack, hint)
+    result: list[tuple[int, str, str, str, tuple[str, ...], str | None]] = []
+    if markers[0].start() > 0 and value[:markers[0].start()].strip():
+        result.extend(_split_value(start, value[:markers[0].start()], limit, heading, stack, hint))
+    for index, marker in enumerate(markers):
+        item_start = marker.start()
+        item_end = markers[index + 1].start() if index + 1 < len(markers) else len(value)
+        item = value[item_start:item_end]
+        if len(item) <= limit:
+            result.append((start + item_start, item, "list_item", heading, stack, hint))
+        else:
+            result.extend(_split_value(start + item_start, item, limit, heading, stack, hint))
     return result
 
 
