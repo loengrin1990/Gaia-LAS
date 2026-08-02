@@ -55,7 +55,7 @@ class EndToEndValidationTests(unittest.TestCase):
             if "решила" in value:
                 return {"candidates": []}
             title = {"Проверять материал.": "Проверка материала", "Есть риск задержки.": "Задержка", "Срок не указан.": "Срок"}.get(value, "Маршрут" if "маршрут" in value else "Проверка")
-            return {"candidates": [{"type": "action", "title": title, "statement": value, "evidence_quote": value, "confidence": "high", "requires_review": True}]}
+            return {"candidates": [{"type": "action", "title": title, "statement": value, "evidence_id": "E1", "confidence": "high", "requires_review": True}]}
 
         with patch("gaia.controlled_intake.default_store", return_value=store), patch("gaia.controlled_intake.ReviewService", side_effect=lambda current_store, workspace: ReviewService(current_store, workspace, review_model)), patch("gaia.context_compiler.local_context_model", side_effect=context_model), patch("gaia.server.submit_analyze_job", return_value=SimpleNamespace(id="job_e2e")):
             def start_server() -> ThreadingHTTPServer:
@@ -205,7 +205,7 @@ class EndToEndValidationTests(unittest.TestCase):
 
         def context_model(text: str, **_: object) -> dict[str, object]:
             return {"candidates": [
-                {"type": "requirement", "title": "Проверка", "statement": "Проверять материал вручную.", "evidence_quote": text, "confidence": "high", "requires_review": True},
+                {"type": "requirement", "title": "Проверка", "statement": "Проверять материал вручную.", "evidence_id": "E1", "confidence": "high", "requires_review": True},
             ]}
 
         def indeterminate(_: str) -> dict[str, object]:

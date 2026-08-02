@@ -17,8 +17,8 @@ from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .context_model_executor import ContextModelExecutorError, execute_context_model_call
 
-COMPILER_VERSION = "context-v3"
-PROMPT_SCHEMA_VERSION = "context-schema-v3"
+COMPILER_VERSION = "context-v4"
+PROMPT_SCHEMA_VERSION = "context-schema-v4-evidence-id"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
 RELATIONS_FIELD = "relations"
@@ -37,23 +37,24 @@ class CandidateValidationError(ProvenanceError):
         super().__init__("Некорректный результат компилятора.")
         self.diagnostic_code = diagnostic_code
 
-def context_response_schema(max_candidates: int) -> dict[str, Any]:
+def context_response_schema(max_candidates: int, evidence_ids: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
     properties = {
         "type": {"type": "string", "enum": sorted(TYPES)},
         "title": {"type": "string", "minLength": 1, "maxLength": 160},
         "statement": {"type": "string", "minLength": 1, "maxLength": 1200},
-        "evidence_quote": {"type": "string", "minLength": 1},
+        "evidence_id": {"type": "string", "enum": list(evidence_ids)},
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "requires_review": {"type": "boolean", "const": True},
     }
     for field in OPTIONAL:
         properties[field] = {"type": "string"}
     properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 8}
-    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_quote", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
+    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_id", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
 def _safe_attempt_category(response: Any, diagnostic_code: str) -> str:
     """Return a fixed, content-free category; never persist model/source values."""
+    if diagnostic_code in {"evidence_id_missing", "evidence_id_unknown"}: return diagnostic_code
     if diagnostic_code == "evidence_ambiguous": return "evidence_ambiguous"
     if diagnostic_code != "evidence_mismatch": return "schema"
     candidates = response.get("candidates") if isinstance(response, dict) else None
@@ -64,20 +65,22 @@ def _safe_attempt_category(response: Any, diagnostic_code: str) -> str:
     return "evidence_not_found"
 
 
-def local_context_model(text: str, cancel_event: Any = None, section_type_hint: str | None = None) -> dict[str, Any]:
+def local_context_model(text: str, cancel_event: Any = None, section_type_hint: str | None = None, evidence_spans: tuple[Any, ...] = ()) -> dict[str, Any]:
     route = resolve_route(TASK_CONTEXT_COMPILER)
-    schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16))) if route.get("structured_output", "schema") == "schema" else None
+    evidence_ids = [span.id for span in evidence_spans]
+    schema = context_response_schema(int(route.get("max_candidates_per_chunk", 16)), evidence_ids) if route.get("structured_output", "schema") == "schema" else None
+    choices = "\n".join(f"{span.id}: {span.text}" for span in evidence_spans)
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
-        "Обязательные поля каждого кандидата: type, title, statement, evidence_quote, confidence, requires_review. "
+        "Обязательные поля каждого кандидата: type, title, statement, evidence_id, confidence, requires_review. "
         "title — непустая строка не длиннее 160 символов; statement — непустая строка не длиннее 1200 символов. "
-        "evidence_quote обязан быть точной непрерывной Unicode-подстрокой текущего фрагмента; не возвращай координаты и не перефразируй evidence_quote. "
+        "evidence_id выбирай только из предложенных точных фрагментов; не возвращай evidence text или координаты. Если подходящего фрагмента нет, верни candidates: []. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
         "Не используй русские enum, пробелы в ключах или ключи requirement, solution, risk, question, action как замену структуры кандидата. "
-        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_quote\":\"Проверить материал.\",\"confidence\":\"high\",\"requires_review\":true}]}. "
+        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_id\":\"E1\",\"confidence\":\"high\",\"requires_review\":true}]}. "
         + (f"Тип задан структурой документа: {section_type_hint}. Не классифицируй его заново; возвращай только этот type. " if section_type_hint else "Извлеки только явно сказанные требования, решения, риски, вопросы и действия; ")
-        + "не добавляй предположений.\n\n" + text
+        + "не добавляй предположений.\n\nФрагменты-основания:\n" + choices + "\n\nМатериал:\n" + text
     )
     try:
         timeout = int(route.get("model_call_timeout_seconds", route.get("timeout_seconds", 120)))
@@ -213,13 +216,13 @@ class ContextCompiler:
             try:
                 production_model = self.model is local_context_model
                 if production_model:
-                    response = self.model(unit.text, cancel_event=cancel_event, section_type_hint=unit.section_type_hint)
+                    response = self.model(unit.text, cancel_event=cancel_event, section_type_hint=unit.section_type_hint, evidence_spans=unit.evidence_spans)
                 else:
                     try:
                         response = self.model(unit.text, cancel_event=cancel_event)
                     except TypeError:
                         response = self.model(unit.text)
-                local = validate_candidates(response, len(unit.text), int(route["max_candidates_per_chunk"] if production_model else MAX_CANDIDATES), allow_legacy=not production_model)
+                local = validate_candidates(response, len(unit.text), int(route["max_candidates_per_chunk"] if production_model else MAX_CANDIDATES), allow_legacy=not production_model, evidence_ids={span.id for span in unit.evidence_spans} if production_model else None)
                 local = _ground_candidates(local, unit)
                 if len(local) > int(route["max_candidates_per_chunk"]):
                     raise CandidateValidationError("schema_candidates")
@@ -402,7 +405,7 @@ def _deduplicate_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, 
             candidate["block_links"] = blocks
     return list(result.values())
 
-def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CANDIDATES, *, allow_legacy: bool = False) -> list[dict[str, Any]]:
+def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CANDIDATES, *, allow_legacy: bool = False, evidence_ids: set[str] | None = None) -> list[dict[str, Any]]:
     if not isinstance(payload, dict) or set(payload) != {"candidates"}:
         raise CandidateValidationError("schema_top_level")
     if not isinstance(payload["candidates"], list) or len(payload["candidates"]) > max_candidates:
@@ -410,22 +413,39 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
     if len(json.dumps(payload, ensure_ascii=False)) > MAX_RESULT_SIZE:
         raise CandidateValidationError("result_too_large")
     result=[]
-    required={"type","title","statement","evidence_quote","confidence","requires_review"}
+    required = {"type", "title", "statement", "evidence_id", "confidence", "requires_review"}
     for item in payload["candidates"]:
-        if not isinstance(item,dict): raise CandidateValidationError("schema_candidate")
-        legacy = allow_legacy and "evidence_quote" not in item and "block" in item
-        active_required = {"type","title","statement","block","confidence","requires_review"} if legacy else required
-        if not active_required.issubset(item): raise CandidateValidationError("schema_required_fields")
-        if set(item)-active_required-OPTIONAL-{RELATIONS_FIELD}: raise CandidateValidationError("schema_unknown_field")
+        if not isinstance(item, dict):
+            raise CandidateValidationError("schema_candidate")
+        legacy_block = allow_legacy and "evidence_id" not in item and "block" in item
+        legacy_quote = allow_legacy and "evidence_id" not in item and "evidence_quote" in item
+        if legacy_block:
+            active_required = {"type", "title", "statement", "block", "confidence", "requires_review"}
+        elif legacy_quote:
+            active_required = {"type", "title", "statement", "evidence_quote", "confidence", "requires_review"}
+        else:
+            active_required = required
+            if "evidence_id" not in item:
+                raise CandidateValidationError("evidence_id_missing")
+        if not active_required.issubset(item):
+            raise CandidateValidationError("schema_required_fields")
+        if set(item) - active_required - OPTIONAL - {RELATIONS_FIELD}:
+            raise CandidateValidationError("schema_unknown_field")
         if item["type"] not in TYPES: raise CandidateValidationError("unknown_type")
         if (not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str)
                 or not 1<=len(item["statement"])<=1200 or item["confidence"] not in {"low","medium","high"}
                 or item["requires_review"] is not True): raise CandidateValidationError("schema_field")
-        if legacy:
+        if legacy_block:
             block=item["block"]
             if not isinstance(block,dict) or set(block)!={"start","end"} or not isinstance(block["start"],int) or not isinstance(block["end"],int) or not 0<=block["start"]<block["end"]<=length: raise CandidateValidationError("block_coordinates")
-        elif not isinstance(item["evidence_quote"], str) or not item["evidence_quote"]:
-            raise CandidateValidationError("evidence_mismatch")
+        elif legacy_quote:
+            quote = item["evidence_quote"]
+            if not isinstance(quote, str) or not quote:
+                raise CandidateValidationError("evidence_mismatch")
+        elif "evidence_id" not in item:
+            raise CandidateValidationError("evidence_id_missing")
+        elif not isinstance(item["evidence_id"], str) or evidence_ids is None or item["evidence_id"] not in evidence_ids:
+            raise CandidateValidationError("evidence_id_unknown")
         for field in OPTIONAL:
             if field in item and not isinstance(item[field],str): raise CandidateValidationError("schema_optional_field")
         if RELATIONS_FIELD in item and (not isinstance(item[RELATIONS_FIELD], list) or len(item[RELATIONS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[RELATIONS_FIELD])):
@@ -454,15 +474,11 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
     result: list[dict[str, Any]] = []
     for candidate in candidates:
         candidate = dict(candidate)
-        if "evidence_quote" in candidate:
-            quote = candidate.pop("evidence_quote")
-            matches = [match.start() for match in re.finditer(re.escape(quote), unit.text)]
-            if not matches:
-                raise CandidateValidationError("evidence_mismatch")
-            if len(matches) > 1:
-                raise CandidateValidationError("evidence_ambiguous")
-            local_start = matches[0]
-            candidate["block"] = {"start": unit.start + local_start, "end": unit.start + local_start + len(quote)}
+        if "evidence_id" in candidate:
+            evidence_id = candidate.pop("evidence_id")
+            span = next((value for value in unit.evidence_spans if value.id == evidence_id), None)
+            if span is None: raise CandidateValidationError("evidence_id_unknown")
+            candidate["block"] = {"start": span.global_start, "end": span.global_end}
             candidate["type"] = unit.section_type_hint or candidate["type"]
             # These fields have no deterministic grounding rule in the Stage 7
             # evidence contract.  Historical records and injected legacy test
@@ -471,6 +487,15 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
             candidate.pop("reason", None)
             candidate.pop("consequence", None)
             candidate.pop(RELATIONS_FIELD, None)
+            candidate.update(_ground_metadata(span.text))
+        elif "evidence_quote" in candidate:  # Legacy deterministic test doubles only.
+            quote = candidate.pop("evidence_quote")
+            matches = [match.start() for match in re.finditer(re.escape(quote), unit.text)]
+            if not matches: raise CandidateValidationError("evidence_mismatch")
+            if len(matches) > 1: raise CandidateValidationError("evidence_ambiguous")
+            candidate["block"] = {"start": unit.start + matches[0], "end": unit.start + matches[0] + len(quote)}
+            candidate["type"] = unit.section_type_hint or candidate["type"]
+            candidate.pop("reason", None); candidate.pop("consequence", None); candidate.pop(RELATIONS_FIELD, None)
             candidate.update(_ground_metadata(quote))
         else:
             # Compatibility only for injected deterministic test doubles; production

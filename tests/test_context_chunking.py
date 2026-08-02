@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from gaia.context_chunking import ChunkLimitError, split_context
+from gaia.context_chunking import MAX_EVIDENCE_SPANS, ChunkLimitError, split_context
 
 
 class ContextChunkingTests(unittest.TestCase):
@@ -64,3 +64,25 @@ class ContextChunkingTests(unittest.TestCase):
         self.assertEqual(units[4].text.strip(), "####### text")
         for unit in units:
             self.assertEqual(unit.text, text[unit.start:unit.end])
+
+    def test_list_items_keep_wrapped_lines_and_prose_uses_sentences(self) -> None:
+        text = "# РЕШЕНИЯ\n\n1. Первый пункт\n   продолжение пункта\n2) Второй пункт\n\nОбычное предложение. Ещё одно."
+        list_unit, prose_unit = split_context(text, 300, 1, 0, 10)
+        spans = list_unit.evidence_spans
+        self.assertEqual([span.id for span in spans], ["E1", "E2"])
+        self.assertIn("продолжение", spans[0].text)
+        self.assertNotIn("Второй", spans[0].text)
+        self.assertEqual([span.text for span in prose_unit.evidence_spans], ["Обычное предложение.", "Ещё одно."])
+        for span in spans:
+            self.assertEqual(span.text, text[span.global_start:span.global_end])
+            self.assertEqual(span.text, list_unit.text[span.local_start:span.local_end])
+
+    def test_evidence_spans_are_deterministic_bounded_and_do_not_include_headings(self) -> None:
+        text = "# РИСКИ\n\n" + " ".join(f"Предложение {index}." for index in range(40))
+        first = split_context(text, 2000, 1, 0, 10)[0]
+        second = split_context(text, 2000, 1, 0, 10)[0]
+        self.assertLessEqual(len(first.evidence_spans), MAX_EVIDENCE_SPANS)
+        self.assertEqual(first.evidence_spans, second.evidence_spans)
+        self.assertTrue(all(span.text.strip() for span in first.evidence_spans))
+        self.assertTrue(all("# РИСКИ" not in span.text for span in first.evidence_spans))
+        self.assertEqual("".join("".join(span.text.split()) for span in first.evidence_spans), "".join(first.text.split()))

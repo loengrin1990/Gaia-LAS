@@ -14,7 +14,7 @@ from gaia.protection import protect
 from gaia.review import ReviewService
 from gaia.context_compiler import CandidateValidationError, ContextCompiler, ContextService, validate_candidates
 from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _safe_attempt_category
-from gaia.context_chunking import ContextChunk
+from gaia.context_chunking import ContextChunk, EvidenceSpan
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 
@@ -33,6 +33,29 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(grounded["type"], "decision")
         self.assertEqual(grounded["block"], {"start":20,"end":20 + len(text)})
         self.assertEqual(grounded["deadline"], "назначен на 1 октября 2026 года")
+
+    def test_evidence_id_selects_exact_span_without_quote_matching(self):
+        text = "Первый одинаковый факт. Первый одинаковый факт."
+        first_end = len("Первый одинаковый факт.")
+        spans = (
+            EvidenceSpan("E1", text[:first_end], 0, first_end, 40, 40 + first_end),
+            EvidenceSpan("E2", text[first_end + 1:], first_end + 1, len(text), 40 + first_end + 1, 40 + len(text)),
+        )
+        unit = ContextChunk(0, text, 40, 40 + len(text), "paragraph", evidence_spans=spans)
+        candidate = {"type":"decision", "title":"Факт", "statement":"Первый факт.", "evidence_id":"E2", "confidence":"high", "requires_review":True}
+        grounded = _ground_candidates(validate_candidates({"candidates":[candidate]}, len(text), 1, evidence_ids={"E1", "E2"}), unit)[0]
+        self.assertEqual(grounded["block"], {"start": spans[1].global_start, "end": spans[1].global_end})
+        self.assertNotIn("evidence_id", grounded)
+
+    def test_evidence_id_missing_and_unknown_are_controlled(self):
+        base = {"type":"action", "title":"Проверка", "statement":"Проверить.", "confidence":"high", "requires_review":True}
+        with self.assertRaises(CandidateValidationError) as missing:
+            validate_candidates({"candidates":[base]}, 20, evidence_ids={"E1"})
+        self.assertEqual(missing.exception.diagnostic_code, "evidence_id_missing")
+        with self.assertRaises(CandidateValidationError) as unknown:
+            validate_candidates({"candidates":[{**base, "evidence_id":"E2"}]}, 20, evidence_ids={"E1"})
+        self.assertEqual(unknown.exception.diagnostic_code, "evidence_id_unknown")
+        self.assertEqual(_safe_attempt_category({}, "evidence_id_unknown"), "evidence_id_unknown")
 
     def test_inexact_evidence_is_rejected_without_fuzzy_repair(self):
         with self.assertRaises(CandidateValidationError) as rejected:
@@ -143,13 +166,13 @@ class ContextCompilerTests(unittest.TestCase):
         finally: tmp.cleanup()
 
     def test_validation_rejects_bad_blocks_unknown_fields_and_large_answers(self):
-        valid={"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":5},"confidence":"low","requires_review":True}
+        valid={"type":"action","title":"Проверить","statement":"Проверить материал.","evidence_id":"E1","confidence":"low","requires_review":True}
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[{**valid,"extra":"no"}]},20)
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[{**valid,"block":{"start":0,"end":21}}]},20)
         with self.assertRaises(ProvenanceError): validate_candidates({"candidates":[valid]*33},20)
 
     def test_validator_rejects_the_real_model_shape_without_writing_candidates(self):
-        valid={"type":"action","title":"Проверить","statement":"Проверить материал.","block":{"start":0,"end":5},"confidence":"low","requires_review":True}
+        valid={"type":"action","title":"Проверить","statement":"Проверить материал.","evidence_id":"E1","confidence":"low","requires_review":True}
         cases = [
             ({"candidates":[{**valid,"confidence":1}]}, "schema_field"),
             ({"candidates":[{**valid,"requires_review":None,"requires review":True}]}, "schema_unknown_field"),
@@ -160,7 +183,7 @@ class ContextCompilerTests(unittest.TestCase):
         ]
         for payload, code in cases:
             with self.subTest(code=code), self.assertRaises(CandidateValidationError) as rejected:
-                validate_candidates(payload,20)
+                validate_candidates(payload,20,evidence_ids={"E1"})
             self.assertIn(rejected.exception.diagnostic_code, {code, "schema_required_fields"})
         tmp,s,w,san=self.setup()
         try:
@@ -174,28 +197,29 @@ class ContextCompilerTests(unittest.TestCase):
 
     def test_schema_declares_the_same_field_boundaries_as_the_validator(self):
         from gaia.context_compiler import context_response_schema
-        candidate = context_response_schema(1)["properties"]["candidates"]["items"]
+        candidate = context_response_schema(1, ["E1"])["properties"]["candidates"]["items"]
         properties = candidate["properties"]
         self.assertEqual(properties["title"], {"type":"string", "minLength":1, "maxLength":160})
         self.assertEqual(properties["statement"], {"type":"string", "minLength":1, "maxLength":1200})
-        self.assertEqual(properties["evidence_quote"]["minLength"], 1)
+        self.assertNotIn("evidence_quote", properties)
+        self.assertEqual(properties["evidence_id"], {"type":"string", "enum":["E1"]})
         self.assertEqual(properties["confidence"]["enum"], ["low", "medium", "high"])
         self.assertTrue(properties["requires_review"]["const"])
-        valid = {"type":"action", "title":"x" * 160, "statement":"y" * 1200, "evidence_quote":"основание", "confidence":"high", "requires_review":True}
-        self.assertEqual(validate_candidates({"candidates":[valid]}, 20), [valid])
+        valid = {"type":"action", "title":"x" * 160, "statement":"y" * 1200, "evidence_id":"E1", "confidence":"high", "requires_review":True}
+        self.assertEqual(validate_candidates({"candidates":[valid]}, 20, evidence_ids={"E1"}), [valid])
         for field, value in (("title", ""), ("title", "x" * 161), ("statement", ""), ("statement", "y" * 1201), ("confidence", "other"), ("requires_review", False)):
             with self.subTest(field=field), self.assertRaises(CandidateValidationError):
-                validate_candidates({"candidates":[{**valid, field:value}]}, 20)
+                validate_candidates({"candidates":[{**valid, field:value}]}, 20, evidence_ids={"E1"})
 
     def test_relations_transport_schema_omits_pattern_but_validator_rejects_blank_values(self):
         from gaia.context_compiler import context_response_schema
-        relation_schema = context_response_schema(1)["properties"]["candidates"]["items"]["properties"]["relations"]["items"]
+        relation_schema = context_response_schema(1, ["E1"])["properties"]["candidates"]["items"]["properties"]["relations"]["items"]
         self.assertEqual(relation_schema, {"type":"string", "minLength":1, "maxLength":160})
-        valid = {"type":"action", "title":"Проверка", "statement":"Проверить материал.", "evidence_quote":"основание", "confidence":"high", "requires_review":True}
-        self.assertEqual(validate_candidates({"candidates":[{**valid, "relations":["Связанный элемент"]}]}, 20)[0]["relations"], ["Связанный элемент"])
+        valid = {"type":"action", "title":"Проверка", "statement":"Проверить материал.", "evidence_id":"E1", "confidence":"high", "requires_review":True}
+        self.assertEqual(validate_candidates({"candidates":[{**valid, "relations":["Связанный элемент"]}]}, 20, evidence_ids={"E1"})[0]["relations"], ["Связанный элемент"])
         for relation in ("", "   ", "\t\n"):
             with self.subTest(relation=repr(relation)), self.assertRaises(CandidateValidationError) as rejected:
-                validate_candidates({"candidates":[{**valid, "relations":[relation]}]}, 20)
+                validate_candidates({"candidates":[{**valid, "relations":[relation]}]}, 20, evidence_ids={"E1"})
             self.assertEqual(rejected.exception.diagnostic_code, "schema_relations")
 
     def test_production_route_rejects_multiple_candidates_before_persistence(self):
@@ -219,7 +243,7 @@ class ContextCompilerTests(unittest.TestCase):
         try:
             existing=ContextCompiler(s,w,lambda text:{"candidates":[{"type":"requirement","title":"Требование","statement":"Сохранить локальную проверку.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}).compile(san["artifact_id"])[0]
             ContextService(s,w).decide(existing["id"],"confirm")
-            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v4")
+            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v5")
             self.assertEqual(ContextService(s,w).get(existing["id"])["status"],"confirmed")
         finally: tmp.cleanup()
 
@@ -248,11 +272,11 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[1], 240)
         self.assertEqual(call.call_args.args[0]["task"], "context_compiler")
         self.assertEqual(call.call_args.args[0]["timeout"], 240)
-        self.assertIn("evidence_quote обязан быть точной", call.call_args.args[0]["prompt"])
+        self.assertIn("evidence_id выбирай только", call.call_args.args[0]["prompt"])
         self.assertNotIn('"block"', call.call_args.args[0]["prompt"])
         from gaia.context_compiler import context_response_schema
-        candidate = context_response_schema(16)["properties"]["candidates"]["items"]
-        self.assertIn("evidence_quote", candidate["required"])
+        candidate = context_response_schema(16, ["E1"])["properties"]["candidates"]["items"]
+        self.assertIn("evidence_id", candidate["required"])
         self.assertNotIn("actor_ref", candidate["required"])
         self.assertNotIn("deadline", candidate["required"])
         self.assertNotIn("status", candidate["required"])
@@ -384,8 +408,8 @@ class ContextCompilerTests(unittest.TestCase):
                 self.assertEqual(compiler.compile(san["artifact_id"]),[])
             compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: (_ for _ in ()).throw(ContextCompileError("local_model_invalid","safe","json_parse"))
             with patch.object(compiler,"_preload"), patch("gaia.context_compiler.provider_config",return_value={"type":"ollama","endpoint":"http://127.0.0.1:1"}), patch("gaia.context_compiler.execute_context_model_call",side_effect=RuntimeError("unavailable")):
-                with self.assertRaises(ContextCompileError) as failed: compiler.compile(san["artifact_id"],compiler_version="context-v4")
-            self.assertEqual(failed.exception.diagnostic_code,"json_parse")
+                with self.assertRaises(ContextCompileError) as failed: compiler.compile(san["artifact_id"],compiler_version="context-v5")
+                self.assertEqual(failed.exception.diagnostic_code,"json_parse")
         finally: tmp.cleanup()
 
     def test_duplicate_conflict_filters_and_workspace_isolation_survive_restart(self):
@@ -451,7 +475,7 @@ class ContextCompilerTests(unittest.TestCase):
             mapping=intake._read(); mapping["workspaces"][hashlib.sha256(project.encode()).hexdigest()]=w
             intake.path.write_text(json.dumps(mapping),encoding="utf-8")
             self.assertEqual(intake._workspace_for(project),w)
-            fake_result={"candidates":[{"type":"decision","title":"Маршрут","statement":"Использовать локальную проверку.","evidence_quote":"[PERSON_1] decided: use local review. Risk: delay.","confidence":"medium","requires_review":True}]}
+            fake_result={"candidates":[{"type":"decision","title":"Маршрут","statement":"Использовать локальную проверку.","evidence_id":"E1","confidence":"medium","requires_review":True}]}
             with patch("gaia.controlled_intake.default_store",return_value=s), patch("gaia.context_compiler.local_context_model",return_value=fake_result):
                 server=ThreadingHTTPServer(("127.0.0.1",0),Handler)
                 thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
