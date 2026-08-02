@@ -187,10 +187,21 @@ def _term_matches(term: str, field: str) -> bool:
         return term in field.split()
     if term in field:
         return True
-    # Conservative deterministic Russian word-form matching.  A shared four
-    # character base is enough for common endings, but never broadens short terms.
-    base = term[:4]
-    return any(len(word) >= 5 and word.startswith(base) for word in field.split())
+    # Conservative deterministic Russian word-form matching.  Word forms must
+    # share every character except a possible short ending; a four-character
+    # prefix alone would incorrectly equate unrelated words such as
+    # «картошки» and «карточки».
+    return any(
+        len(word) >= 5 and _shared_prefix_length(term, word) >= min(len(term), len(word)) - 2
+        for word in field.split()
+    )
+
+
+def _shared_prefix_length(left: str, right: str) -> int:
+    for index, (left_char, right_char) in enumerate(zip(left, right)):
+        if left_char != right_char:
+            return index
+    return min(len(left), len(right))
 
 
 def _one(query: Mapping[str, list[str]], key: str, default: str) -> str:

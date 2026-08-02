@@ -58,6 +58,15 @@ class ContextSearchTests(unittest.TestCase):
         self.assertEqual(search(entries, self.params(q="рис"))["total"], 0)
         self.assertEqual(search(entries, self.params(q="ОРБИТА-ЛИМОН СЕВЕР-КЕДР"))["total"], 1)
 
+    def test_russian_word_forms_do_not_match_different_words_with_same_prefix(self) -> None:
+        entries = [
+            item("potatoes", title="КАРТОШКИ"),
+            item("cards", title="карточки"),
+        ]
+        self.assertEqual(search(entries, self.params(q="картошки"))["total"], 1)
+        self.assertEqual(search([entries[1]], self.params(q="картошки"))["total"], 0)
+        self.assertEqual(search(entries, self.params(q="карточки"))["total"], 1)
+
     def test_filters_pagination_sorting_and_facets_are_deterministic(self) -> None:
         entries = [
             item("b", item_type="action", title="Бета", actor_ref="[Роль]", deadline="сегодня", relation_ids=["x"], updated_at="2026-07-02T00:00:00"),
