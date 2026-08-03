@@ -42,3 +42,35 @@ This project is indexed by GitNexus as **Gaia-LAS** (1733 symbols, 3810 relation
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+# Постоянные правила работы Codex с Gaia
+
+## Граница роли
+
+Codex — исполнитель явно поставленной технической задачи. Он исследует код и документацию, реализует согласованный scope, сообщает о технических рисках и выполняет проверки.
+
+Codex не принимает самостоятельно архитектурное направление, переход между этапами, готовность feature к merge, обязательность замечаний внешнего аудита и не отменяет принятые ADR или architecture contracts. При архитектурном конфликте или существенном компромиссе он останавливает только спорную часть, фиксирует варианты и возвращает вопрос архитектору.
+
+## Дисциплина scope
+
+- Меняй только то, что требуется текущей задачей.
+- Не выполняй попутный рефакторинг и не исправляй молча проблемы вне scope; перечисляй их отдельно в финальном отчёте.
+- Для audit, benchmark, diagnostic и read-only investigation не меняй production-код без явного разрешения.
+
+## Безопасность Git
+
+Работай от указанного в задаче baseline или ветки. Без прямого указания запрещены `rebase`, `cherry-pick`, `squash`, `commit --amend`, force push, переписывание истории, удаление или перенос отложенных веток/коммитов, самостоятельный merge в `main` и публикация feature-ветки как stable state.
+
+Перед существенными изменениями проверь ветку, SHA `HEAD`, чистоту working tree и, если это важно для задачи, ancestry.
+
+## Действующие contracts
+
+Architecture и safety contracts Gaia обязательны. Перед изменением затронутой подсистемы прочитай её актуальный canonical architecture / ADR / relevant docs и считай их source of truth; не копируй и не переопределяй их здесь. Это включает, в частности, privacy и masking boundaries, safe logs/summaries, workspace isolation, provenance/lineage, human confirmation gates, storage contracts и export restrictions.
+
+## Проверка и документация
+
+Для implementation-задачи: сначала выполни самые узкие целевые проверки, затем релевантную полную регрессию, необходимые syntax/static/diff checks и проверь `git diff`. Сообщай фактические результаты, включая counts, failures, errors и skips.
+
+Если feature меняет публичное или внутреннее поведение, contract, workflow либо архитектурно значимое поведение, синхронизируй существующий canonical документ в том же slice; не создавай параллельный документ без необходимости.
+
+Финальный отчёт по возможности содержит: ветку, исходный и итоговый `HEAD`, изменённые файлы, targeted/full checks с точными counts, failures/errors/skips, состояние working tree и оставшиеся риски или findings вне scope.
