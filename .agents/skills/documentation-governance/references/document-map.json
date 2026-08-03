@@ -1,0 +1,23 @@
+[
+  {"path": "AGENTS.md", "genre": "agent_instruction", "authority": "operational", "purpose": "Правила работы Codex и GitNexus в Gaia."},
+  {"path": ".agents/skills/gaia-feature-slice/SKILL.md", "genre": "agent_instruction", "authority": "operational", "purpose": "Workflow реализации ограниченного feature slice."},
+  {"path": ".agents/skills/gaia-publish-stable-slice/SKILL.md", "genre": "agent_instruction", "authority": "operational", "purpose": "Workflow публикации одобренного stable slice."},
+  {"path": ".agents/skills/gaia-close-stable-state/SKILL.md", "genre": "agent_instruction", "authority": "operational", "purpose": "Workflow согласования Git, документации, GitNexus и MemoryHub."},
+  {"path": "docs/PROTECTION_PIPELINE.md", "genre": "normative_rules", "authority": "normative", "purpose": "Защитный контур, privacy и export restrictions."},
+  {"path": "docs/SECURITY_STORAGE_POLICY.md", "genre": "normative_rules", "authority": "normative", "purpose": "Контракт хранения и безопасности."},
+  {"path": "docs/STORAGE_MODEL.md", "genre": "normative_rules", "authority": "normative", "purpose": "Модель хранения и происхождения."},
+  {"path": "docs/STAGE_6_NATIVE_HOST_CONTRACT.md", "genre": "normative_rules", "authority": "normative", "purpose": "Контракт нативного host."},
+  {"path": "docs/CONTEXT_COMPILER.md", "genre": "reference", "authority": "descriptive", "purpose": "Устройство компилятора проектного контекста."},
+  {"path": "docs/CONTEXT_COMPILER_RELIABILITY.md", "genre": "reference", "authority": "descriptive", "purpose": "Надёжность и contract маршрута компилятора."},
+  {"path": "docs/STAGE_7_CONTEXT_SEARCH.md", "genre": "reference", "authority": "descriptive", "purpose": "Поиск подтверждённого проектного контекста."},
+  {"path": "docs/USER_INTERFACE.md", "genre": "reference", "authority": "descriptive", "purpose": "Пользовательский интерфейс Gaia."},
+  {"path": "docs/E2E_VALIDATION.md", "genre": "runbook", "authority": "operational", "purpose": "Сквозная валидация Gaia."},
+  {"path": "docs/RUNTIME_DIAGNOSTIC.md", "genre": "runbook", "authority": "operational", "purpose": "Диагностика реального запуска."},
+  {"path": "docs/STAGE_6_RUNTIME_DIAGNOSTICS.md", "genre": "runbook", "authority": "operational", "purpose": "Безопасная runtime-диагностика этапа 6.1."},
+  {"path": "docs/STAGE_6_NATIVE_WINDOW_HOST_DECISION.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Принятое решение по оконному host."},
+  {"path": "docs/STAGE_6_ACCEPTANCE.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Приёмка этапа 6."},
+  {"path": "docs/STAGE_6_NATIVE_HOST_ACCEPTANCE.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Ручная приёмка нативного окна."},
+  {"path": "docs/LAUNCHER_WINDOW_FIX_REPORT.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Отчёт об исправлении запуска и окна."},
+  {"path": "docs/OPTIMIZATION_PLAN.md", "genre": "decision_analysis", "authority": "historical", "purpose": "План и история укрепления Gaia."},
+  {"path": "docs/dev/STAGE_7_CONTEXT_COMPILER_RELIABILITY_PLAN.md", "genre": "decision_analysis", "authority": "historical", "purpose": "План надёжной сборки контекста Stage 7."}
+]

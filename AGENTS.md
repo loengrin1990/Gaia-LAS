@@ -73,4 +73,6 @@ Architecture и safety contracts Gaia обязательны. Перед изм�
 
 Если feature меняет публичное или внутреннее поведение, contract, workflow либо архитектурно значимое поведение, синхронизируй существующий canonical документ в том же slice; не создавай параллельный документ без необходимости.
 
+Перед завершением такого feature slice применяй repo-local skill `documentation-governance` в режиме `sync`. Нормативный документ нельзя автоматически переписывать под противоречащий ему код: это `CONTRACT_VIOLATION`, который требует явного архитектурного решения. `full-refresh` документации запускается только на крупной границе stable state или по прямому поручению. Documentation governance не управляет Git lifecycle самостоятельно.
+
 Финальный отчёт по возможности содержит: ветку, исходный и итоговый `HEAD`, изменённые файлы, targeted/full checks с точными counts, failures/errors/skips, состояние working tree и оставшиеся риски или findings вне scope.

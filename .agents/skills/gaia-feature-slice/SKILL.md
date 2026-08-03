@@ -17,11 +17,12 @@ description: "Используй для стандартной реализац�
 6. Выполни целевые тесты.
 7. Выполни релевантную полную регрессию; для обычной Python-задачи Gaia canonical команда — `python3 -B -m unittest discover -s tests`.
 8. Выполни применимые syntax/static checks (в том числе `python3 -B -m gaia.config`, когда затронута конфигурация или нужен стандартный sanity check) и `git diff --check`.
-9. Проверь `git diff` на scope creep. Перед commit выполни GitNexus `detect_changes()` согласно `AGENTS.md`.
-10. Обнови существующую canonical документацию, если изменён contract, workflow или поведение.
-11. Повтори проверки, на которые повлияли документация или финальные правки.
-12. Создавай commit только если это прямо разрешено текущей задачей.
-13. Верни структурированный итог: branch, исходный/итоговый SHA, файлы, scope, проверки с counts и всеми failures/errors/skips, документация, status и вне-scope findings.
+9. Если slice затрагивает документируемое поведение, contract, config, architecture или workflow, выполни `documentation-governance` в режиме `sync`: сначала implementation и тесты, затем targeted documentation sync, затем финальная проверка slice. Для действительно code-internal изменения явно зафиксируй `documentation impact: none`.
+10. Проверь `git diff` на scope creep. Перед commit выполни GitNexus `detect_changes()` согласно `AGENTS.md`.
+11. Не переписывай normative documentation под противоречащую реализацию: зафиксируй `CONTRACT_VIOLATION` и верни вопрос архитектору.
+12. Повтори проверки, на которые повлияли документация или финальные правки.
+13. Создавай commit только если это прямо разрешено текущей задачей.
+14. Верни структурированный итог: branch, исходный/итоговый SHA, файлы, scope, проверки с counts и всеми failures/errors/skips, documentation impact, status и вне-scope findings.
 
 ## Границы
 
