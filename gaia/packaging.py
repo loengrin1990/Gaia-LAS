@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .context_assembler import DialogueContext, TrustedContextItem
 from .models import EvidenceItem, FileArtifact, MemorySource
 from .profiles import get_profile
 
@@ -13,6 +14,7 @@ def build_prompt(
     memory_sources: list[MemorySource] | None = None,
     evidence_plan: list[EvidenceItem] | None = None,
     group_title: str = "",
+    dialogue_context: DialogueContext | None = None,
 ) -> str:
     profile = get_profile(profile_id)
     file_parts = []
@@ -29,10 +31,12 @@ def build_prompt(
             ]
             file_parts.append(f"## Файл: {item.name}\nФайл приложен, но текст для анализа пустой.\n" + "\n".join(f"- {detail}" for detail in details))
     file_block = "\n\n".join(file_parts) or "Файлы не приложены."
-    memory_block = memory[:60000] if memory else "Эффективный контекст не найден или не выбран."
+    memory_block = dialogue_context.memory_text if dialogue_context else memory[:60000]
+    memory_block = memory_block or "Lore не выбрал релевантный материал памяти."
     sources_block = format_memory_sources(memory_sources or [])
     evidence_block = format_evidence_plan(evidence_plan or [])
     group_line = f"\n# Группа контекста\n{group_title}\n" if group_title else ""
+    dialogue_layers = _dialogue_layers(dialogue_context, memory_block)
     return (
         "Ты работаешь с безопасно подготовленным локальным аналитическим пакетом.\n"
         "Не проси исходные ПД. Если данных недостаточно, сформулируй локальный шаг проверки.\n\n"
@@ -49,12 +53,53 @@ def build_prompt(
         f"## Инструкция профиля\n{profile.template}\n\n"
         f"# Проект\n{project}\n\n"
         f"{group_line}"
-        f"# Эффективный контекст, выбранный Lore\n{memory_block}\n\n"
+        f"{dialogue_layers}\n"
         f"# Источники выбора Lore\n{sources_block}\n\n"
         f"# Evidence plan Lore\n{evidence_block}\n\n"
         f"# Запрос пользователя, после локальной обработки\n{masked_query or 'Запрос пуст.'}\n\n"
         f"# Материалы, после локальной обработки\n{file_block}\n"
     )
+
+
+def _dialogue_layers(dialogue_context: DialogueContext | None, memory_block: str) -> str:
+    if dialogue_context is None:
+        return f"# Эффективный контекст, выбранный Lore\n{memory_block}\n\n"
+    return (
+        "# Текущий операционный контекст\n"
+        "Этот слой содержит только проверенные, подтверждённые и актуальные записи проекта. "
+        "Он является текущим источником истины для состояния проекта.\n"
+        "Если он расходится с памятью, используй его для трактовки текущего состояния; "
+        "память сохраняй как историю, обоснование и более широкий материал. Не объединяй и не удаляй сведения автоматически.\n"
+        f"{format_trusted_context(dialogue_context.current_authority)}\n\n"
+        "# Память проекта, выбранная Lore\n"
+        "Это знания, история, обоснование и связанный материал; она не считается автоматически актуальным состоянием.\n"
+        f"{memory_block}\n\n"
+    )
+
+
+def format_trusted_context(items: tuple[TrustedContextItem, ...]) -> str:
+    if not items:
+        return "Подтверждённый актуальный операционный контекст по запросу не найден."
+    lines = []
+    for item in items:
+        provenance = ", ".join(
+            value for value in (
+                f"id: {item.id}" if item.id else "",
+                f"sources: {', '.join(item.source_links)}" if item.source_links else "",
+                f"parents: {', '.join(item.parents)}" if item.parents else "",
+                f"blocks: {len(item.block_links)}" if item.block_links else "",
+            ) if value
+        ) or "provenance: отсутствует"
+        details = "; ".join(
+            value for value in (
+                f"ответственный: {item.actor_ref}" if item.actor_ref else "",
+                f"срок: {item.deadline}" if item.deadline else "",
+                f"статус: {item.explicit_status}" if item.explicit_status else "",
+                f"приоритет: {item.priority}" if item.priority else "",
+            ) if value
+        )
+        lines.append(f"- [{item.item_type}] {item.title}\n  {item.statement}\n  {details}\n  provenance: {provenance}".rstrip())
+    return "\n".join(lines)
 
 
 def format_memory_sources(sources: list[MemorySource]) -> str:

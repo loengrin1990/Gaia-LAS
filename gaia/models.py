@@ -152,6 +152,7 @@ class AnalysisPackage:
     group_title: str = ""
     group_sections: int = 0
     prompt_mask_review: MaskReview | None = None
+    dialogue_context: Any | None = None
 
 
 @dataclass

@@ -5,6 +5,7 @@ import threading
 
 from .archive import cleanup_run_temporary_artifacts, journal_path, safety_audit_path, write_run_journal
 from .config import SETTINGS
+from .context_assembler import ContextReader, compose_dialogue_context, select_trusted_context
 from .extraction import extract_upload_text, safe_filename
 from .masking import mask_with_review
 from .memory import select_project_memory
@@ -30,6 +31,7 @@ def create_package(
     profile_id: str | None = None,
     strict_dialog_privacy: bool = False,
     cancel_event: threading.Event | None = None,
+    dialogue_context_reader: ContextReader | None = None,
 ) -> AnalysisPackage:
     ensure_not_cancelled(cancel_event)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -106,6 +108,11 @@ def create_package(
     group_code = memory_selection.group_code if memory_selection else ""
     group_title = memory_selection.group_title if memory_selection else ""
     group_sections = memory_selection.group_sections if memory_selection else 0
+    dialogue_context = None
+    if dialogue_context_reader is not None:
+        trusted_context = select_trusted_context(dialogue_context_reader, masked_query)
+        dialogue_context = compose_dialogue_context(trusted_context, memory_selection)
+        memory = dialogue_context.memory_text
     ensure_not_cancelled(cancel_event)
     prompt = build_prompt(
         project,
@@ -116,6 +123,7 @@ def create_package(
         memory_sources,
         evidence_plan=evidence_plan,
         group_title=group_title,
+        dialogue_context=dialogue_context,
     )
     prompt_mask = mask_with_review("Итоговый prompt после Lore", prompt)
     prompt = prompt_mask.masked_text
@@ -158,6 +166,7 @@ def create_package(
         group_title=group_title,
         group_sections=group_sections,
         prompt_mask_review=prompt_review,
+        dialogue_context=dialogue_context,
     )
     ensure_not_cancelled(cancel_event)
     try:

@@ -66,7 +66,7 @@ class ScribeInboxTests(unittest.TestCase):
             with (
                 patch("gaia.scribe_inbox.SETTINGS", settings),
                 patch("gaia.projects.SETTINGS", settings),
-                patch("gaia.scribe_inbox.create_package", return_value=fake_package("Автопретензии")),
+                patch("gaia.scribe_inbox.create_package", return_value=fake_package("Автопретензии")) as create_package_mock,
             ):
                 result = package_inbox_item("Автопретензии", "Материалы/source.md", "general")
                 items = list_scribe_inbox("Автопретензии")
@@ -75,6 +75,7 @@ class ScribeInboxTests(unittest.TestCase):
         self.assertEqual(result["package"]["scribe_origin"]["type"], "inbox")
         self.assertEqual(result["package"]["scribe_origin"]["relative_path"], "Материалы/source.md")
         self.assertEqual(items[0].status, "prepared")
+        self.assertNotIn("dialogue_context_reader", create_package_mock.call_args.kwargs)
 
     def test_indexed_inbox_item_is_hidden_from_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

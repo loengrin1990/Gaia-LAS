@@ -9,11 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from .config import SETTINGS
+from .context_assembler import ContextReader
+from .context_compiler import ContextService
+from .controlled_intake import ControlledIntake
 from .local_llm import run_lm_studio
 from .masking import mask_with_review
 from .models import Conversation, ConversationMessage
 from .orchestrator import create_package
 from .projects import project_names
+from .provenance import ProvenanceStore
 from .storage import atomic_write_text, path_lock
 
 
@@ -125,6 +129,7 @@ def _add_user_turn_locked(
         uploaded or [],
         profile_id,
         strict_dialog_privacy=True,
+        dialogue_context_reader=existing_dialogue_context_reader(conversation.project),
     )
     user_mask = mask_with_review("Диалог: сообщение пользователя", query, strict_dialog_privacy=True)
     safe_user_text = user_mask.masked_text.strip() or "Очищенное сообщение не содержит сохраняемого текста."
@@ -169,6 +174,21 @@ def _add_user_turn_locked(
         "package": asdict(package),
         "local_result": local_result,
     }
+
+
+def existing_dialogue_context_reader(project: str) -> ContextReader | None:
+    """Return a reader for an existing project workspace without creating one."""
+    if SETTINGS is None:
+        raise RuntimeError("Gaia settings are unavailable.")
+    root = getattr(SETTINGS, "storage_dir", None)
+    if root is None:
+        return None
+    required = [root / zone for zone in ("sources", "artifacts", "sanitized", "context", "pseudonyms", "exports", "metadata")]
+    if not project.strip() or not (root / "metadata" / "registry.json").is_file() or not all(path.is_dir() for path in required):
+        return None
+    intake = ControlledIntake(ProvenanceStore(root), create_metadata=False)
+    workspace_id = intake.existing_workspace(project)
+    return ContextService(intake.store, workspace_id) if workspace_id else None
 
 
 def build_contextual_query(conversation: Conversation, query: str) -> str:

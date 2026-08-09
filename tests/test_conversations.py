@@ -62,6 +62,7 @@ class ConversationTests(unittest.TestCase):
                 patch("gaia.conversations.SETTINGS", settings),
                 patch("gaia.projects.SETTINGS", settings),
                 patch("gaia.conversations.project_names", return_value=["Автопретензии"]),
+                patch("gaia.conversations.existing_dialogue_context_reader", return_value="reader") as reader_mock,
                 patch("gaia.conversations.create_package", return_value=fake_package) as create_package_mock,
             ):
                 conversation = create_conversation("Автопретензии", "Рабочий")
@@ -70,6 +71,8 @@ class ConversationTests(unittest.TestCase):
 
         self.assertEqual(result["package"]["run_id"], "run-1")
         self.assertTrue(create_package_mock.call_args.kwargs["strict_dialog_privacy"])
+        self.assertEqual(create_package_mock.call_args.kwargs["dialogue_context_reader"], "reader")
+        reader_mock.assert_called_once_with("Автопретензии")
         self.assertEqual(len(conversations[0].messages), 1)
         self.assertEqual(conversations[0].messages[0].role, "user")
         self.assertIn("Что дальше?", conversations[0].rolling_summary)
