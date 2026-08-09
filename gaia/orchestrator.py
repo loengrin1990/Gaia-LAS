@@ -32,6 +32,7 @@ def create_package(
     strict_dialog_privacy: bool = False,
     cancel_event: threading.Event | None = None,
     dialogue_context_reader: ContextReader | None = None,
+    dialogue_context_query: str | None = None,
 ) -> AnalysisPackage:
     ensure_not_cancelled(cancel_event)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -110,7 +111,7 @@ def create_package(
     group_sections = memory_selection.group_sections if memory_selection else 0
     dialogue_context = None
     if dialogue_context_reader is not None:
-        trusted_context = select_trusted_context(dialogue_context_reader, masked_query)
+        trusted_context = select_trusted_context(dialogue_context_reader, dialogue_context_query or masked_query)
         dialogue_context = compose_dialogue_context(trusted_context, memory_selection)
         memory = dialogue_context.memory_text
     ensure_not_cancelled(cancel_event)

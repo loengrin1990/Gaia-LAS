@@ -76,6 +76,7 @@ class ScribeInboxTests(unittest.TestCase):
         self.assertEqual(result["package"]["scribe_origin"]["relative_path"], "Материалы/source.md")
         self.assertEqual(items[0].status, "prepared")
         self.assertNotIn("dialogue_context_reader", create_package_mock.call_args.kwargs)
+        self.assertNotIn("dialogue_context_query", create_package_mock.call_args.kwargs)
 
     def test_indexed_inbox_item_is_hidden_from_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

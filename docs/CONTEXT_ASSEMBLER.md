@@ -8,7 +8,7 @@
 
 Контракт: MemoryHub `DEC-20260809-005-context-assembler-composition-contract`.
 
-Dialogue передаёт тот же contextual query в Lore и в trusted Context selection. Только Dialogue создаёт read-only reader уже существующего workspace; если workspace ещё не зарегистрирован или в нём нет подходящего Context, это нормальное пустое состояние. Другие вызовы `create_package`, включая Scribe и rebuild, не передают этот reader и сохраняют прежний Lore-only prompt.
+Dialogue передаёт полный contextual query в Lore. Для trusted Context selection он строит отдельную bounded projection: термины текущего сообщения идут первыми, а последний пользовательский вопрос добавляется только как компактный предмет для follow-up. Это сохраняет ограничение Context Search и не сокращает Lore query. Только Dialogue создаёт read-only reader уже существующего workspace; если workspace ещё не зарегистрирован или в нём нет подходящего Context, это нормальное пустое состояние. Другие вызовы `create_package`, включая Scribe и rebuild, не передают этот reader и сохраняют прежний Lore-only prompt.
 
 В Dialogue prompt слои остаются отдельными: «Текущий операционный контекст» помечен как источник истины для текущего состояния, а «Память проекта, выбранная Lore» — как знания, история и обоснование. При расхождении Context имеет приоритет только для трактовки текущего состояния; автоматического объединения, подавления или изменения записей нет.
 

@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gaia.context_assembler import DialogueContextBudget
+from gaia.context_assembler import DialogueContextBudget, select_trusted_context
 from gaia.context_compiler import ContextService
+from gaia.conversations import build_context_search_query
 from gaia.controlled_intake import ControlledIntake
 from gaia.models import MemorySelection, MemorySource
 from gaia.orchestrator import create_package
@@ -93,6 +94,47 @@ class DialogueContextIntegrationTests(unittest.TestCase):
         self.assertIsNone(package.dialogue_context)
         self.assertIn("# Эффективный контекст, выбранный Lore", package.prompt)
         self.assertNotIn("# Текущий операционный контекст", package.prompt)
+
+    def test_dialogue_context_uses_bounded_query_while_lore_receives_the_full_query(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        try:
+            store = ProvenanceStore(Path(temporary.name) / "store"); workspace = store.create_workspace()
+            store._add(context_record(store, workspace, "ctx_b"))
+            full_query = "исторический контекст " * 20
+            seen: list[str] = []
+            with tempfile.TemporaryDirectory() as run_dir:
+                settings = SimpleNamespace(runs_dir=Path(run_dir) / "runs")
+                with (
+                    patch("gaia.orchestrator.SETTINGS", settings),
+                    patch("gaia.orchestrator.journal_path", return_value=str(Path(run_dir) / "journal.md")),
+                    patch("gaia.orchestrator.safety_audit_path", return_value=str(Path(run_dir) / "audit.md")),
+                    patch("gaia.orchestrator.write_run_journal"),
+                    patch("gaia.orchestrator.select_project_memory", side_effect=lambda project, query, **_: seen.append(query) or self.memory()),
+                ):
+                    package = create_package("Проект A", full_query, [], dialogue_context_reader=ContextService(store, workspace), dialogue_context_query="текущий статус")
+            self.assertEqual(seen, [full_query])
+            self.assertEqual([item.id for item in package.dialogue_context.current_authority], ["ctx_b"])
+        finally:
+            temporary.cleanup()
+
+    def test_follow_up_query_recovers_subject_from_the_latest_user_turn(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        try:
+            store = ProvenanceStore(Path(temporary.name) / "store"); workspace = store.create_workspace()
+            store._add(context_record(
+                store, workspace, "ctx_b", title="Статус карточки",
+                statement="Текущий пользовательский статус карточки после автоматической обработки: B.",
+            ))
+            from gaia.models import Conversation, ConversationMessage
+            conversation = Conversation(
+                "dialogue", "Проект A", "Рабочий", "active", "", "", "",
+                [ConversationMessage("prior", "user", "", "Мы обсуждаем пользовательский статус карточки после автоматической обработки.", "")],
+            )
+            query = build_context_search_query(conversation, "А какой сейчас его статус?")
+            selected = select_trusted_context(ContextService(store, workspace), query)
+            self.assertEqual([item.id for item in selected], ["ctx_b"])
+        finally:
+            temporary.cleanup()
 
     def test_existing_workspace_reader_never_creates_a_workspace(self) -> None:
         temporary = tempfile.TemporaryDirectory()

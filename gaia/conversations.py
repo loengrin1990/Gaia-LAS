@@ -11,6 +11,7 @@ from typing import Any
 from .config import SETTINGS
 from .context_assembler import ContextReader
 from .context_compiler import ContextService
+from .context_search import MAX_QUERY_LENGTH, MAX_TERMS
 from .controlled_intake import ControlledIntake
 from .local_llm import run_lm_studio
 from .masking import mask_with_review
@@ -23,6 +24,11 @@ from .storage import atomic_write_text, path_lock
 
 MAX_RECENT_MESSAGES = 8
 SUMMARY_CHARS = 2400
+DIALOGUE_QUERY_FILLER = {
+    "а", "и", "или", "какой", "какая", "какие", "как", "что", "сейчас",
+    "его", "ее", "их", "это", "этот", "эта", "эти", "ли", "пожалуйста",
+    "мы", "обсуждаем", "говорим", "речь", "we", "are", "discussing", "and", "what", "is", "its",
+}
 
 
 class ConversationError(ValueError):
@@ -123,6 +129,9 @@ def _add_user_turn_locked(
     if not query and not uploaded:
         raise ConversationError("Добавь сообщение или файл для продолжения диалога.")
     context_query = build_contextual_query(conversation, query)
+    user_mask = mask_with_review("Диалог: сообщение пользователя", query, strict_dialog_privacy=True)
+    safe_user_text = user_mask.masked_text.strip() or "Очищенное сообщение не содержит сохраняемого текста."
+    context_search_query = build_context_search_query(conversation, safe_user_text)
     package = create_package(
         conversation.project,
         context_query,
@@ -130,9 +139,8 @@ def _add_user_turn_locked(
         profile_id,
         strict_dialog_privacy=True,
         dialogue_context_reader=existing_dialogue_context_reader(conversation.project),
+        dialogue_context_query=context_search_query,
     )
-    user_mask = mask_with_review("Диалог: сообщение пользователя", query, strict_dialog_privacy=True)
-    safe_user_text = user_mask.masked_text.strip() or "Очищенное сообщение не содержит сохраняемого текста."
     user_message = ConversationMessage(
         id=uuid.uuid4().hex[:12],
         role="user",
@@ -203,6 +211,48 @@ def build_contextual_query(conversation: Conversation, query: str) -> str:
         parts.append("")
     parts.extend(["# Новое сообщение пользователя", query or ""])
     return "\n".join(parts)
+
+
+def build_context_search_query(conversation: Conversation, current_message: str, max_length: int = MAX_QUERY_LENGTH) -> str:
+    """Project Dialogue intent into the bounded Context Search contract.
+
+    Lore keeps the complete contextual query.  Context Search receives factual
+    terms from the current message first, plus only the latest user turn when a
+    short follow-up needs its subject to be recoverable.
+    """
+    if max_length < 1:
+        raise ValueError("Лимит поискового запроса должен быть положительным.")
+    current_terms = _context_search_terms(current_message)
+    prior_terms = _context_search_terms(_latest_user_message(conversation))
+    return _bounded_terms(current_terms, prior_terms, max_length)
+
+
+def _latest_user_message(conversation: Conversation) -> str:
+    for message in reversed(conversation.messages):
+        if message.role == "user" and (message.masked_text or message.text).strip():
+            return message.masked_text or message.text
+    return ""
+
+
+def _context_search_terms(value: str) -> list[str]:
+    return [
+        token for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", value.casefold())
+        if token not in DIALOGUE_QUERY_FILLER
+    ]
+
+
+def _bounded_terms(primary: list[str], secondary: list[str], max_length: int) -> str:
+    selected: list[str] = []
+    for terms in (primary, secondary):
+        for token in terms:
+            if len(selected) >= MAX_TERMS:
+                return " ".join(selected)
+            if not selected and len(token) > max_length:
+                return token[:max_length]
+            candidate = " ".join([*selected, token])
+            if len(candidate) <= max_length:
+                selected.append(token)
+    return " ".join(selected)
 
 
 def update_summary(conversation: Conversation) -> str:

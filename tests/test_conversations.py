@@ -6,11 +6,42 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gaia.conversations import add_user_turn, create_conversation, list_conversations
-from gaia.models import AnalysisPackage
+from gaia.context_search import MAX_QUERY_LENGTH
+from gaia.conversations import add_user_turn, build_context_search_query, create_conversation, list_conversations
+from gaia.models import AnalysisPackage, Conversation, ConversationMessage
 
 
 class ConversationTests(unittest.TestCase):
+    def conversation(self, messages: list[ConversationMessage]) -> Conversation:
+        return Conversation("dialogue", "Автопретензии", "Рабочий", "active", "", "", "", messages)
+
+    def test_context_search_query_keeps_current_intent_and_bounded_prior_subject(self) -> None:
+        prior = ConversationMessage("prior", "user", "", "Мы обсуждаем пользовательский статус карточки после автоматической обработки.", "")
+        query = build_context_search_query(self.conversation([prior]), "А какой сейчас его статус?")
+        self.assertLessEqual(len(query), MAX_QUERY_LENGTH)
+        self.assertIn("статус", query)
+        self.assertIn("карточки", query)
+        self.assertIn("автоматической", query)
+
+    def test_context_search_query_prioritizes_current_message_with_a_tight_budget(self) -> None:
+        prior = ConversationMessage("prior", "user", "", "старый предмет обсуждения " * 20, "")
+        query = build_context_search_query(self.conversation([prior]), "Текущий статус новой карточки", max_length=30)
+        self.assertEqual(query, "текущий статус новой карточки")
+        self.assertLessEqual(len(query), 30)
+
+    def test_context_search_query_never_serializes_the_full_rolling_dialogue(self) -> None:
+        messages = [ConversationMessage(str(index), "user", "", "длинная история проекта " * 10, "") for index in range(8)]
+        query = build_context_search_query(self.conversation(messages), "Какой текущий статус карточки?")
+        self.assertLessEqual(len(query), MAX_QUERY_LENGTH)
+        self.assertIn("текущий", query)
+        self.assertIn("статус", query)
+
+    def test_context_search_query_fits_the_complete_context_search_contract(self) -> None:
+        prior = ConversationMessage("prior", "user", "", "предыдущий предмет " * 40, "")
+        query = build_context_search_query(self.conversation([prior]), "x" * (MAX_QUERY_LENGTH + 20))
+        self.assertEqual(len(query), MAX_QUERY_LENGTH)
+        self.assertLessEqual(len(query.split()), 16)
+
     def test_project_conversations_are_stored_per_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = SimpleNamespace(
