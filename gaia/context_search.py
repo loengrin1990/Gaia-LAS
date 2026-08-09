@@ -82,21 +82,31 @@ def parse_params(query: Mapping[str, list[str]]) -> SearchParams:
 
 def search(items: list[dict[str, Any]], params: SearchParams) -> dict[str, Any]:
     """Search a pre-isolated workspace corpus and return a safe API projection."""
-    corpus = [item for item in items if _eligible(item)]
-    facets = _facets(corpus)
-    matched = [item for item in corpus if _matches(item, params)]
-    scored = [(item, _score(item, params)) for item in matched]
-    _sort(scored, params.sort)
-    total = len(scored)
-    page = scored[params.offset:params.offset + params.limit]
+    page, total, facets = select_records(items, params)
     return {
-        "results": [_project(item) for item, _ in page],
+        "results": [_project(item) for item in page],
         "total": total,
         "returned": len(page),
         "has_more": params.offset + len(page) < total,
         "facets": facets,
         "sort": params.sort,
     }
+
+
+def select_records(items: list[dict[str, Any]], params: SearchParams) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    """Return eligible source records in the same deterministic order as search.
+
+    Callers are responsible for providing a workspace-isolated corpus.  Unlike
+    :func:`search`, this internal boundary preserves record identity and
+    provenance for trusted in-process composition; it is not an HTTP payload.
+    """
+    corpus = [item for item in items if _eligible(item)]
+    facets = _facets(corpus)
+    matched = [item for item in corpus if _matches(item, params)]
+    scored = [(item, _score(item, params)) for item in matched]
+    _sort(scored, params.sort)
+    total = len(scored)
+    return [dict(item) for item, _ in scored[params.offset:params.offset + params.limit]], total, facets
 
 
 def _eligible(item: Mapping[str, Any]) -> bool:
