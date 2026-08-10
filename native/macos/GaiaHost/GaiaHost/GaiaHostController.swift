@@ -183,7 +183,8 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate, WK
 
     private func showError(_ error: GaiaHostError) {
         switch error {
-        case .pythonNotFound: showMessage(title: "Не найдено окружение Python для Gaia", detail: "Укажите Python в локальной настройке и повторите запуск.")
+        case .pythonNotFound: showMessage(title: "Не найдено окружение Python для Gaia", detail: "Gaia требует Python 3.11+ в .venv репозитория или корректный GAIA_PYTHON.")
+        case .unsupportedPython: showMessage(title: "Неподдерживаемая версия Python", detail: "Gaia требует Python 3.11+ в .venv репозитория или корректный GAIA_PYTHON.")
         case .portOccupied: showMessage(title: "Порт занят другой программой", detail: "Gaia не подключилась к неизвестному локальному сервису.")
         default: showMessage(title: "Не удалось запустить локальный сервер Gaia", detail: "Проверьте локальную конфигурацию Gaia и повторите запуск.")
         }
@@ -200,6 +201,6 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate, WK
     }
 
     private func code(for error: GaiaHostError) -> String {
-        switch error { case .pythonNotFound: return "python_not_found"; case .repositoryNotFound: return "repository_not_found"; case .portOccupied: return "port_occupied"; case .backendUnavailable: return "backend_unavailable"; case .invalidConfiguration: return "invalid_configuration" }
+        switch error { case .pythonNotFound: return "python_not_found"; case .unsupportedPython: return "unsupported_python"; case .repositoryNotFound: return "repository_not_found"; case .portOccupied: return "port_occupied"; case .backendUnavailable: return "backend_unavailable"; case .invalidConfiguration: return "invalid_configuration" }
     }
 }
