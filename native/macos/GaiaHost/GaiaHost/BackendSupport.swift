@@ -131,14 +131,15 @@ private final class IsolatedProbe {
         switch waitForExit(timeout: timeout) {
         case let .exited(status):
             guard !processGroupExists() else {
-                _ = terminateAndReap()
+                _ = cleanupManagedProcessGroup(directChildAlreadyReaped: true)
                 return nil
             }
             return exitStatus(status)
         case .failed:
+            _ = cleanupManagedProcessGroup(directChildAlreadyReaped: false)
             return nil
         case .pending:
-            _ = terminateAndReap()
+            _ = cleanupManagedProcessGroup(directChildAlreadyReaped: false)
             return nil
         }
     }
@@ -149,7 +150,10 @@ private final class IsolatedProbe {
         repeat {
             let result = waitpid(pid, &status, WNOHANG)
             if result == pid { return .exited(status) }
-            if result == -1 { return .failed }
+            if result == -1 {
+                if errno == EINTR { continue }
+                return .failed
+            }
             Thread.sleep(forTimeInterval: 0.01)
         } while Date() < deadline
         return .pending
@@ -159,13 +163,14 @@ private final class IsolatedProbe {
         status & 0x7f == 0 ? (status >> 8) & 0xff : nil
     }
 
-    private func terminateAndReap() -> Bool {
+    private func cleanupManagedProcessGroup(directChildAlreadyReaped: Bool) -> Bool {
         _ = kill(-pid, SIGTERM)
-        var result = waitForExit(timeout: 0.2)
-        if processGroupExists() { _ = kill(-pid, SIGKILL) }
-        if case .pending = result { result = waitForExit(timeout: 1) }
-        guard case .exited = result else { return false }
-        return waitForProcessGroupExit(timeout: 1)
+        var directChildReaped = directChildAlreadyReaped
+        if !directChildReaped, case .exited = waitForExit(timeout: 0.2) { directChildReaped = true }
+        if !waitForProcessGroupExit(timeout: 0.2) { _ = kill(-pid, SIGKILL) }
+        if !directChildReaped, case .exited = waitForExit(timeout: 1) { directChildReaped = true }
+        let groupGone = waitForProcessGroupExit(timeout: 1)
+        return directChildReaped && groupGone
     }
 
     private func waitForProcessGroupExit(timeout: TimeInterval) -> Bool {

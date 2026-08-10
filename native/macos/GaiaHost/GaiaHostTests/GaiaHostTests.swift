@@ -40,6 +40,11 @@ final class GaiaHostTests: XCTestCase {
         return errno == EPERM
     }
 
+    private func processGroupExists(_ group: pid_t) -> Bool {
+        if kill(-group, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
     private func pid(from file: URL) throws -> pid_t {
         guard let pid = pid_t(try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw NSError(domain: "GaiaHostTests", code: 1)
@@ -47,12 +52,13 @@ final class GaiaHostTests: XCTestCase {
         return pid
     }
 
-    private func lifecycleFixture(ignoresTERM: Bool, in directory: URL) throws -> (executable: URL, wrapperPID: URL, childPID: URL) {
+    private func lifecycleFixture(ignoresTERM: Bool, exitsImmediately: Bool = false, in directory: URL) throws -> (executable: URL, wrapperPID: URL, childPID: URL) {
         let wrapperPID = directory.appendingPathComponent("wrapper.pid")
         let childPID = directory.appendingPathComponent("child.pid")
         let traps = ignoresTERM ? "trap '' TERM\n" : ""
         let child = ignoresTERM ? "(trap '' TERM; exec sleep 30) &" : "sleep 30 &"
-        let script = "#!/bin/sh\n\(probeArgumentsCheck)\n\(traps)echo $$ > '\(wrapperPID.path)'\n\(child)\nchild=$!\necho $child > '\(childPID.path)'\nwait $child\n"
+        let completion = exitsImmediately ? "exit 0" : "wait $child"
+        let script = "#!/bin/sh\n\(probeArgumentsCheck)\n\(traps)echo $$ > '\(wrapperPID.path)'\n\(child)\nchild=$!\necho $child > '\(childPID.path)'\n\(completion)\n"
         let executable = try executableFixture(named: "python", script: script, in: directory)
         addTeardownBlock {
             for file in [wrapperPID, childPID] {
@@ -154,8 +160,10 @@ final class GaiaHostTests: XCTestCase {
         let fixture = try lifecycleFixture(ignoresTERM: false, in: directory)
 
         XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
-        XCTAssertFalse(processExists(try pid(from: fixture.wrapperPID)))
+        let wrapper = try pid(from: fixture.wrapperPID)
+        XCTAssertFalse(processExists(wrapper))
         XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
+        XCTAssertFalse(processGroupExists(wrapper))
     }
 
     func testPythonExecutableEscalatesToKillForTermIgnoringWrapperAndChild() throws {
@@ -165,8 +173,21 @@ final class GaiaHostTests: XCTestCase {
 
         XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
         XCTAssertLessThan(Date().timeIntervalSince(start), 3)
-        XCTAssertFalse(processExists(try pid(from: fixture.wrapperPID)))
+        let wrapper = try pid(from: fixture.wrapperPID)
+        XCTAssertFalse(processExists(wrapper))
         XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
+        XCTAssertFalse(processGroupExists(wrapper))
+    }
+
+    func testPythonExecutableCleansChildWhenWrapperExitsBeforeTimeout() throws {
+        let directory = try temporaryDirectory()
+        let fixture = try lifecycleFixture(ignoresTERM: false, exitsImmediately: true, in: directory)
+
+        XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
+        let wrapper = try pid(from: fixture.wrapperPID)
+        XCTAssertFalse(processExists(wrapper))
+        XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
+        XCTAssertFalse(processGroupExists(wrapper))
     }
 
     func testPythonExecutableDoesNotKillUnrelatedProcess() throws {
