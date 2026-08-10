@@ -20,8 +20,9 @@ enum BackendOwnership: Equatable { case attached, owned }
 
 enum GaiaHostError: Error, Equatable {
     case invalidConfiguration
-    case pythonNotFound
-    case unsupportedPython
+    case invalidExplicitPython
+    case repositoryPythonNotFound
+    case unsupportedRepositoryPython
     case repositoryNotFound
     case portOccupied
     case backendUnavailable
@@ -59,23 +60,31 @@ struct BackendLocator {
     func pythonExecutable(in repository: URL) throws -> URL {
         if let explicit = environment["GAIA_PYTHON"] {
             let candidate = URL(fileURLWithPath: explicit)
-            guard FileManager.default.isExecutableFile(atPath: candidate.path) else { throw GaiaHostError.pythonNotFound }
-            guard supportsPython311(candidate) else { throw GaiaHostError.unsupportedPython }
+            guard FileManager.default.isExecutableFile(atPath: candidate.path), supportsPython311(candidate) else {
+                throw GaiaHostError.invalidExplicitPython
+            }
             return candidate
         }
         let venv = repository.appendingPathComponent(".venv/bin/python3")
-        guard FileManager.default.isExecutableFile(atPath: venv.path) else { throw GaiaHostError.pythonNotFound }
-        guard supportsPython311(venv) else { throw GaiaHostError.unsupportedPython }
+        guard FileManager.default.isExecutableFile(atPath: venv.path) else { throw GaiaHostError.repositoryPythonNotFound }
+        guard supportsPython311(venv) else { throw GaiaHostError.unsupportedRepositoryPython }
         return venv
     }
 
     private func supportsPython311(_ executable: URL) -> Bool {
-        let process = Process(); process.executableURL = executable; process.arguments = ["-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"]
-        let output = Pipe(); process.standardOutput = output; process.standardError = Pipe()
-        do { try process.run(); process.waitUntilExit() } catch { return false }
-        guard process.terminationStatus == 0, let value = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else { return false }
-        let parts = value.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".").compactMap { Int($0) }
-        return parts.count == 2 && (parts[0] > 3 || parts[0] == 3 && parts[1] >= 11)
+        let process = Process()
+        let exited = DispatchSemaphore(value: 0)
+        process.executableURL = executable
+        process.arguments = ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { _ in exited.signal() }
+        do { try process.run() } catch { return false }
+        guard exited.wait(timeout: .now() + 1) == .success else {
+            if process.isRunning { process.terminate() }
+            return false
+        }
+        return process.terminationStatus == 0
     }
 
     func configuredOrigin(in repository: URL) throws -> GaiaOrigin {

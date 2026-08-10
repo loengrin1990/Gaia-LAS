@@ -183,8 +183,9 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate, WK
 
     private func showError(_ error: GaiaHostError) {
         switch error {
-        case .pythonNotFound: showMessage(title: "Не найдено окружение Python для Gaia", detail: "Gaia требует Python 3.11+ в .venv репозитория или корректный GAIA_PYTHON.")
-        case .unsupportedPython: showMessage(title: "Неподдерживаемая версия Python", detail: "Gaia требует Python 3.11+ в .venv репозитория или корректный GAIA_PYTHON.")
+        case .invalidExplicitPython: showMessage(title: "Некорректный Python для Gaia", detail: "GAIA_PYTHON должен указывать на исполняемый Python 3.11 или новее.")
+        case .repositoryPythonNotFound: showMessage(title: "Не найдено окружение Python для Gaia", detail: "В репозитории не найден .venv с исполняемым Python 3.11 или новее.")
+        case .unsupportedRepositoryPython: showMessage(title: "Неподдерживаемая версия Python", detail: "В .venv репозитория требуется Python 3.11 или новее.")
         case .portOccupied: showMessage(title: "Порт занят другой программой", detail: "Gaia не подключилась к неизвестному локальному сервису.")
         default: showMessage(title: "Не удалось запустить локальный сервер Gaia", detail: "Проверьте локальную конфигурацию Gaia и повторите запуск.")
         }
@@ -201,6 +202,6 @@ final class GaiaHostController: NSObject, WKUIDelegate, WKNavigationDelegate, WK
     }
 
     private func code(for error: GaiaHostError) -> String {
-        switch error { case .pythonNotFound: return "python_not_found"; case .unsupportedPython: return "unsupported_python"; case .repositoryNotFound: return "repository_not_found"; case .portOccupied: return "port_occupied"; case .backendUnavailable: return "backend_unavailable"; case .invalidConfiguration: return "invalid_configuration" }
+        switch error { case .invalidExplicitPython: return "invalid_explicit_python"; case .repositoryPythonNotFound: return "repository_python_not_found"; case .unsupportedRepositoryPython: return "unsupported_repository_python"; case .repositoryNotFound: return "repository_not_found"; case .portOccupied: return "port_occupied"; case .backendUnavailable: return "backend_unavailable"; case .invalidConfiguration: return "invalid_configuration" }
     }
 }
