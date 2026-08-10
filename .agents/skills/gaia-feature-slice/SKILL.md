@@ -11,18 +11,20 @@ description: "Используй для стандартной реализац�
 
 1. Проверь baseline: branch, `HEAD`, clean/dirty working tree и релевантную ancestry. Сохрани исходные значения для отчёта.
 2. Прочитай source-of-truth документацию по затронутой подсистеме, включая действующие privacy, storage, provenance, workspace-isolation, export и human-confirmation contracts.
-3. Сформулируй минимальный scope и границы того, что остаётся вне задачи. При изменении символов выполни GitNexus impact analysis согласно `AGENTS.md`.
+3. Сформулируй минимальный scope, frozen acceptance criteria (если они согласованы) и границы того, что остаётся вне задачи. При изменении символов выполни GitNexus impact analysis согласно `AGENTS.md`.
 4. Исследуй существующую реализацию и тесты; не подменяй принятое архитектурное решение собственным.
 5. Внеси минимальные изменения, нужные для задачи. Не добавляй попутный рефакторинг.
 6. Выполни целевые тесты.
 7. Выполни релевантную полную регрессию; для обычной Python-задачи Gaia canonical команда — `python3 -B -m unittest discover -s tests`.
 8. Выполни применимые syntax/static checks (в том числе `python3 -B -m gaia.config`, когда затронута конфигурация или нужен стандартный sanity check) и `git diff --check`.
 9. Если slice затрагивает документируемое поведение, contract, config, architecture или workflow, выполни `documentation-governance` в режиме `sync`: сначала implementation и тесты, затем targeted documentation sync, затем финальная проверка slice. Для действительно code-internal изменения явно зафиксируй `documentation impact: none`.
-10. Проверь `git diff` на scope creep. Перед commit выполни GitNexus `detect_changes()` согласно `AGENTS.md`.
-11. Не переписывай normative documentation под противоречащую реализацию: зафиксируй `CONTRACT_VIOLATION` и верни вопрос архитектору.
-12. Повтори проверки, на которые повлияли документация или финальные правки.
-13. Создавай commit только если это прямо разрешено текущей задачей.
-14. Верни структурированный итог: branch, исходный/итоговый SHA, файлы, scope, проверки с counts и всеми failures/errors/skips, documentation impact, status и вне-scope findings.
+10. Триажируй новые находки по правилам `AGENTS.md`: исправляй в текущем slice только BLOCKER; TECH DEBT и IMPROVEMENT фиксируй с доказательствами, если это полезно, без расширения scope. Review не расширяет молча frozen acceptance contract.
+11. При recoverable execution failure (например, patch context mismatch, line drift, diagnosable test failure в принятом scope, неподходящая поддержанная команда или локальная implementation mistake) перечитай текущее состояние, адаптируйся, повтори и продолжай. Останавливайся только для genuine blocker, который требует решения пользователя или архитектора.
+12. Проверь `git diff` на scope creep. Перед commit выполни GitNexus `detect_changes()` согласно `AGENTS.md`.
+13. Не переписывай normative documentation под противоречащую реализацию: зафиксируй `CONTRACT_VIOLATION` и верни вопрос архитектору.
+14. Повтори проверки, на которые повлияли документация или финальные правки.
+15. Создавай commit только если это прямо разрешено текущей задачей.
+16. Верни структурированный итог: branch, исходный/итоговый SHA, файлы, scope, проверки с counts и всеми failures/errors/skips, documentation impact, status и вне-scope findings.
 
 ## Границы
 
