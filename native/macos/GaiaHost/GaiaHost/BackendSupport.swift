@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct GaiaOrigin: Equatable {
     let port: Int
@@ -72,19 +73,9 @@ struct BackendLocator {
     }
 
     private func supportsPython311(_ executable: URL) -> Bool {
-        let process = Process()
-        let exited = DispatchSemaphore(value: 0)
-        process.executableURL = executable
-        process.arguments = ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { _ in exited.signal() }
-        do { try process.run() } catch { return false }
-        guard exited.wait(timeout: .now() + 1) == .success else {
-            if process.isRunning { process.terminate() }
-            return false
-        }
-        return process.terminationStatus == 0
+        let source = "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+        guard let probe = IsolatedProbe(executable: executable.path, arguments: ["-c", source]) else { return false }
+        return probe.run(timeout: 1) == 0
     }
 
     func configuredOrigin(in repository: URL) throws -> GaiaOrigin {
@@ -103,6 +94,92 @@ struct BackendLocator {
 
     private func validatedRepository(_ root: URL) -> URL? {
         FileManager.default.fileExists(atPath: root.appendingPathComponent("app.py").path) ? root : nil
+    }
+}
+
+private final class IsolatedProbe {
+    private enum WaitResult { case exited(Int32), pending, failed }
+
+    private let pid: pid_t
+
+    init?(executable: String, arguments: [String]) {
+        var actions: posix_spawn_file_actions_t? = nil
+        var attributes: posix_spawnattr_t? = nil
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0) == 0,
+              posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0,
+              posix_spawnattr_setpgroup(&attributes, 0) == 0 else { return nil }
+
+        var child: pid_t = 0
+        let result = executable.withCString { executablePath in
+            arguments[0].withCString { firstArgument in
+                arguments[1].withCString { secondArgument in
+                    var argv: [UnsafeMutablePointer<CChar>?] = [UnsafeMutablePointer(mutating: executablePath), UnsafeMutablePointer(mutating: firstArgument), UnsafeMutablePointer(mutating: secondArgument), nil]
+                    return posix_spawn(&child, executablePath, &actions, &attributes, &argv, environ)
+                }
+            }
+        }
+        guard result == 0, child > 0 else { return nil }
+        pid = child
+    }
+
+    func run(timeout: TimeInterval) -> Int32? {
+        switch waitForExit(timeout: timeout) {
+        case let .exited(status):
+            guard !processGroupExists() else {
+                _ = terminateAndReap()
+                return nil
+            }
+            return exitStatus(status)
+        case .failed:
+            return nil
+        case .pending:
+            _ = terminateAndReap()
+            return nil
+        }
+    }
+
+    private func waitForExit(timeout: TimeInterval) -> WaitResult {
+        let deadline = Date().addingTimeInterval(timeout)
+        var status: Int32 = 0
+        repeat {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid { return .exited(status) }
+            if result == -1 { return .failed }
+            Thread.sleep(forTimeInterval: 0.01)
+        } while Date() < deadline
+        return .pending
+    }
+
+    private func exitStatus(_ status: Int32) -> Int32? {
+        status & 0x7f == 0 ? (status >> 8) & 0xff : nil
+    }
+
+    private func terminateAndReap() -> Bool {
+        _ = kill(-pid, SIGTERM)
+        var result = waitForExit(timeout: 0.2)
+        if processGroupExists() { _ = kill(-pid, SIGKILL) }
+        if case .pending = result { result = waitForExit(timeout: 1) }
+        guard case .exited = result else { return false }
+        return waitForProcessGroupExit(timeout: 1)
+    }
+
+    private func waitForProcessGroupExit(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if !processGroupExists() { return true }
+            Thread.sleep(forTimeInterval: 0.01)
+        } while Date() < deadline
+        return !processGroupExists()
+    }
+
+    private func processGroupExists() -> Bool {
+        if kill(-pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 }
 

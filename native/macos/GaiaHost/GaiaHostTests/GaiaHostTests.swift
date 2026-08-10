@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import Gaia
 
 final class GaiaHostTests: XCTestCase {
@@ -33,6 +34,33 @@ final class GaiaHostTests: XCTestCase {
 
     private var supportedPythonScript: String { "#!/bin/sh\n\(probeArgumentsCheck)\nexit 0\n" }
     private var unsupportedPythonScript: String { "#!/bin/sh\n\(probeArgumentsCheck)\nexit 1\n" }
+
+    private func processExists(_ pid: pid_t) -> Bool {
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    private func pid(from file: URL) throws -> pid_t {
+        guard let pid = pid_t(try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw NSError(domain: "GaiaHostTests", code: 1)
+        }
+        return pid
+    }
+
+    private func lifecycleFixture(ignoresTERM: Bool, in directory: URL) throws -> (executable: URL, wrapperPID: URL, childPID: URL) {
+        let wrapperPID = directory.appendingPathComponent("wrapper.pid")
+        let childPID = directory.appendingPathComponent("child.pid")
+        let traps = ignoresTERM ? "trap '' TERM\n" : ""
+        let child = ignoresTERM ? "(trap '' TERM; exec sleep 30) &" : "sleep 30 &"
+        let script = "#!/bin/sh\n\(probeArgumentsCheck)\n\(traps)echo $$ > '\(wrapperPID.path)'\n\(child)\nchild=$!\necho $child > '\(childPID.path)'\nwait $child\n"
+        let executable = try executableFixture(named: "python", script: script, in: directory)
+        addTeardownBlock {
+            for file in [wrapperPID, childPID] {
+                if let pid = try? self.pid(from: file), self.processExists(pid) { _ = kill(pid, SIGKILL) }
+            }
+        }
+        return (executable, wrapperPID, childPID)
+    }
 
     func testOriginAcceptsOnlyLiteralGaiaLoopback() throws {
         XCTAssertNotNil(GaiaOrigin.from(url: URL(string: "http://127.0.0.1:8787")!))
@@ -119,6 +147,41 @@ final class GaiaHostTests: XCTestCase {
 
         XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": hanging.path]).pythonExecutable(in: try repository(in: directory))) { XCTAssertEqual($0 as? GaiaHostError, .invalidExplicitPython) }
         XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+    }
+
+    func testPythonExecutableReapsNormalWrapperAndChildBeforeReturn() throws {
+        let directory = try temporaryDirectory()
+        let fixture = try lifecycleFixture(ignoresTERM: false, in: directory)
+
+        XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
+        XCTAssertFalse(processExists(try pid(from: fixture.wrapperPID)))
+        XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
+    }
+
+    func testPythonExecutableEscalatesToKillForTermIgnoringWrapperAndChild() throws {
+        let directory = try temporaryDirectory()
+        let fixture = try lifecycleFixture(ignoresTERM: true, in: directory)
+        let start = Date()
+
+        XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        XCTAssertFalse(processExists(try pid(from: fixture.wrapperPID)))
+        XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
+    }
+
+    func testPythonExecutableDoesNotKillUnrelatedProcess() throws {
+        let directory = try temporaryDirectory()
+        let fixture = try lifecycleFixture(ignoresTERM: true, in: directory)
+        let unrelated = Process()
+        unrelated.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        unrelated.arguments = ["30"]
+        try unrelated.run()
+        addTeardownBlock { if unrelated.isRunning { unrelated.terminate() } }
+
+        XCTAssertThrowsError(try BackendLocator(environment: ["GAIA_PYTHON": fixture.executable.path]).pythonExecutable(in: try repository(in: directory)))
+        XCTAssertTrue(processExists(unrelated.processIdentifier))
+        XCTAssertFalse(processExists(try pid(from: fixture.wrapperPID)))
+        XCTAssertFalse(processExists(try pid(from: fixture.childPID)))
     }
 
     func testOwnershipStatesAreDistinct() {
