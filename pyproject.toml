@@ -8,11 +8,13 @@ license = { text = "Proprietary" }
 authors = [
   { name = "Ilia" }
 ]
-dependencies = []
+dependencies = [
+  "pypdf>=6,<7",
+  "Pillow>=10,<13",
+]
 
 [tool.setuptools]
 packages = ["gaia"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-

@@ -90,6 +90,14 @@ class ServerContractTests(unittest.TestCase):
             Handler.handle_context_action(handler)
         self.assertEqual(response.call_args.args[2],500)
         self.assertEqual(response.call_args.args[1]["error"]["code"],"context_compile_failed")
+
+    def test_context_evidence_returns_only_safe_fragment_references(self) -> None:
+        intake = Mock(); intake.context_evidence.return_value = [{"evidence_id":"ev_visual_p1_1","modality":"visual","page":1,"locator":{"kind":"embedded_image"}}]
+        handler = SimpleNamespace(path="/api/context/ctx_1/evidence?project=synthetic")
+        with patch("gaia.server.ControlledIntake", return_value=intake), patch("gaia.server.json_response") as response:
+            Handler.handle_context_get(handler)
+        intake.context_evidence.assert_called_once_with("synthetic", "ctx_1")
+        self.assertEqual(response.call_args.args[1]["evidence"][0]["modality"], "visual")
     def test_parse_multipart_reads_fields_and_files_without_cgi(self) -> None:
         boundary = "----gaia-test-boundary"
         body = (

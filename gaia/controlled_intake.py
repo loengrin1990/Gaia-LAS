@@ -20,6 +20,7 @@ from .protection import protect
 from .protection import safe_report
 from .review import ReviewService
 from .context_compiler import ContextCompiler, ContextService
+from .material_reader import MaterialReader
 
 
 class ControlledIntake:
@@ -44,7 +45,8 @@ class ControlledIntake:
         materials: list[dict[str, Any]] = []
         protected_uploads: list[tuple[str, bytes]] = []
         for filename, content in uploaded:
-            source = self.store.accept_bytes(workspace_id, content, "application/octet-stream")
+            is_pdf = Path(filename).suffix.lower() == ".pdf"
+            source = self.store.accept_bytes(workspace_id, content, "application/pdf" if is_pdf else "application/octet-stream")
             material = {"source_id": source["source_id"], "duplicate": source["duplicate"], "status": "duplicate" if source["duplicate"] else "accepted"}
             if source["duplicate"]:
                 # Never fall back to raw bytes for an already admitted source.
@@ -56,7 +58,7 @@ class ControlledIntake:
                 if prior_id and prior_id != source["source_id"]:
                     self.store.supersede_source(workspace_id, source["source_id"], prior_id)
                     material["status"] = "new_version"
-                extraction = self.store.create_extraction(workspace_id, source["source_id"], "gaia-extractor-v1")
+                extraction = MaterialReader().create_pdf_extraction(self.store, workspace_id, source["source_id"]) if is_pdf else self.store.create_extraction(workspace_id, source["source_id"], "gaia-extractor-v1")
                 material["artifact_id"] = extraction["artifact_id"]
                 outcome = protect(self.store, workspace_id, extraction["artifact_id"], self.dictionary(project))
                 material["sanitized_id"] = outcome["sanitized"]["artifact_id"]
@@ -149,6 +151,13 @@ class ControlledIntake:
 
     def context(self, project: str) -> ContextService:
         return ContextService(self.store, self._workspace_for(project))
+
+    def context_evidence(self, project: str, context_id: str) -> list[dict[str, Any]]:
+        """Return safe, page-level evidence references for one context item."""
+        workspace_id = self.existing_workspace(project)
+        if not workspace_id:
+            raise ProvenanceError("Рабочее пространство не найдено.")
+        return MaterialReader().supporting_evidence(self.store, workspace_id, context_id)
 
     def reprocess_protection(self, project: str, extraction_id: str, rules_version: str) -> dict[str, Any]:
         workspace_id = self._workspace_for(project)

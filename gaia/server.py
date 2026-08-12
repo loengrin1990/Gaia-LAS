@@ -632,6 +632,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload=ContextAttemptStore(intake.store).get(workspace,parts[3]) or {"status":"not_started","candidate_count":0}
                 payload["user_message"]=safe_message(str(payload.get("status") or ""),str(payload.get("error_code") or "")) if payload.get("status") != "not_started" else ""
                 json_response(self,payload); return
+            if len(parts) >= 5 and parts[4] == "evidence": json_response(self, {"evidence": intake.context_evidence(project, parts[3])}); return
             service=intake.context(project)
             if len(parts) >= 4 and parts[3] == "summary": json_response(self, service.summary({key:value[0] for key,value in parse_qs(route.query).items() if key != "project"})); return
             if len(parts) >= 4: json_response(self, service.get(parts[3])); return
