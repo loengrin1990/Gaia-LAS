@@ -7,6 +7,7 @@
   {"path": "docs/SECURITY_STORAGE_POLICY.md", "genre": "normative_rules", "authority": "normative", "purpose": "Контракт хранения и безопасности."},
   {"path": "docs/STORAGE_MODEL.md", "genre": "normative_rules", "authority": "normative", "purpose": "Модель хранения и происхождения."},
   {"path": "docs/OPERATIONAL_CONTEXT_V0.md", "genre": "normative_rules", "authority": "normative", "purpose": "Архитектурный контракт Operational Context v0."},
+  {"path": "docs/OPERATIONAL_CONTEXT_STORE.md", "genre": "reference", "authority": "descriptive", "purpose": "Реализация изолированного persistence слоя Operational Context v0 (OC-1)."},
   {"path": "docs/STAGE_6_NATIVE_HOST_CONTRACT.md", "genre": "normative_rules", "authority": "normative", "purpose": "Контракт нативного host."},
   {"path": "docs/CONTEXT_COMPILER.md", "genre": "reference", "authority": "descriptive", "purpose": "Устройство компилятора проектного контекста."},
   {"path": "docs/CONTEXT_COMPILER_RELIABILITY.md", "genre": "reference", "authority": "descriptive", "purpose": "Надёжность и contract маршрута компилятора."},
