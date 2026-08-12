@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 import unittest
 
@@ -15,20 +13,15 @@ from gaia.provenance import ProvenanceError
 from gaia.review import ReviewService
 
 
-FIXTURE_ENV = "RPM_ACCEPTANCE_FIXTURE"
+FIXTURE = Path(__file__).parent / "fixtures" / "RPM-0_acceptance_mixed_technical_architecture.pdf"
+VISUAL_FRONTEND_PLACEMENT = 'VISUAL_LAYOUT: "Frontend" is placed inside a node group.'
 
 
 class MaterialReaderAcceptanceTests(unittest.TestCase):
     def fixture(self) -> Path:
-        value = os.environ.get(FIXTURE_ENV, "")
-        if not value:
-            self.skipTest(f"Set {FIXTURE_ENV} to run the exact RPM-1 acceptance fixture.")
-        path = Path(value)
-        if not path.is_file():
-            self.skipTest(f"The configured RPM-1 fixture is unavailable: {path}")
-        return path
+        self.assertTrue(FIXTURE.is_file(), f"RPM-1 acceptance fixture is required: {FIXTURE}")
+        return FIXTURE
 
-    @unittest.skipUnless(shutil.which("tesseract"), "Tesseract is required for the visual acceptance case.")
     def test_mixed_fixture_reaches_text_visual_cross_modal_context_with_provenance(self) -> None:
         fixture = self.fixture()
         reader = MaterialReader()
@@ -39,11 +32,15 @@ class MaterialReaderAcceptanceTests(unittest.TestCase):
         self.assertTrue(any(item.modality == "text" and item.state == "ready" for item in result.evidence))
         self.assertTrue(any(item.modality == "table_layout" and item.state == "ready" for item in result.evidence))
 
-        # Visual-only: this label comes from the embedded diagram image, which
-        # native page text does not expose. No fixture-specific mapping is used.
-        visual = [item for item in result.evidence if item.modality == "visual"]
-        self.assertTrue(visual)
-        self.assertTrue(any(item.state == "ready" and "ocr service" in item.text.casefold() for item in visual))
+        # Visual-only: generic OCR geometry derives the Frontend placement from
+        # the diagram.  The native page text names Frontend Service, but contains
+        # neither this observation nor any placement/group relationship.
+        native = next(item for item in result.evidence if item.evidence_id == "ev_text_p1")
+        visual = next(item for item in result.evidence if item.evidence_id == "ev_visual_p1_1")
+        self.assertEqual(visual.state, "ready")
+        self.assertIn(VISUAL_FRONTEND_PLACEMENT, visual.text)
+        self.assertNotIn(VISUAL_FRONTEND_PLACEMENT, native.text)
+        self.assertNotRegex(native.text, r"Frontend.{0,120}(?:inside|group)|(?:inside|group).{0,120}Frontend")
 
         temporary = tempfile.TemporaryDirectory()
         try:
@@ -58,42 +55,59 @@ class MaterialReaderAcceptanceTests(unittest.TestCase):
             review.start(sanitized["artifact_id"])
             review.confirm(sanitized["artifact_id"])
 
-            def model(text: str) -> dict[str, object]:
-                visual_match = re.search(r"Frontend SPA", text)
+            def visual_model(text: str) -> dict[str, object]:
+                visual_match = re.search(re.escape(VISUAL_FRONTEND_PLACEMENT), text)
                 if visual_match is not None:
                     return {"candidates": [{
                         "type": "requirement",
-                        "title": "Визуальный компонент Frontend SPA",
-                        "statement": "На архитектурной схеме присутствует Frontend SPA.",
+                        "title": "Frontend расположен в группе компонентов",
+                        "statement": "Frontend расположен внутри визуально выделенной node group.",
                         "block": {"start": visual_match.start(), "end": visual_match.end()},
+                        "material_evidence_ids": ["ev_visual_p1_1"],
                         "confidence": "high",
                         "requires_review": True,
                     }]}
-                match = re.search(r"Backend Service \(FastAPI\)\s+OCR Service", text)
-                if match is None:
+                return {"candidates": []}
+
+            visual_context = ContextCompiler(store, workspace, visual_model).compile(sanitized["artifact_id"], compiler_version="rpm-1-visual-only")[0]
+            visual_support = intake.context_evidence("rpm-1-acceptance", visual_context["id"])
+            self.assertEqual({item["modality"] for item in visual_support}, {"visual"})
+            self.assertEqual({item["support"] for item in visual_support}, {"explicit_reference"})
+            visual_evidence = next(item for item in visual_support if item["modality"] == "visual")
+            self.assertEqual(visual_evidence["locator"], {"kind": "embedded_image", "page": 1, "image_index": 1})
+            self.assertTrue(all(item["page"] == 1 and item["origin"] for item in visual_support))
+            self.assertEqual(store.lineage(workspace, visual_context["id"])["source_id"], source["source_id"])
+            self.assertEqual(visual_context["material_evidence_ids"], ["ev_visual_p1_1"])
+
+            def cross_modal_model(text: str) -> dict[str, object]:
+                visual_match = re.search(re.escape(VISUAL_FRONTEND_PLACEMENT), text)
+                native_match = re.search(r"Frontend Service\s*Статическое SPA приложение", text)
+                if visual_match is None or native_match is None:
                     return {"candidates": []}
                 return {"candidates": [{
                     "type": "requirement",
-                    "title": "Передача документов в OCR",
-                    "statement": "Backend Service передаёт документы в OCR Service.",
-                    "block": {"start": match.start(), "end": match.end()},
+                    "title": "Frontend SPA находится в группе компонентов",
+                    "statement": "Frontend Service — статическое SPA приложение в визуально выделенной node group.",
+                    "block": {"start": native_match.start(), "end": native_match.end()},
+                    "material_evidence_ids": ["ev_text_p1", "ev_visual_p1_1"],
                     "confidence": "high",
                     "requires_review": True,
                 }]}
 
-            context = ContextCompiler(store, workspace, model).compile(sanitized["artifact_id"])
-            self.assertEqual(len(context), 2)
-            visual_context = next(item for item in context if item["title"] == "Визуальный компонент Frontend SPA")
-            visual_support = intake.context_evidence("rpm-1-acceptance", visual_context["id"])
-            self.assertEqual({item["modality"] for item in visual_support}, {"visual"})
-            self.assertEqual(visual_support[0]["locator"], {"kind": "embedded_image", "page": 1, "image_index": 1})
-            cross_modal = next(item for item in context if item["title"] == "Передача документов в OCR")
+            cross_modal = ContextCompiler(store, workspace, cross_modal_model).compile(sanitized["artifact_id"], compiler_version="rpm-1-cross-modal")[0]
             support = intake.context_evidence("rpm-1-acceptance", cross_modal["id"])
-            self.assertIn("table_layout", {item["modality"] for item in support})
-            self.assertIn("visual", {item["modality"] for item in support})
-            self.assertTrue(all(item["page"] >= 1 and item["locator"] for item in support))
-            self.assertEqual(store.lineage(workspace, visual_context["id"])["source_id"], source["source_id"])
+            self.assertEqual({item["modality"] for item in support}, {"text", "visual"})
+            self.assertEqual({item["support"] for item in support}, {"explicit_reference"})
+            text_evidence = next(item for item in support if item["modality"] == "text")
+            self.assertEqual(text_evidence["locator"], {"kind": "page", "page": 1})
+            self.assertTrue(all(item["page"] == 1 and item["origin"] for item in support))
             self.assertEqual(store.lineage(workspace, cross_modal["id"])["source_id"], source["source_id"])
+            self.assertEqual(cross_modal["material_evidence_ids"], ["ev_text_p1", "ev_visual_p1_1"])
+
+            # The same candidate factory fails closed when either real modality
+            # is absent: no cross-modal result is asserted from coexistence alone.
+            self.assertEqual(cross_modal_model(result.text.replace(VISUAL_FRONTEND_PLACEMENT, ""))["candidates"], [])
+            self.assertEqual(cross_modal_model(result.text.replace("Frontend ServiceСтатическое SPA приложение", ""))["candidates"], [])
         finally:
             temporary.cleanup()
 

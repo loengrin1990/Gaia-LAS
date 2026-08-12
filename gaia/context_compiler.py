@@ -22,6 +22,7 @@ PROMPT_SCHEMA_VERSION = "context-schema-v4-evidence-id"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
 RELATIONS_FIELD = "relations"
+MATERIAL_EVIDENCE_IDS_FIELD = "material_evidence_ids"
 MAX_CANDIDATES = 32
 MAX_TOTAL_CANDIDATES = 512
 MAX_RESULT_SIZE = 48_000
@@ -49,6 +50,7 @@ def context_response_schema(max_candidates: int, evidence_ids: list[str] | tuple
     for field in OPTIONAL:
         properties[field] = {"type": "string"}
     properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 8}
+    properties[MATERIAL_EVIDENCE_IDS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "minItems": 1, "maxItems": 8}
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_id", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
@@ -263,7 +265,7 @@ class ContextCompiler:
                 values = {key: candidate.get(key) for key in OPTIONAL - {"status"} if key in candidate}
                 if "status" in candidate: values["explicit_status"] = candidate["status"]
                 if RELATIONS_FIELD in candidate: values["proposed_relations"] = candidate[RELATIONS_FIELD]
-                record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=candidate.get("block_links", [candidate["block"]]), title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route=str(route["provider"]), model_name=str(route["model"]), version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **values)
+                record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=candidate.get("block_links", [candidate["block"]]), material_evidence_ids=list(candidate.get(MATERIAL_EVIDENCE_IDS_FIELD, [])), title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route=str(route["provider"]), model_name=str(route["model"]), version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **values)
                 for old in objects.values():
                     if old.get("workspace_id") != self.workspace_id or old.get("kind") != "context": continue
                     if old.get("item_type") == record["item_type"] and old.get("title", "").strip().casefold() == record["title"].strip().casefold() and old.get("statement") != record["statement"]:
@@ -429,7 +431,7 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
                 raise CandidateValidationError("evidence_id_missing")
         if not active_required.issubset(item):
             raise CandidateValidationError("schema_required_fields")
-        if set(item) - active_required - OPTIONAL - {RELATIONS_FIELD}:
+        if set(item) - active_required - OPTIONAL - {RELATIONS_FIELD, MATERIAL_EVIDENCE_IDS_FIELD}:
             raise CandidateValidationError("schema_unknown_field")
         if item["type"] not in TYPES: raise CandidateValidationError("unknown_type")
         if (not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str)
@@ -450,6 +452,8 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
             if field in item and not isinstance(item[field],str): raise CandidateValidationError("schema_optional_field")
         if RELATIONS_FIELD in item and (not isinstance(item[RELATIONS_FIELD], list) or len(item[RELATIONS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[RELATIONS_FIELD])):
             raise CandidateValidationError("schema_relations")
+        if MATERIAL_EVIDENCE_IDS_FIELD in item and (not isinstance(item[MATERIAL_EVIDENCE_IDS_FIELD], list) or not item[MATERIAL_EVIDENCE_IDS_FIELD] or len(item[MATERIAL_EVIDENCE_IDS_FIELD]) > 8 or any(not isinstance(value, str) or not value.strip() or len(value) > 160 for value in item[MATERIAL_EVIDENCE_IDS_FIELD])):
+            raise CandidateValidationError("schema_material_evidence")
         result.append(dict(item))
     return result
 

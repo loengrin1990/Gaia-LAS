@@ -75,6 +75,7 @@ class MaterialReader:
         evidence: list[MaterialEvidence] = []
         text_parts: list[str] = []
         for page_number, page in enumerate(reader.pages, 1):
+            page_text_parts: list[str] = []
             try:
                 native_text = page.extract_text(extraction_mode="layout") or ""
             except Exception:
@@ -87,7 +88,7 @@ class MaterialReader:
                 # The legacy Veil/context path accepts text, not a layout tree.
                 # Keep the stronger page layout as evidence above, while giving
                 # that existing path one bounded paragraph per page.
-                text_parts.append(_context_text(native_text))
+                page_text_parts.append(_context_text(native_text))
                 table_text = _table_layout(native_text)
                 if table_text:
                     evidence.append(MaterialEvidence(
@@ -111,13 +112,17 @@ class MaterialReader:
                     ))
                     continue
                 state, observed = self._ocr(image_bytes)
+                if state == "ready":
+                    observed = "\n".join(filter(None, (observed, self._layout_observations(image_bytes))))
                 evidence.append(MaterialEvidence(
                     f"ev_visual_p{page_number}_{image_index}", "visual", page_number,
                     {"kind": "embedded_image", "page": page_number, "image_index": image_index},
                     "embedded_pdf_image", state, observed, image_bytes,
                 ))
                 if state == "ready" and observed.strip():
-                    text_parts.append(_context_text(observed))
+                    page_text_parts.append(_context_text(observed))
+            if page_text_parts:
+                text_parts.append(" ".join(page_text_parts))
 
         if not text_parts:
             raise MaterialReaderError("PDF не содержит доступного текстового или визуального представления.")
@@ -139,6 +144,19 @@ class MaterialReader:
         manifest = self._manifest(store, workspace_id, extraction_id)
         if not manifest:
             return []
+        explicit_ids = context.get("material_evidence_ids")
+        if isinstance(explicit_ids, list) and explicit_ids:
+            by_id = {item.get("evidence_id"): item for item in manifest.get("evidence", [])}
+            result = []
+            for evidence_id in explicit_ids:
+                item = by_id.get(evidence_id)
+                if not isinstance(evidence_id, str) or not item or item.get("state") != "ready":
+                    continue
+                result.append({
+                    "evidence_id": item["evidence_id"], "modality": item["modality"], "page": item["page"],
+                    "locator": item["locator"], "origin": item["origin"], "support": "explicit_reference",
+                })
+            return result
         body = (store.root / "sanitized" / workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")
         fragments = []
         for link in context.get("block_links") or []:
@@ -179,6 +197,47 @@ class MaterialReader:
             return "error", ""
         observed = result.stdout.decode("utf-8", errors="replace").strip()
         return ("ready", observed) if observed else ("unsupported", "")
+
+    def _layout_observations(self, image_bytes: bytes) -> str:
+        """Derive generic component-in-group observations from OCR geometry.
+
+        This recognises a component title by the nearby C4 ``[Container: ...]``
+        line and a group by its ``... node group`` label.  It uses positions only;
+        it has no fixture or domain-component vocabulary.
+        """
+        if not shutil.which(self.ocr_command):
+            return ""
+        try:
+            result = subprocess.run(
+                [self.ocr_command, "stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"],
+                input=image_bytes, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=self.ocr_timeout_seconds, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        if result.returncode != 0:
+            return ""
+        words = _tsv_words(result.stdout.decode("utf-8", errors="replace"))
+        groups = [word for word in words if word["text"].casefold() == "group" and any("ode" in other["text"].casefold() for other in words if abs(other["top"] - word["top"]) < 24 and 0 < word["left"] - other["left"] < 180)]
+        observations: set[str] = set()
+        for title in words:
+            if not title["text"] or not title["text"][0].isupper():
+                continue
+            is_container = any(
+                "container" in descriptor["text"].casefold()
+                and abs(descriptor["left"] - title["left"]) < 130
+                and 0 < descriptor["top"] - title["top"] < 80
+                for descriptor in words
+            )
+            if not is_container:
+                continue
+            if any(
+                group["left"] <= title["left"] <= group["left"] + 1300
+                and 0 < group["top"] - title["top"] < 280
+                for group in groups
+            ):
+                observations.add(f'VISUAL_LAYOUT: "{title["text"]}" is placed inside a node group.')
+        return "\n".join(sorted(observations))
 
     def _persist(self, store: ProvenanceStore, workspace_id: str, source_id: str, extraction_id: str, evidence: tuple[MaterialEvidence, ...]) -> None:
         directory = store.root / "artifacts" / workspace_id
@@ -224,3 +283,16 @@ def _context_text(text: str) -> str:
 
 def _terms(value: str) -> set[str]:
     return {term.casefold() for term in re.findall(r"[A-Za-zА-Яа-яЁё0-9]{3,}", value)}
+
+
+def _tsv_words(value: str) -> list[dict[str, Any]]:
+    rows = []
+    for line in value.splitlines()[1:]:
+        fields = line.split("\t")
+        if len(fields) != 12 or fields[0] != "5" or not fields[11].strip():
+            continue
+        try:
+            rows.append({"left": int(fields[6]), "top": int(fields[7]), "text": fields[11].strip()})
+        except ValueError:
+            continue
+    return rows
