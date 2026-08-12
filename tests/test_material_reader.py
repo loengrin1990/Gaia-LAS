@@ -111,35 +111,46 @@ class MaterialReaderAcceptanceTests(unittest.TestCase):
             # Every negative case executes the production persistence guard, not
             # a test-double predicate.  No invalid reference can create a fully
             # grounded cross-modal context item.
-            def declared_model(evidence_ids: list[str], modalities: list[str]) -> object:
+            def declared_model(evidence_ids: list[str], modalities: list[str] | None, label: str) -> object:
                 def model(text: str) -> dict[str, object]:
                     native_match = re.search(r"Frontend Service\s*Статическое SPA приложение", text)
                     if native_match is None:
                         return {"candidates": []}
-                    return {"candidates": [{
+                    candidate: dict[str, object] = {
                         "type": "requirement",
-                        "title": "Проверка обязательной multimodal опоры",
-                        "statement": "Frontend Service — статическое SPA приложение в визуально выделенной node group.",
+                        "title": f"Проверка обязательной multimodal опоры: {label}",
+                        "statement": f"Frontend Service — статическое SPA приложение в визуально выделенной node group ({label}).",
                         "block": {"start": native_match.start(), "end": native_match.end()},
                         "material_evidence_ids": evidence_ids,
-                        "material_evidence_modalities": modalities,
                         "confidence": "high",
                         "requires_review": True,
-                    }]}
+                    }
+                    if modalities is not None:
+                        candidate["material_evidence_modalities"] = modalities
+                    return {"candidates": [candidate]}
                 return model
 
             failures = {
-                "missing_visual": (["ev_text_p1", "ev_missing_visual"], ["text", "visual"], "material_evidence_unknown"),
-                "missing_text": (["ev_missing_text", "ev_visual_p1_1"], ["text", "visual"], "material_evidence_unknown"),
+                "missing_visual": (["ev_text_p1"], ["text", "visual"], "material_evidence_modality"),
+                "missing_text": (["ev_visual_p1_1"], ["text", "visual"], "material_evidence_modality"),
                 "arbitrary": (["ev_not_from_this_material"], ["text", "visual"], "material_evidence_unknown"),
                 "wrong_modality": (["ev_table_p1", "ev_visual_p1_1"], ["text", "visual"], "material_evidence_modality"),
+                "declared_visual_only": (["ev_visual_p1_1"], ["visual"], "material_evidence_modality"),
+                "declared_text_only": (["ev_text_p1"], ["text"], "material_evidence_modality"),
+                "modalities_omitted": (["ev_visual_p1_1"], None, "material_evidence_modality"),
             }
             for name, (evidence_ids, modalities, diagnostic_code) in failures.items():
                 with self.subTest(name=name), self.assertRaises(ContextCompileError) as rejected:
-                    ContextCompiler(store, workspace, declared_model(evidence_ids, modalities)).compile(
-                        sanitized["artifact_id"], compiler_version=f"rpm-1-negative-{name}",
+                    ContextCompiler(store, workspace, declared_model(evidence_ids, modalities, name)).compile(
+                        sanitized["artifact_id"], compiler_version=f"rpm-1-cross-modal-{name}",
                     )
                 self.assertEqual(rejected.exception.diagnostic_code, diagnostic_code)
+
+            weakened = ContextCompiler(
+                store, workspace, declared_model(["ev_text_p1", "ev_visual_p1_1"], ["visual"], "weakened_declaration"),
+            ).compile(sanitized["artifact_id"], compiler_version="rpm-1-cross-modal-weakened")[0]
+            self.assertEqual(weakened["material_evidence_modalities"], ["text", "visual"])
+            self.assertEqual({item["modality"] for item in weakened["material_evidence_links"]}, {"text", "visual"})
         finally:
             temporary.cleanup()
 

@@ -25,6 +25,8 @@ RELATIONS_FIELD = "relations"
 MATERIAL_EVIDENCE_IDS_FIELD = "material_evidence_ids"
 MATERIAL_EVIDENCE_MODALITIES_FIELD = "material_evidence_modalities"
 MATERIAL_EVIDENCE_MODALITIES = {"text", "table_layout", "visual"}
+RPM1_CROSS_MODAL_COMPILER_VERSION = "rpm-1-cross-modal"
+RPM1_CROSS_MODAL_REQUIRED_MODALITIES = {"text", "visual"}
 MAX_CANDIDATES = 32
 MAX_TOTAL_CANDIDATES = 512
 MAX_RESULT_SIZE = 48_000
@@ -260,7 +262,7 @@ class ContextCompiler:
         with path_lock(self.store.registry_path):
             registry = self.store._registry(); objects = registry["objects"]; result: list[dict[str, Any]] = []
             for candidate in candidates:
-                material_evidence = self._resolve_material_evidence(sanitized_id, candidate)
+                material_evidence = self._resolve_material_evidence(sanitized_id, candidate, compiler_version)
                 duplicate = next((x for x in objects.values() if x.get("kind") == "context" and x.get("workspace_id") == self.workspace_id and x.get("item_type") == candidate["type"] and str(x.get("statement", "")).strip().casefold() == candidate["statement"].strip().casefold()), None)
                 if duplicate:
                     duplicate = dict(duplicate); sources = list(duplicate.get("source_links") or [])
@@ -273,7 +275,8 @@ class ContextCompiler:
                 for evidence in material_evidence:
                     if evidence["block"] not in blocks:
                         blocks.append(evidence["block"])
-                record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=blocks, material_evidence_ids=list(candidate.get(MATERIAL_EVIDENCE_IDS_FIELD, [])), material_evidence_modalities=list(candidate.get(MATERIAL_EVIDENCE_MODALITIES_FIELD, [])), material_evidence_links=[{key: evidence[key] for key in ("evidence_id", "modality", "page", "locator", "origin")} for evidence in material_evidence], title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route=str(route["provider"]), model_name=str(route["model"]), version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **values)
+                actual_modalities = sorted({evidence["modality"] for evidence in material_evidence})
+                record = self.store._record(self.store._id("ctx"), self.workspace_id, "context", item_type=candidate["type"], parents=[sanitized_id], source_links=[sanitized_id], block_links=blocks, material_evidence_ids=list(candidate.get(MATERIAL_EVIDENCE_IDS_FIELD, [])), material_evidence_modalities=actual_modalities, material_evidence_links=[{key: evidence[key] for key in ("evidence_id", "modality", "page", "locator", "origin")} for evidence in material_evidence], title=candidate["title"], statement=candidate["statement"], status="requires_review", confidence=candidate["confidence"], requires_review=True, compiler_version=compiler_version, prompt_schema_version=PROMPT_SCHEMA_VERSION, model_route=str(route["provider"]), model_name=str(route["model"]), version=1, supersedes_id="", confirmation_status="pending", relation_ids=[], current=True, export_allowed=False, **values)
                 for old in objects.values():
                     if old.get("workspace_id") != self.workspace_id or old.get("kind") != "context": continue
                     if old.get("item_type") == record["item_type"] and old.get("title", "").strip().casefold() == record["title"].strip().casefold() and old.get("statement") != record["statement"]:
@@ -284,7 +287,7 @@ class ContextCompiler:
             self.store._write_registry(registry)
         return result
 
-    def _resolve_material_evidence(self, sanitized_id: str, candidate: dict[str, Any]) -> list[dict[str, Any]]:
+    def _resolve_material_evidence(self, sanitized_id: str, candidate: dict[str, Any], compiler_version: str) -> list[dict[str, Any]]:
         """Resolve declared material evidence before any context record is written."""
         evidence_ids = candidate.get(MATERIAL_EVIDENCE_IDS_FIELD)
         if not evidence_ids:
@@ -316,7 +319,7 @@ class ContextCompiler:
                 "locator": item["locator"], "origin": item["origin"],
                 "block": {"start": start, "end": start + len(fragment)},
             })
-        required = set(candidate.get(MATERIAL_EVIDENCE_MODALITIES_FIELD, []))
+        required = _required_material_evidence_modalities(compiler_version, candidate)
         if required and not required.issubset({item["modality"] for item in resolved}):
             raise ContextCompileError("context_material_evidence_invalid", "Указанные фрагменты не покрывают обязательные способы извлечения.", "material_evidence_modality")
         return resolved
@@ -513,6 +516,13 @@ def _metadata_normalize(value: object) -> str:
 def _material_evidence_fragment(value: str) -> str:
     """Match the exact page-level representation sent through the text path."""
     return " ".join(line.strip() for line in value.splitlines() if line.strip())
+
+
+def _required_material_evidence_modalities(compiler_version: str, candidate: dict[str, Any]) -> set[str]:
+    """Return server-side modality requirements for a trusted material derivation."""
+    if compiler_version == RPM1_CROSS_MODAL_COMPILER_VERSION or compiler_version.startswith(RPM1_CROSS_MODAL_COMPILER_VERSION + "-"):
+        return RPM1_CROSS_MODAL_REQUIRED_MODALITIES
+    return set(candidate.get(MATERIAL_EVIDENCE_MODALITIES_FIELD, []))
 
 
 def _validate_optional_metadata_source(candidates: list[dict[str, Any]], text: str) -> None:
