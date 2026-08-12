@@ -5,7 +5,7 @@ import re
 import tempfile
 import unittest
 
-from gaia.context_compiler import ContextCompiler
+from gaia.context_compiler import ContextCompileError, ContextCompiler
 from gaia.controlled_intake import ControlledIntake
 from gaia.material_reader import MaterialReader
 from gaia.provenance import ProvenanceStore
@@ -90,6 +90,7 @@ class MaterialReaderAcceptanceTests(unittest.TestCase):
                     "statement": "Frontend Service — статическое SPA приложение в визуально выделенной node group.",
                     "block": {"start": native_match.start(), "end": native_match.end()},
                     "material_evidence_ids": ["ev_text_p1", "ev_visual_p1_1"],
+                    "material_evidence_modalities": ["text", "visual"],
                     "confidence": "high",
                     "requires_review": True,
                 }]}
@@ -103,11 +104,42 @@ class MaterialReaderAcceptanceTests(unittest.TestCase):
             self.assertTrue(all(item["page"] == 1 and item["origin"] for item in support))
             self.assertEqual(store.lineage(workspace, cross_modal["id"])["source_id"], source["source_id"])
             self.assertEqual(cross_modal["material_evidence_ids"], ["ev_text_p1", "ev_visual_p1_1"])
+            self.assertEqual(cross_modal["material_evidence_modalities"], ["text", "visual"])
+            self.assertEqual({item["modality"] for item in cross_modal["material_evidence_links"]}, {"text", "visual"})
+            self.assertGreaterEqual(len(cross_modal["block_links"]), 2)
 
-            # The same candidate factory fails closed when either real modality
-            # is absent: no cross-modal result is asserted from coexistence alone.
-            self.assertEqual(cross_modal_model(result.text.replace(VISUAL_FRONTEND_PLACEMENT, ""))["candidates"], [])
-            self.assertEqual(cross_modal_model(result.text.replace("Frontend ServiceСтатическое SPA приложение", ""))["candidates"], [])
+            # Every negative case executes the production persistence guard, not
+            # a test-double predicate.  No invalid reference can create a fully
+            # grounded cross-modal context item.
+            def declared_model(evidence_ids: list[str], modalities: list[str]) -> object:
+                def model(text: str) -> dict[str, object]:
+                    native_match = re.search(r"Frontend Service\s*Статическое SPA приложение", text)
+                    if native_match is None:
+                        return {"candidates": []}
+                    return {"candidates": [{
+                        "type": "requirement",
+                        "title": "Проверка обязательной multimodal опоры",
+                        "statement": "Frontend Service — статическое SPA приложение в визуально выделенной node group.",
+                        "block": {"start": native_match.start(), "end": native_match.end()},
+                        "material_evidence_ids": evidence_ids,
+                        "material_evidence_modalities": modalities,
+                        "confidence": "high",
+                        "requires_review": True,
+                    }]}
+                return model
+
+            failures = {
+                "missing_visual": (["ev_text_p1", "ev_missing_visual"], ["text", "visual"], "material_evidence_unknown"),
+                "missing_text": (["ev_missing_text", "ev_visual_p1_1"], ["text", "visual"], "material_evidence_unknown"),
+                "arbitrary": (["ev_not_from_this_material"], ["text", "visual"], "material_evidence_unknown"),
+                "wrong_modality": (["ev_table_p1", "ev_visual_p1_1"], ["text", "visual"], "material_evidence_modality"),
+            }
+            for name, (evidence_ids, modalities, diagnostic_code) in failures.items():
+                with self.subTest(name=name), self.assertRaises(ContextCompileError) as rejected:
+                    ContextCompiler(store, workspace, declared_model(evidence_ids, modalities)).compile(
+                        sanitized["artifact_id"], compiler_version=f"rpm-1-negative-{name}",
+                    )
+                self.assertEqual(rejected.exception.diagnostic_code, diagnostic_code)
         finally:
             temporary.cleanup()
 
