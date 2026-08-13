@@ -16,10 +16,12 @@ from .context_chunking import ChunkLimitError, ContextChunk, split_context
 from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .context_model_executor import ContextModelExecutorError, execute_context_model_call
-from .operational_context_bridge import COLLIDING_OC_AUTHORITY, bridge_transaction, build_material_proposal, persist_material_proposals
+from .operational_context_bridge import BRIDGE_CONTRACT_VERSION, COLLIDING_OC_AUTHORITY, bridge_transaction, build_material_proposal_with_diagnostic, persist_material_proposals
 
 COMPILER_VERSION = "context-v4"
 PROMPT_SCHEMA_VERSION = "context-schema-v4-evidence-id"
+PARSER_CONTRACT_VERSION = "context-parser-v1"
+OC_SUBJECT_DIAGNOSTIC_VERSION = "oc-subject-diagnostic-v1"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
 RELATIONS_FIELD = "relations"
@@ -164,9 +166,9 @@ class ContextCompiler:
             candidates = _deduplicate_candidates(candidates)
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             if activity: activity(-2, len(chunks), self._model_attempts)
-            result = self._persist_all(item, sanitized_id, candidates, compiler_version, route, cancel_event)
+            result, producer_diagnostics = self._persist_all(item, sanitized_id, candidates, compiler_version, route, cancel_event)
             if activity: activity(-3, len(chunks), self._model_attempts)
-            self._write_receipt(sanitized_id, result, len(chunks), compiler_version, route)
+            self._write_receipt(sanitized_id, result, len(chunks), compiler_version, route, producer_diagnostics)
             terminal_reason = "success"
             return result
         except ContextCompileError as exc:
@@ -269,23 +271,24 @@ class ContextCompiler:
         raise failures[-1]
 
 
-    def _persist_all(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
+    def _persist_all(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         # Covers the read of current/pending OC authority and the eventual queue
         # insert, so concurrent material jobs cannot create two pending truths.
         with bridge_transaction(self.store.root):
             return self._persist_all_serialized(item, sanitized_id, candidates, compiler_version, route, cancel_event)
 
-    def _persist_all_serialized(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
+    def _persist_all_serialized(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
         proposals = []
         with path_lock(self.store.registry_path):
-            registry = self.store._registry(); objects = registry["objects"]; result: list[dict[str, Any]] = []
-            for candidate in candidates:
+            registry = self.store._registry(); objects = registry["objects"]; result: list[dict[str, Any]] = []; diagnostics: list[dict[str, Any]] = []
+            for candidate_index, candidate in enumerate(candidates, 1):
                 material_evidence = self._resolve_material_evidence(sanitized_id, candidate, compiler_version)
                 # Forward-only OC bridge: new extraction facts get their opaque
                 # identity from immutable evidence, never an LLM-supplied field.
                 evidence_text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")[candidate["block"]["start"]:candidate["block"]["end"]]
-                proposal = build_material_proposal(root=self.store.root, workspace_id=self.workspace_id, sanitized_id=sanitized_id, candidate=candidate, evidence_text=evidence_text, sensitivity=str(item.get("sensitivity") or "unknown")) if self._uses_local_provider else None
+                proposal, bridge_diagnostic = build_material_proposal_with_diagnostic(root=self.store.root, workspace_id=self.workspace_id, sanitized_id=sanitized_id, candidate=candidate, evidence_text=evidence_text, sensitivity=str(item.get("sensitivity") or "unknown")) if self._uses_local_provider else (None, {"stage": "bridge_rejected", "reason": "non_production_model"})
+                diagnostics.append(_producer_diagnostic_record(candidate, candidate_index, compiler_version, route, bridge_diagnostic))
                 if proposal is COLLIDING_OC_AUTHORITY:
                     continue
                 if proposal is not None:
@@ -316,7 +319,7 @@ class ContextCompiler:
         if cancel_event is not None and cancel_event.is_set():
             raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
         persist_material_proposals(self.store.root, proposals)
-        return result
+        return result, diagnostics
 
     def _resolve_material_evidence(self, sanitized_id: str, candidate: dict[str, Any], compiler_version: str) -> list[dict[str, Any]]:
         """Resolve declared material evidence before any context record is written."""
@@ -375,8 +378,8 @@ class ContextCompiler:
             if record.get("kind") != "context": raise ContextCompileError("receipt_invalid", "Сохранённый результат сборки контекста повреждён или не относится к текущему материалу.")
             result.append(record)
         return result
-    def _write_receipt(self, sanitized_id: str, result: list[dict[str, Any]], chunks: int, compiler_version: str, route: dict[str, Any]) -> None:
-        atomic_write_text(self._receipt_path(sanitized_id), json.dumps({"status":"complete","workspace_id":self.workspace_id,"sanitized_id":sanitized_id,"context_ids":[item.get("id","") for item in result],"chunk_count":chunks,"candidate_count":len(result),"compiler_version":compiler_version,"prompt_schema_version":PROMPT_SCHEMA_VERSION,"route":route.get("task", TASK_CONTEXT_COMPILER),"provider":route.get("provider", ""),"model":route.get("model", ""),"completed_at":datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False)+"\n")
+    def _write_receipt(self, sanitized_id: str, result: list[dict[str, Any]], chunks: int, compiler_version: str, route: dict[str, Any], producer_diagnostics: list[dict[str, Any]]) -> None:
+        atomic_write_text(self._receipt_path(sanitized_id), json.dumps({"status":"complete","workspace_id":self.workspace_id,"sanitized_id":sanitized_id,"context_ids":[item.get("id","") for item in result],"chunk_count":chunks,"candidate_count":len(result),"compiler_version":compiler_version,"prompt_schema_version":PROMPT_SCHEMA_VERSION,"parser_contract_version":PARSER_CONTRACT_VERSION,"producer_bridge_version":BRIDGE_CONTRACT_VERSION,"route":route.get("task", TASK_CONTEXT_COMPILER),"provider":route.get("provider", ""),"model":route.get("model", ""),"producer_diagnostics":producer_diagnostics,"completed_at":datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False)+"\n")
 
     def _exact_duplicate(self, candidate: dict[str, Any]) -> dict[str, Any] | None:
         norm = candidate["statement"].strip().casefold()
@@ -546,22 +549,101 @@ def _metadata_normalize(value: object) -> str:
 
 def _grounded_oc_subject(subject: object, evidence_id: str, evidence: str) -> dict[str, str] | None:
     """Accept only a literal, structurally complete authority-slot assertion."""
-    if not isinstance(subject, dict) or set(subject) != {"label", "evidence_id", "slot_anchor", "value_anchor"}:
+    if _oc_subject_diagnostic(subject, evidence_id, evidence)["stage"] != "grounded_valid":
         return None
     values = {key: subject.get(key) for key in ("label", "evidence_id", "slot_anchor", "value_anchor")}
-    if any(not isinstance(value, str) or not value.strip() for value in values.values()) or values["evidence_id"] != evidence_id:
-        return None
-    slot, value = str(values["slot_anchor"]), str(values["value_anchor"])
-    slot_start, value_start = evidence.find(slot), evidence.find(value)
-    if slot_start < 0 or value_start < 0 or slot_start == value_start:
-        return None
-    first_start, first_text, second_start, second_text = (slot_start, slot, value_start, value) if slot_start < value_start else (value_start, value, slot_start, slot)
-    if first_start + len(first_text) > second_start:
-        return None
-    gap = evidence[first_start + len(first_text):second_start]
-    if any(char.isalnum() for char in gap):
-        return None
     return {key: str(value).strip() for key, value in values.items()}
+
+
+def _oc_subject_presence(subject: object) -> dict[str, bool]:
+    raw = subject if isinstance(subject, dict) else {}
+    return {
+        "subject_present": subject is not None,
+        "label_present": isinstance(raw.get("label"), str) and bool(raw["label"].strip()),
+        "evidence_id_present": isinstance(raw.get("evidence_id"), str) and bool(raw["evidence_id"].strip()),
+        "slot_anchor_present": isinstance(raw.get("slot_anchor"), str) and bool(raw["slot_anchor"].strip()),
+        "value_anchor_present": isinstance(raw.get("value_anchor"), str) and bool(raw["value_anchor"].strip()),
+    }
+
+
+def _oc_subject_diagnostic(subject: object, evidence_id: str, evidence: str) -> dict[str, Any]:
+    """Classify OC subject grounding without retaining candidate or source content."""
+    flags = _oc_subject_presence(subject)
+    result: dict[str, Any] = {
+        "diagnostic_version": OC_SUBJECT_DIAGNOSTIC_VERSION,
+        "stage": "absent_from_model",
+        "reason": "oc_subject_absent",
+        "flags": flags,
+        "slot_anchor_length": 0,
+        "value_anchor_length": 0,
+    }
+    if subject is None:
+        return result
+    if not isinstance(subject, dict) or set(subject) != {"label", "evidence_id", "slot_anchor", "value_anchor"}:
+        result.update(stage="incomplete", reason="oc_subject_shape_incomplete")
+        return result
+    values = {key: subject.get(key) for key in ("label", "evidence_id", "slot_anchor", "value_anchor")}
+    if not isinstance(values["label"], str) or not values["label"].strip():
+        result.update(stage="incomplete", reason="label_missing")
+        return result
+    if not isinstance(values["evidence_id"], str) or not values["evidence_id"].strip():
+        result.update(stage="evidence_unresolved", reason="oc_subject_evidence_id_missing")
+        return result
+    if not isinstance(values["slot_anchor"], str) or not values["slot_anchor"].strip():
+        result.update(stage="slot_anchor_missing", reason="slot_anchor_missing")
+        return result
+    if not isinstance(values["value_anchor"], str) or not values["value_anchor"].strip():
+        result.update(stage="value_anchor_missing", reason="value_anchor_missing")
+        return result
+    slot, value = str(values["slot_anchor"]), str(values["value_anchor"])
+    result["slot_anchor_length"] = len(slot)
+    result["value_anchor_length"] = len(value)
+    if values["evidence_id"] != evidence_id:
+        result.update(stage="evidence_unresolved", reason="oc_subject_evidence_id_mismatch")
+        return result
+    slot_start = evidence.find(slot)
+    if slot_start < 0:
+        result.update(stage="slot_anchor_not_literal", reason="slot_anchor_not_literal")
+        return result
+    value_start = evidence.find(value)
+    if value_start < 0:
+        result.update(stage="value_anchor_not_literal", reason="value_anchor_not_literal")
+        return result
+    if slot_start == value_start:
+        result.update(stage="assertion_shape_invalid", reason="anchors_same_position")
+        return result
+    first_start, first_text, second_start = (slot_start, slot, value_start) if slot_start < value_start else (value_start, value, slot_start)
+    if first_start + len(first_text) > second_start:
+        result.update(stage="assertion_shape_invalid", reason="anchors_overlap")
+        return result
+    if any(char.isalnum() for char in evidence[first_start + len(first_text):second_start]):
+        result.update(stage="assertion_shape_invalid", reason="anchors_not_adjacent")
+        return result
+    result.update(stage="grounded_valid", reason="grounded")
+    return result
+
+
+def _producer_diagnostic_record(candidate: dict[str, Any], candidate_index: int, compiler_version: str, route: dict[str, Any], bridge: dict[str, str]) -> dict[str, Any]:
+    """Persist only categorical producer observability; never candidate text or anchors."""
+    grounding = dict(candidate.get("_oc_subject_diagnostic") or _oc_subject_diagnostic(None, "", ""))
+    return {
+        "diagnostic_version": OC_SUBJECT_DIAGNOSTIC_VERSION,
+        "candidate_index": candidate_index,
+        "candidate_type": str(candidate.get("type") or ""),
+        "evidence_id": str(candidate.get("_oc_subject_evidence_id") or ""),
+        "parser_oc_subject": "preserved" if grounding["flags"]["subject_present"] else "not_provided",
+        "oc_subject": grounding,
+        "bridge": {"stage": str(bridge.get("stage") or "bridge_rejected"), "reason": str(bridge.get("reason") or "unknown")},
+        "fingerprint": {
+            "compiler_version": compiler_version,
+            "prompt_schema_version": PROMPT_SCHEMA_VERSION,
+            "parser_contract_version": PARSER_CONTRACT_VERSION,
+            "producer_bridge_version": BRIDGE_CONTRACT_VERSION,
+            "route": str(route.get("task") or TASK_CONTEXT_COMPILER),
+            "provider": str(route.get("provider") or ""),
+            "model": str(route.get("model") or ""),
+        },
+    }
 
 
 def _material_evidence_fragment(value: str) -> str:
@@ -605,6 +687,8 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
             candidate.pop("consequence", None)
             candidate.pop(RELATIONS_FIELD, None)
             candidate.update(_ground_metadata(span.text))
+            candidate["_oc_subject_evidence_id"] = evidence_id
+            candidate["_oc_subject_diagnostic"] = _oc_subject_diagnostic(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text)
             subject = _grounded_oc_subject(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text)
             if subject is None:
                 candidate.pop(OC_SUBJECT_FIELD, None)

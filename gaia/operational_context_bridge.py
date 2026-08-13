@@ -12,6 +12,7 @@ from .storage import path_lock
 
 
 COLLIDING_OC_AUTHORITY = object()  # compatibility sentinel; generic bridge no longer uses it
+BRIDGE_CONTRACT_VERSION = "material-oc-bridge-v1"
 
 
 def _normalise_subject(value: str) -> str:
@@ -45,8 +46,8 @@ def bridge_transaction(root: Any):
     return path_lock(Path(root) / "operational_context_review_v0" / "bridge_transaction.lock")
 
 
-def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, candidate: dict[str, Any], evidence_text: str, sensitivity: str = "unknown") -> OperationalContextCandidate | object | None:
-    """Build an OC proposal from already-validated extraction facts only.
+def build_material_proposal_with_diagnostic(*, root: Any, workspace_id: str, sanitized_id: str, candidate: dict[str, Any], evidence_text: str, sensitivity: str = "unknown") -> tuple[OperationalContextCandidate | object | None, dict[str, str]]:
+    """Build an unchanged proposal plus a content-free routing reason.
 
     The model may propose a source-grounded authority-slot label, but code
     derives the opaque identity.  Without a specific slot the legacy path wins.
@@ -54,14 +55,14 @@ def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, 
     kind = str(candidate.get("type") or "")
     block = candidate.get("block")
     if kind not in KIND_REGISTRY or not isinstance(block, dict):
-        return None
+        return None, {"stage": "bridge_rejected", "reason": "kind_or_block_invalid"}
     start, end = block.get("start"), block.get("end")
     if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start:
-        return None
+        return None, {"stage": "bridge_rejected", "reason": "block_invalid"}
     raw_subject = candidate.get("oc_subject")
     slot = _validated_slot_anchor(raw_subject, evidence_text)
     if not slot:
-        return None
+        return None, {"stage": "bridge_rejected", "reason": "subject_not_grounded"}
     subject = "ocs_" + hashlib.sha256(f"{kind}\x1f{slot}".encode("utf-8")).hexdigest()[:32]
     extraction_identity = f"{sanitized_id}\x1f{kind}\x1f{start}\x1f{end}"
     candidate_ref = f"moc_{hashlib.sha256(extraction_identity.encode('utf-8')).hexdigest()[:32]}"
@@ -70,21 +71,33 @@ def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, 
         sensitivity = "unknown"
     current = [item for item in OperationalContextStore(root).list_scope(scope="project", scope_ref=workspace_id) if item["lifecycle"] == "active" and item["kind"] == kind and item["subject_ref"] == subject]
     if len(current) > 1:
-        return None
+        return None, {"stage": "bridge_rejected", "reason": "authority_slot_ambiguous"}
     # A repeated extraction of an equivalent value is not a second proposal.
     pending = OperationalContextCandidateStore(root).list_scope(scope="project", scope_ref=workspace_id, state="pending")
     statement = _normalise_subject(str(candidate["statement"]))
     if any(item.kind == kind and item.subject_ref == subject and _normalise_subject(item.value) == statement for item in pending):
-        return COLLIDING_OC_AUTHORITY
+        return COLLIDING_OC_AUTHORITY, {"stage": "bridge_accepted", "reason": "equivalent_pending_noop"}
     if any(_normalise_subject(str(item.get("value") or item.get("reference") or "")) == statement for item in current):
-        return COLLIDING_OC_AUTHORITY
+        return COLLIDING_OC_AUTHORITY, {"stage": "bridge_accepted", "reason": "equivalent_current_noop"}
     return new_candidate(
         scope="project", scope_ref=workspace_id, kind=kind,
         subject_ref=subject, value=str(candidate["statement"]),
         provenance=SafeProvenance(source_ref=sanitized_id, candidate_ref=candidate_ref),
         sensitivity=sensitivity, reason="Предложение извлечено из подтверждённого материала.",
         candidate_id=candidate_id, replaces_id=current[0]["id"] if current else "",
-    )
+    ), {"stage": "bridge_accepted", "reason": "proposal_created"}
+
+
+def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, candidate: dict[str, Any], evidence_text: str, sensitivity: str = "unknown") -> OperationalContextCandidate | object | None:
+    """Build an OC proposal from already-validated extraction facts only.
+
+    The model may propose a source-grounded authority-slot label, but code
+    derives the opaque identity.  Without a specific slot the legacy path wins.
+    """
+    return build_material_proposal_with_diagnostic(
+        root=root, workspace_id=workspace_id, sanitized_id=sanitized_id,
+        candidate=candidate, evidence_text=evidence_text, sensitivity=sensitivity,
+    )[0]
 
 
 def persist_material_proposals(root: Any, proposals: list[OperationalContextCandidate]) -> None:

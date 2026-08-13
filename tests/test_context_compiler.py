@@ -14,7 +14,7 @@ from gaia.provenance import ProvenanceStore, ProvenanceError
 from gaia.protection import protect
 from gaia.review import ReviewService
 from gaia.context_compiler import CandidateValidationError, ContextCompiler, ContextService, validate_candidates
-from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _ground_metadata, _safe_attempt_category
+from gaia.context_compiler import ContextCompileError, local_context_model, _ground_candidates, _ground_metadata, _oc_subject_diagnostic, _producer_diagnostic_record, _safe_attempt_category
 from gaia.context_chunking import ContextChunk, EvidenceSpan
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
@@ -64,6 +64,45 @@ class ContextCompilerTests(unittest.TestCase):
             validate_candidates({"candidates":[{**base, "evidence_id":"E2"}]}, 20, evidence_ids={"E1"})
         self.assertEqual(unknown.exception.diagnostic_code, "evidence_id_unknown")
         self.assertEqual(_safe_attempt_category({}, "evidence_id_unknown"), "evidence_id_unknown")
+
+    def test_oc_subject_diagnostics_classify_grounding_without_source_content(self):
+        evidence = "Финальное согласование выполняет руководитель проекта."
+        complete = {"label":"Исполнитель", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":"руководитель проекта"}
+        cases = (
+            (None, "absent_from_model", "oc_subject_absent"),
+            ({"label":"Исполнитель"}, "incomplete", "oc_subject_shape_incomplete"),
+            ({**complete, "evidence_id":"E2"}, "evidence_unresolved", "oc_subject_evidence_id_mismatch"),
+            ({**complete, "slot_anchor":""}, "slot_anchor_missing", "slot_anchor_missing"),
+            ({**complete, "value_anchor":""}, "value_anchor_missing", "value_anchor_missing"),
+            ({**complete, "slot_anchor":"Финальное согласование", "value_anchor":"руководитель проекта"}, "assertion_shape_invalid", "anchors_not_adjacent"),
+            (complete, "grounded_valid", "grounded"),
+        )
+        for subject, stage, reason in cases:
+            with self.subTest(stage=stage):
+                diagnostic = _oc_subject_diagnostic(subject, "E1", evidence)
+                self.assertEqual((diagnostic["stage"], diagnostic["reason"]), (stage, reason))
+                self.assertNotIn("Финальное", json.dumps(diagnostic, ensure_ascii=False))
+                self.assertNotIn("руководитель", json.dumps(diagnostic, ensure_ascii=False))
+
+    def test_producer_diagnostic_receipt_is_content_free_and_distinguishes_legacy_fallback(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Финальное согласование выполняет руководитель проекта."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            payload = {"candidates":[{"type":"requirement","title":"Финальное согласование","statement":source,"evidence_id":"E1","confidence":"high","requires_review":True}]}
+            with patch("gaia.context_compiler.local_context_model", return_value=payload), patch("gaia.context_compiler.execute_context_model_call"):
+                compiler = ContextCompiler(s, w)
+                compiler._uses_local_provider = True
+                with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                    legacy = compiler.compile(san["artifact_id"])
+            self.assertEqual(len(legacy), 1)
+            receipt = json.loads(compiler._receipt_path(san["artifact_id"]).read_text(encoding="utf-8"))
+            diagnostic = receipt["producer_diagnostics"][0]
+            self.assertEqual(diagnostic["oc_subject"]["stage"], "absent_from_model")
+            self.assertEqual(diagnostic["bridge"], {"stage":"bridge_rejected", "reason":"subject_not_grounded"})
+            self.assertEqual(diagnostic["fingerprint"]["parser_contract_version"], "context-parser-v1")
+            self.assertNotIn(source, json.dumps(receipt, ensure_ascii=False))
+        finally: tmp.cleanup()
 
     def test_inexact_evidence_is_rejected_without_fuzzy_repair(self):
         with self.assertRaises(CandidateValidationError) as rejected:
@@ -360,7 +399,7 @@ class ContextCompilerTests(unittest.TestCase):
             cancelled = threading.Event()
             compiler = ContextCompiler(s, w)
             compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":10},"confidence":"high","requires_review":True}]}
-            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"), patch("gaia.context_compiler.build_material_proposal", side_effect=lambda **_: cancelled.set() or None):
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"), patch("gaia.context_compiler.build_material_proposal_with_diagnostic", side_effect=lambda **_: (cancelled.set() or None, {"stage":"bridge_rejected", "reason":"subject_not_grounded"})):
                 with self.assertRaises(ContextCompileError):
                     compiler.compile(san["artifact_id"], cancel_event=cancelled)
             self.assertEqual(OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w), [])
