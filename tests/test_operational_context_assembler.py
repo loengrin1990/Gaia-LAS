@@ -13,6 +13,9 @@ from gaia.operational_context_assembler import (
     OperationalContextPackageBudget,
     SessionContextItem,
     compose_operational_context_package,
+    derived_session_context,
+    new_free_form_text,
+    trusted_system_text,
 )
 from gaia.operational_context_retrieval import (
     AuthorityAmbiguity,
@@ -20,6 +23,13 @@ from gaia.operational_context_retrieval import (
     RetrievalRequest,
     RetrievalResult,
     TrustedLocalProcessingPolicy,
+)
+from gaia.privacy_boundary import (
+    HandledInput,
+    HandlingEvidence,
+    ValidatedPrivacyInput,
+    evaluate_external_eligibility,
+    trusted_system_control,
 )
 
 
@@ -32,22 +42,30 @@ def authority(item_id: str = "oc_1", *, sensitivity: str = "standard") -> dict[s
     }
 
 
+def evidence(kind: str = "trusted_system_control", reference: str = "pb0_response_format_v1") -> HandlingEvidence:
+    return HandlingEvidence(kind, reference)
+
+
 def memory(text: str = "Durable history", *, handling: str = "standard") -> HandledMemorySelection:
     selection = MemorySelection(text, [MemorySource("mem_1", "Project A", "memory.md", "History", 1, 2, 10, ["history"])], 1, ["Project A"])
-    return HandledMemorySelection(selection, handling)
+    return HandledMemorySelection(selection, handling, evidence("reviewed_memory_standard", "memory_review_1") if handling == "standard" else None)
+
+
+def session(text: str, handling: str = "standard") -> SessionContextItem:
+    return SessionContextItem(text, handling, evidence("derived_from_standard", "session_1") if handling == "standard" else None)
 
 
 class OperationalContextAssemblerTests(unittest.TestCase):
     def package(self, *, result: RetrievalResult | None = None, selected_memory: HandledMemorySelection | None = None, session: tuple[SessionContextItem, ...] = (), query_handling: str = "standard", task_handling: str = "standard", budget: int = 10_000):
         return compose_operational_context_package(
-            query=HandledText("What is current?", query_handling), task=HandledText("Determine current authority", task_handling),
+            query=trusted_system_text("pb0_response_format_v1") if query_handling == "standard" else HandledText("What is current?", query_handling), task=trusted_system_text("pb0_response_format_v1") if task_handling == "standard" else HandledText("Determine current authority", task_handling),
             retrieval_result=result or RetrievalResult((authority(),), (), ()),
             memory_selection=selected_memory, session_context=session,
             budget=OperationalContextPackageBudget(budget),
         )
 
     def test_layers_remain_separate_without_reconciliation(self):
-        package = self.package(selected_memory=memory("Historical state differs"), session=(SessionContextItem("latest user subject", "standard"),))
+        package = self.package(selected_memory=memory("Historical state differs"), session=(session("latest user subject"),))
         self.assertEqual(package.current_authority[0]["value"], "Current state")
         self.assertEqual(package.memory_selection.selection.text, "Historical state differs")
         self.assertEqual(package.session_context[0].text, "latest user subject")
@@ -61,14 +79,14 @@ class OperationalContextAssemblerTests(unittest.TestCase):
         self.assertEqual(package.metadata.handling, "standard")
 
     def test_restricted_item_or_ambiguity_makes_package_restricted(self):
-        restricted_item = self.package(result=RetrievalResult((authority(sensitivity="restricted"),), (), ()), selected_memory=memory(), session=(SessionContextItem("standard session", "standard"),))
+        restricted_item = self.package(result=RetrievalResult((authority(sensitivity="restricted"),), (), ()), selected_memory=memory(), session=(session("standard session"),))
         restricted_ambiguity = AuthorityAmbiguity.from_items([authority("oc_a"), authority("oc_b", sensitivity="restricted")])
-        ambiguous = self.package(result=RetrievalResult((), (), (restricted_ambiguity,)), selected_memory=memory(), session=(SessionContextItem("standard session", "standard"),))
+        ambiguous = self.package(result=RetrievalResult((), (), (restricted_ambiguity,)), selected_memory=memory(), session=(session("standard session"),))
         self.assertEqual(restricted_item.metadata.handling, "restricted")
         self.assertEqual(ambiguous.metadata.handling, "restricted")
 
     def test_standard_only_and_empty_inputs_are_normal(self):
-        standard = self.package(selected_memory=memory(), session=(SessionContextItem("session", "standard"),))
+        standard = self.package(selected_memory=memory(), session=(session("session"),))
         empty = self.package(result=RetrievalResult((), (), ()), selected_memory=None)
         self.assertEqual(standard.metadata.handling, "standard")
         self.assertEqual(empty.current_authority, ())
@@ -130,9 +148,110 @@ class OperationalContextAssemblerTests(unittest.TestCase):
 
     def test_invalid_input_and_base_budget_fail_closed(self):
         with self.assertRaises(OperationalContextAssemblyError):
-            compose_operational_context_package(query=HandledText("q", "standard"), task=HandledText("t", "standard"), retrieval_result=RetrievalResult((), (), ()), memory_selection=None, session_context=(), budget=OperationalContextPackageBudget(1))
+            compose_operational_context_package(query=trusted_system_text("pb0_response_format_v1"), task=trusted_system_text("pb0_response_format_v1"), retrieval_result=RetrievalResult((), (), ()), memory_selection=None, session_context=(), budget=OperationalContextPackageBudget(1))
         with self.assertRaises(OperationalContextAssemblyError):
             compose_operational_context_package(query="q", task=HandledText("t", "standard"), retrieval_result=RetrievalResult((), (), ()), memory_selection=None, session_context=(), budget=OperationalContextPackageBudget())  # type: ignore[arg-type]
+
+    def test_pb0_new_user_content_and_legacy_memory_are_unknown_and_local_only(self):
+        legacy = HandledMemorySelection.legacy(memory().selection)
+        package = compose_operational_context_package(
+            query=new_free_form_text("new project fact"),
+            task=trusted_system_text("pb0_response_format_v1"),
+            retrieval_result=RetrievalResult((), (), ()), memory_selection=legacy,
+        )
+        self.assertEqual(package.metadata.query_handling, "unknown")
+        self.assertEqual(package.metadata.memory_handling, "unknown")
+        self.assertFalse(package.metadata.disclosure.eligible_for_external)
+        self.assertEqual(package.metadata.disclosure.decision, "local_processing_required")
+        self.assertEqual(package.metadata.query_handling, "unknown")
+        self.assertEqual(package.metadata.handling, "unknown")
+
+    def test_pb0_evidence_is_required_for_external_eligibility(self):
+        package = self.package(result=RetrievalResult((authority(),), (), ()), selected_memory=memory(), session=(session("derived"),))
+        self.assertTrue(package.metadata.disclosure.eligible_for_external)
+        self.assertEqual(package.metadata.disclosure.decision, "external_allowed")
+        with self.assertRaises(OperationalContextAssemblyError):
+            HandledText("unproven", "standard")
+
+    def test_pb0_restricted_unknown_conflict_and_budget_omission_fail_closed(self):
+        conflict = AuthorityAmbiguity.from_items([authority("oc_a"), authority("oc_b", sensitivity="restricted")])
+        baseline = self.package(result=RetrievalResult((), (), ()))
+        packages = (
+            self.package(query_handling="unknown"),
+            self.package(result=RetrievalResult((authority(sensitivity="restricted"),), (), ())),
+            self.package(result=RetrievalResult((), (), (conflict,))),
+            self.package(selected_memory=HandledMemorySelection.legacy(memory().selection), budget=baseline.metadata.used_chars),
+        )
+        for package in packages:
+            self.assertFalse(package.metadata.disclosure.eligible_for_external)
+            self.assertEqual(package.metadata.disclosure.decision, "local_processing_required")
+        self.assertEqual(packages[2].metadata.handling, "restricted")
+        self.assertEqual(packages[3].metadata.handling, "unknown")
+
+    def test_pb0_trusted_system_control_is_standard_and_no_external_call_is_performed(self):
+        control = trusted_system_text("pb0_response_format_v1")
+        package = compose_operational_context_package(
+            query=control,
+            task=trusted_system_text("pb0_response_format_v1"),
+            retrieval_result=RetrievalResult((), (), ()), memory_selection=None,
+        )
+        self.assertTrue(package.metadata.disclosure.eligible_for_external)
+        self.assertEqual(package.metadata.disclosure.decision, "external_allowed")
+
+    def test_pb0_forged_system_control_cannot_make_semantic_user_text_standard(self):
+        package = compose_operational_context_package(
+            query=HandledText("секрет пользователя", "standard", evidence()),
+            task=trusted_system_text("pb0_response_format_v1"),
+            retrieval_result=RetrievalResult((), (), ()), memory_selection=None,
+        )
+        self.assertFalse(package.metadata.disclosure.eligible_for_external)
+        self.assertEqual(package.metadata.disclosure.decision, "local_processing_required")
+
+    def test_pb0_final_eligibility_rejects_direct_caller_created_handled_input(self):
+        forged = HandledInput("standard", HandlingEvidence("trusted_system_control", "pb0_response_format_v1"))
+        decision = evaluate_external_eligibility((forged,))
+        self.assertFalse(decision.eligible_for_external)
+        self.assertEqual(decision.decision, "local_processing_required")
+
+    def test_pb0_final_eligibility_rejects_manual_validated_looking_input_with_copied_evidence(self):
+        forged = ValidatedPrivacyInput(
+            "standard",
+            "system_control",
+            HandlingEvidence("trusted_system_control", "pb0_response_format_v1"),
+            "Arbitrary user semantic text.",
+        )
+        decision = evaluate_external_eligibility((forged,))
+        self.assertFalse(decision.eligible_for_external)
+        self.assertEqual(decision.decision, "local_processing_required")
+
+    def test_pb0_final_eligibility_accepts_only_attested_registered_system_control(self):
+        control = trusted_system_control("pb0_response_format_v1")
+        decision = evaluate_external_eligibility((control,))
+        self.assertTrue(decision.eligible_for_external)
+        self.assertEqual(decision.decision, "external_allowed")
+
+    def test_pb0_unknown_restricted_and_omitted_inputs_share_non_distinguishing_public_result(self):
+        baseline = self.package(result=RetrievalResult((), (), ()))
+        packages = (
+            self.package(query_handling="unknown"),
+            self.package(result=RetrievalResult((authority(sensitivity="restricted"),), (), ())),
+            self.package(selected_memory=HandledMemorySelection.legacy(memory().selection), budget=baseline.metadata.used_chars),
+        )
+        for package in packages:
+            self.assertEqual(package.metadata.disclosure.decision, "local_processing_required")
+            self.assertEqual(package.metadata.disclosure.__dict__, {"eligible_for_external": False, "decision": "local_processing_required"})
+
+    def test_pb0_session_inherits_the_strictest_contributor(self):
+        restricted_session = derived_session_context(
+            "derived session result",
+            (HandledInput("standard", evidence()), HandledInput("restricted")),
+            derivation_ref="session_derived_1",
+        )
+        unknown_session = derived_session_context(
+            "derived session result", (HandledInput("unknown"),), derivation_ref="session_derived_2",
+        )
+        self.assertEqual(restricted_session.handling, "restricted")
+        self.assertEqual(unknown_session.handling, "unknown")
 
 
 if __name__ == "__main__":
