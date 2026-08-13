@@ -1,6 +1,8 @@
 # Operational Context Review / UX v0
 
-OC-4 добавляет отдельный локальный review слой `gaia.operational_context_review` поверх OC-1 Store. Он не читает и не мигрирует legacy `ContextService`/`context/current`; прежний экран остаётся доступным отдельно.
+OC-4 добавляет отдельный локальный review слой `gaia.operational_context_review` поверх OC-1 Store. Он не читает и не мигрирует уже сохранённые legacy `ContextService`/`context/current`; прежний экран остаётся доступным отдельно.
+
+Для новых material-derived candidates действует forward-only bridge: если existing extraction дал closed-registry `kind`, а exact cleaned evidence содержит поддерживаемую явную метку предмета, кандидат создаётся только в OC review queue с provenance на подтверждённый очищенный материал и детерминированный candidate reference. В v0 к таким явным меткам относятся «текущий статус поставки» и «финальное согласование». Legacy-карточка для того же кандидата не создаётся. Без поддерживаемой явной метки предмета кандидат остаётся в legacy-потоке: bridge не выводит identity из заголовка или текста модели. При уже active OC того же kind/subject новое предложение становится replacement и всё равно требует отдельного подтверждения человека. Если для того же project subject уже есть другое pending OC-предложение, новый кандидат безопасно пропускается: project-scope conflict не создаётся обходом replacement semantics и не дублируется в legacy. Повтор одного и того же extraction идемпотентен. Bridge не выполняет массовую миграцию, не меняет сохранённые legacy records и не подтверждает/promote candidate автоматически. При отсутствии положительно подтверждённого STANDARD handling material-derived candidate получает `unknown` и остаётся только в локальной обработке.
 
 ## Экран
 

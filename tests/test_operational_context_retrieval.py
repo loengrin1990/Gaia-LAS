@@ -101,6 +101,13 @@ class OperationalContextRetrievalTests(unittest.TestCase):
         self.assertEqual(result["ambiguities"][0]["derived_sensitivity"], "restricted")
         self.assertEqual({item["item_id"] for item in result["ambiguities"][0]["involved_authorities"]}, {"oc_standard", "oc_restricted"})
 
+    def test_unknown_candidate_derives_local_only_ambiguity(self):
+        self.add(item_id="oc_standard", evidence_id="oce_standard", value="A", sensitivity="standard")
+        self.add(item_id="oc_unknown", evidence_id="oce_unknown", scope="system", scope_ref="system_a", value="B", sensitivity="unknown")
+        result = self.reader.retrieve(self.request(trusted_local_policy=TrustedLocalProcessingPolicy(frozenset({"standard", "unknown"})))).as_dict()
+        self.assertEqual(result["eligible_items"], [])
+        self.assertEqual(result["ambiguities"][0]["derived_sensitivity"], "unknown")
+
     def test_trusted_local_denial_is_not_downstream_disclosure(self):
         self.add(item_id="oc_restricted", evidence_id="oce_restricted", sensitivity="restricted")
         denied = self.reader.retrieve(self.request()).as_dict()

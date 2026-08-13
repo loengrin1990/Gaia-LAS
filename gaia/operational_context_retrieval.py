@@ -79,18 +79,21 @@ class AuthorityReference:
     scope_ref: str
     provenance: dict[str, str]
     confirmation_ref: str
+    content: str
 
     @classmethod
     def from_item(cls, item: dict[str, Any]) -> "AuthorityReference":
         return cls(
             item_id=str(item["id"]), scope=str(item["scope"]), scope_ref=str(item["scope_ref"]),
             provenance=dict(item["provenance"]), confirmation_ref=str(item["confirmation_ref"]),
+            content=str(item.get("value") or item.get("reference") or ""),
         )
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "item_id": self.item_id, "scope": self.scope, "scope_ref": self.scope_ref,
             "provenance": dict(self.provenance), "confirmation_ref": self.confirmation_ref,
+            "content": self.content,
         }
 
 
@@ -108,7 +111,11 @@ class AuthorityAmbiguity:
         ordered = sorted(items, key=lambda item: str(item["id"]))
         return cls(
             kind=str(ordered[0]["kind"]), subject_ref=str(ordered[0]["subject_ref"]),
-            derived_sensitivity=("restricted" if any(item["sensitivity"] == "restricted" for item in ordered) else "standard"),
+            derived_sensitivity=(
+                "restricted" if any(item["sensitivity"] == "restricted" for item in ordered)
+                else "unknown" if any(item["sensitivity"] == "unknown" for item in ordered)
+                else "standard"
+            ),
             involved_authorities=tuple(AuthorityReference.from_item(item) for item in ordered),
         )
 

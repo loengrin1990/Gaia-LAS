@@ -47,6 +47,15 @@
       "json_mode": true,
       "context_length": 16384,
       "enabled": true
+      },
+      "ollama_qwen3_5_9b": {
+        "type": "ollama",
+        "endpoint": "http://127.0.0.1:11434/api/chat",
+        "model": "qwen3.5:9b",
+        "thinking": false,
+        "json_mode": true,
+        "context_length": 16384,
+        "enabled": true
       }
     },
     "routes": {
@@ -56,6 +65,7 @@
       "lore_gap_detector": {"provider": "lm_studio", "prompt_char_limit": 6000, "max_tokens": 180},
       "veil_review": {"provider": "lm_studio", "prompt_char_limit": 7000, "max_tokens": 200},
       "context_compiler": {"provider": "ollama_qwen3_14b", "model": "qwen3:14b", "prompt_char_limit": 9000, "max_tokens": 2400, "context_length": 16384, "temperature": 0, "thinking": false, "structured_output": "schema", "timeout_seconds": 120, "chunk_char_limit": 4000, "chunk_max_units": 1, "chunk_overlap_chars": 0, "max_candidates_per_chunk": 1, "max_total_candidates": 512, "max_input_chars": 250000, "max_chunks": 80, "retry_count": 1, "job_timeout_seconds": 1800},
+      "operational_context_dialogue": {"provider": "ollama_qwen3_5_9b", "model": "qwen3.5:9b", "prompt_char_limit": 65536, "max_tokens": 900, "context_length": 16384, "timeout_seconds": 180},
       "scribe_classifier": {"provider": "lm_studio", "prompt_char_limit": 9000, "max_tokens": 400},
       "project_health": {"provider": "lm_studio", "prompt_char_limit": 6000, "max_tokens": 300}
     }

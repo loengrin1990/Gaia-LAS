@@ -36,7 +36,7 @@ KIND_LABELS = {
     "requirement": "Требование", "decision": "Решение", "risk": "Риск",
     "open_question": "Открытый вопрос", "action": "Действие",
 }
-SENSITIVITY_LABELS = {"standard": "Обычный", "restricted": "Ограниченный"}
+SENSITIVITY_LABELS = {"standard": "Обычный", "restricted": "Ограниченный", "unknown": "Не определено — только локально"}
 
 
 @dataclass(frozen=True)
@@ -104,6 +104,28 @@ class OperationalContextCandidateStore:
                 raise OperationalContextReviewError("candidate already exists.")
             state[candidate.id] = _candidate_dict(candidate); self._write(state)
         return _candidate_dict(candidate)
+
+    def add_if_absent(self, candidate: OperationalContextCandidate) -> dict[str, Any]:
+        """Idempotent bridge insert; an existing same deterministic proposal wins."""
+        with path_lock(self.path):
+            state = self._read()
+            raw = state.get(candidate.id)
+            if raw is not None:
+                return _candidate_dict(self._parse(raw, candidate.id))
+            state[candidate.id] = _candidate_dict(candidate); self._write(state)
+        return _candidate_dict(candidate)
+
+    def add_many_if_absent(self, candidates: list[OperationalContextCandidate]) -> None:
+        """Atomically add a completed compiler batch without duplicate proposals."""
+        with path_lock(self.path):
+            state = self._read()
+            for candidate in candidates:
+                raw = state.get(candidate.id)
+                if raw is not None:
+                    self._parse(raw, candidate.id)
+                    continue
+                state[candidate.id] = _candidate_dict(candidate)
+            self._write(state)
 
     def get(self, candidate_id: str) -> OperationalContextCandidate:
         _opaque(candidate_id, "candidate_id")

@@ -17,6 +17,17 @@ from .local_llm import run_lm_studio
 from .masking import mask_with_review
 from .models import Conversation, ConversationMessage
 from .orchestrator import create_package
+from .operational_context import KIND_REGISTRY, OperationalContextStore
+from .operational_context_assembler import (
+    HandledMemorySelection,
+    OperationalContextPackageBudget,
+    SessionContextItem,
+    compose_operational_context_package,
+    new_free_form_text,
+    trusted_system_text,
+)
+from .operational_context_retrieval import OperationalContextReader, RetrievalRequest, TrustedLocalProcessingPolicy
+from .operational_context_runtime import run_operational_context_dialogue
 from .projects import project_names
 from .provenance import ProvenanceStore
 from .storage import atomic_write_text, path_lock
@@ -156,7 +167,11 @@ def _add_user_turn_locked(
 
     local_result: dict[str, Any] | None = None
     if run_local:
-        local_result = run_lm_studio(package.prompt)
+        runtime_package = build_operational_context_runtime_package(conversation, query, package)
+        if runtime_package is None:
+            local_result = run_lm_studio(package.prompt)
+        else:
+            local_result = asdict(run_operational_context_dialogue(runtime_package))
         answer = str(local_result.get("answer") or local_result.get("error") or "")
         if answer:
             answer_mask = mask_with_review("Диалог: ответ локальной модели", answer, strict_dialog_privacy=True)
@@ -182,6 +197,39 @@ def _add_user_turn_locked(
         "package": asdict(package),
         "local_result": local_result,
     }
+
+
+def build_operational_context_runtime_package(
+    conversation: Conversation,
+    query: str,
+    analysis_package: Any,
+):
+    """Bridge the real dialogue turn to OC-2/OC-3 without migrating legacy state."""
+    if SETTINGS is None or not getattr(SETTINGS, "storage_dir", None) or not conversation.project.strip():
+        return None
+    intake = ControlledIntake(ProvenanceStore(SETTINGS.storage_dir), create_metadata=False)
+    workspace = intake.existing_workspace(conversation.project)
+    if not workspace:
+        return None
+    retrieval = OperationalContextReader(OperationalContextStore(intake.store.root)).retrieve(RetrievalRequest(
+        user_ref="local_user", project_ref=workspace, system_ref="gaia_local_runtime",
+        supported_kinds=frozenset(KIND_REGISTRY),
+        trusted_local_policy=TrustedLocalProcessingPolicy(frozenset(("standard", "restricted", "unknown"))),
+        max_items=100, max_chars=60_000,
+    ))
+    dialogue_context = getattr(analysis_package, "dialogue_context", None)
+    selection = getattr(dialogue_context, "memory_selection", None)
+    memory = HandledMemorySelection.legacy(selection) if selection is not None else None
+    session = tuple(
+        SessionContextItem(message.masked_text or message.text, "unknown")
+        for message in conversation.messages[-MAX_RECENT_MESSAGES:]
+        if (message.masked_text or message.text).strip()
+    )
+    return compose_operational_context_package(
+        query=new_free_form_text(query), task=trusted_system_text("pb0_response_format_v1"),
+        retrieval_result=retrieval, memory_selection=memory, session_context=session,
+        budget=OperationalContextPackageBudget(65_536),
+    )
 
 
 def existing_dialogue_context_reader(project: str) -> ContextReader | None:

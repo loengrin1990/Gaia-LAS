@@ -20,12 +20,12 @@ from .storage import atomic_write_text, path_lock
 
 Scope = Literal["user", "project", "system"]
 Lifecycle = Literal["active", "superseded", "retired"]
-Sensitivity = Literal["standard", "restricted"]
+Sensitivity = Literal["standard", "restricted", "unknown"]
 EvidenceAction = Literal["promotion", "replacement", "retirement"]
 
 SCOPES = frozenset(("user", "project", "system"))
 LIFECYCLES = frozenset(("active", "superseded", "retired"))
-SENSITIVITIES = frozenset(("standard", "restricted"))
+SENSITIVITIES = frozenset(("standard", "restricted", "unknown"))
 EVIDENCE_ACTIONS = frozenset(("promotion", "replacement", "retirement"))
 _OPAQUE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 

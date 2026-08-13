@@ -17,6 +17,7 @@ from gaia.local_llm import (
     parse_json_object,
     run_lm_studio,
     run_lm_studio_prompt,
+    run_local_llm_prompt,
     resolve_route,
 )
 from gaia.server import Handler
@@ -96,6 +97,14 @@ class LocalStatusTests(unittest.TestCase):
         self.assertEqual(payload["format"], "json")
         self.assertEqual(payload["options"]["num_ctx"], 8192)
         self.assertEqual(payload["options"]["num_predict"], 300)
+
+    def test_oc5_can_disable_provider_json_mode_without_changing_other_routes(self) -> None:
+        response = FakeResponse({"message": {"content": "Ответ"}})
+        with patch("gaia.local_llm.urllib.request.urlopen", return_value=response) as urlopen:
+            status = run_local_llm_prompt("test", "system", task="operational_context_dialogue", json_mode=False)
+        self.assertTrue(status["ok"])
+        payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertNotIn("format", payload)
 
     def test_context_compiler_uses_a_bounded_builtin_route_when_not_configured(self) -> None:
         with patch("gaia.local_llm.route_configs", return_value={}), patch("gaia.local_llm.SETTINGS", None):

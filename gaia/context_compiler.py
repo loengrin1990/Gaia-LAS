@@ -16,6 +16,7 @@ from .context_chunking import ChunkLimitError, ContextChunk, split_context
 from .storage import atomic_write_text, path_lock
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .context_model_executor import ContextModelExecutorError, execute_context_model_call
+from .operational_context_bridge import COLLIDING_OC_AUTHORITY, bridge_transaction, build_material_proposal, persist_material_proposals
 
 COMPILER_VERSION = "context-v4"
 PROMPT_SCHEMA_VERSION = "context-schema-v4-evidence-id"
@@ -258,11 +259,27 @@ class ContextCompiler:
 
 
     def _persist_all(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
+        # Covers the read of current/pending OC authority and the eventual queue
+        # insert, so concurrent material jobs cannot create two pending truths.
+        with bridge_transaction(self.store.root):
+            return self._persist_all_serialized(item, sanitized_id, candidates, compiler_version, route, cancel_event)
+
+    def _persist_all_serialized(self, item: dict[str, Any], sanitized_id: str, candidates: list[dict[str, Any]], compiler_version: str, route: dict[str, Any], cancel_event: Any) -> list[dict[str, Any]]:
         if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+        proposals = []
         with path_lock(self.store.registry_path):
             registry = self.store._registry(); objects = registry["objects"]; result: list[dict[str, Any]] = []
             for candidate in candidates:
                 material_evidence = self._resolve_material_evidence(sanitized_id, candidate, compiler_version)
+                # Forward-only OC bridge: new extraction facts get their opaque
+                # identity from immutable evidence, never an LLM-supplied field.
+                evidence_text = (self.store.root / "sanitized" / self.workspace_id / f"{sanitized_id}.txt").read_text(encoding="utf-8")[candidate["block"]["start"]:candidate["block"]["end"]]
+                proposal = build_material_proposal(root=self.store.root, workspace_id=self.workspace_id, sanitized_id=sanitized_id, candidate=candidate, evidence_text=evidence_text, sensitivity=str(item.get("sensitivity") or "unknown")) if self._uses_local_provider else None
+                if proposal is COLLIDING_OC_AUTHORITY:
+                    continue
+                if proposal is not None:
+                    proposals.append(proposal)
+                    continue
                 duplicate = next((x for x in objects.values() if x.get("kind") == "context" and x.get("workspace_id") == self.workspace_id and x.get("item_type") == candidate["type"] and str(x.get("statement", "")).strip().casefold() == candidate["statement"].strip().casefold()), None)
                 if duplicate:
                     duplicate = dict(duplicate); sources = list(duplicate.get("source_links") or [])
@@ -285,6 +302,9 @@ class ContextCompiler:
                 objects[record["id"]] = record; result.append(dict(record))
             if cancel_event is not None and cancel_event.is_set(): raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
             self.store._write_registry(registry)
+        if cancel_event is not None and cancel_event.is_set():
+            raise ContextCompileError("cancelled", "Сборка контекста отменена. Данные не изменены.")
+        persist_material_proposals(self.store.root, proposals)
         return result
 
     def _resolve_material_evidence(self, sanitized_id: str, candidate: dict[str, Any], compiler_version: str) -> list[dict[str, Any]]:

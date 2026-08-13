@@ -18,6 +18,11 @@ from gaia.context_compiler import ContextCompileError, local_context_model, _gro
 from gaia.context_chunking import ContextChunk, EvidenceSpan
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
+from gaia.operational_context import OperationalContextStore
+from gaia.operational_context_review import OperationalContextCandidateStore, OperationalContextReviewService
+from gaia.operational_context_retrieval import OperationalContextReader, RetrievalRequest, TrustedLocalProcessingPolicy
+from gaia.operational_context_assembler import compose_operational_context_package, new_free_form_text, trusted_system_text
+from gaia.operational_context_runtime import run_operational_context_dialogue
 
 class ContextCompilerTests(unittest.TestCase):
     def _compile_test_double_batch(self, store, workspace_id, artifact_id, model, compiler_version="context-v3"):
@@ -202,6 +207,134 @@ class ContextCompilerTests(unittest.TestCase):
             edited=service.decide(confirmed["id"],"edit","Новая версия","Уточнённое требование."); self.assertTrue(edited["current"]); self.assertFalse(s.object_metadata(w,confirmed["id"])["current"])
             with self.assertRaisesRegex(ProvenanceError, "устарела"):
                 service.decide(confirmed["id"], "reject")
+        finally: tmp.cleanup()
+
+    def test_explicit_oc_identity_routes_new_candidate_only_to_oc_review_idempotently(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Текущий статус поставки — материалы находятся на проверке качества."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            block = {"start": 0, "end": len(source)}
+            model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":block,"confidence":"high","requires_review":True}]}
+            compiler = ContextCompiler(s, w)
+            compiler.model = model
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                self.assertEqual(compiler.compile(san["artifact_id"]), [])
+            self.assertEqual(ContextService(s,w).list(), [])
+            queue = OperationalContextCandidateStore(s.root)
+            pending = queue.list_scope(scope="project", scope_ref=w, state="pending")
+            self.assertEqual(len(pending), 1); self.assertEqual(pending[0].sensitivity, "unknown")
+            self.assertTrue(pending[0].provenance.candidate_ref.startswith("moc_"))
+            self.assertEqual(OperationalContextStore(s.root).list_scope(scope="project", scope_ref=w), [])
+            changed_model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Изменённый заголовок","statement":"Материалы сейчас проходят проверку качества.","block":block,"confidence":"high","requires_review":True}]}
+            compiler = ContextCompiler(s, w); compiler.model = changed_model
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                compiler.compile(san["artifact_id"])
+            self.assertEqual(len(queue.list_scope(scope="project", scope_ref=w, state="pending")), 1)
+            OperationalContextReviewService(OperationalContextStore(s.root), queue).confirm(pending[0].id, actor_ref="local_user")
+            self.assertEqual(OperationalContextStore(s.root).list_scope(scope="project", scope_ref=w)[0]["value"], "Материалы находятся на проверке качества.")
+            retrieval = OperationalContextReader(OperationalContextStore(s.root)).retrieve(RetrievalRequest(user_ref="local_user", project_ref=w, system_ref="gaia_local_runtime", supported_kinds=frozenset(("requirement",)), trusted_local_policy=TrustedLocalProcessingPolicy(frozenset(("standard", "restricted", "unknown"))), max_items=10, max_chars=10000))
+            package = compose_operational_context_package(query=new_free_form_text("Какой сейчас статус поставки?"), task=trusted_system_text("pb0_response_format_v1"), retrieval_result=retrieval, memory_selection=None)
+            prompts = []
+            answer = run_operational_context_dialogue(package, local_executor=lambda prompt, *_args, **_kwargs: prompts.append(prompt) or {"ok": True, "answer": "Материалы находятся на проверке качества."})
+            self.assertIn("Материалы находятся на проверке качества.", answer.answer)
+            self.assertIn("Материалы находятся на проверке качества.", prompts[0])
+        finally: tmp.cleanup()
+
+    def test_rejected_material_derived_proposal_never_becomes_current(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Текущий статус поставки — материалы находятся на проверке качества."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            compiler = ContextCompiler(s, w)
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                compiler.compile(san["artifact_id"])
+            queue = OperationalContextCandidateStore(s.root)
+            candidate = queue.list_scope(scope="project", scope_ref=w, state="pending")[0]
+            OperationalContextReviewService(OperationalContextStore(s.root), queue).reject(candidate.id)
+            self.assertEqual(OperationalContextStore(s.root).list_scope(scope="project", scope_ref=w), [])
+            self.assertEqual(queue.get(candidate.id).state, "rejected")
+        finally: tmp.cleanup()
+
+    def test_explicit_final_approval_marker_routes_to_oc_review(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Финальное согласование выполняет руководитель проекта."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            compiler = ContextCompiler(s, w)
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Финальное согласование","statement":source,"block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                self.assertEqual(compiler.compile(san["artifact_id"]), [])
+            proposal = OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w, state="pending")[0]
+            self.assertEqual(proposal.subject_ref, "final_approval")
+            self.assertEqual(ContextService(s,w).list(), [])
+        finally: tmp.cleanup()
+
+    def test_known_restricted_material_propagates_to_oc_proposal(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Текущий статус поставки — материалы находятся на проверке качества."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            s._update(san["artifact_id"], sensitivity="restricted")
+            compiler = ContextCompiler(s, w); compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                compiler.compile(san["artifact_id"])
+            pending = OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w, state="pending")
+            self.assertEqual(pending[0].sensitivity, "restricted")
+        finally: tmp.cleanup()
+
+    def test_unsupported_material_candidate_stays_on_legacy_path(self):
+        tmp,s,w,san=self.setup()
+        try:
+            compiler = ContextCompiler(s, w)
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Обычный факт","statement":"Использовать локальную проверку.","block":{"start":0,"end":10},"confidence":"high","requires_review":True}]}
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                legacy = compiler.compile(san["artifact_id"])
+            self.assertEqual(len(legacy), 1)
+            self.assertEqual(OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w), [])
+        finally: tmp.cleanup()
+
+    def test_concurrent_material_jobs_keep_one_pending_oc_authority_slot(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Текущий статус поставки — материалы находятся на проверке качества."
+            original_source = s.object_metadata(w, san["parents"][0])["parents"][0]
+            second_extraction = s.create_extraction(w, original_source, "v2")
+            second = protect(s, w, second_extraction["artifact_id"], rules_version="v2")["sanitized"]
+            ReviewService(s,w,lambda text:{"status":"completed","findings":[]}).start(second["artifact_id"])
+            ReviewService(s,w).confirm(second["artifact_id"])
+            for sanitized in (san, second):
+                (s.root / "sanitized" / w / f"{sanitized['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            barrier = threading.Barrier(2); failures = []
+            def compile_one(sanitized):
+                compiler = ContextCompiler(s, w)
+                compiler.model = lambda *_args, **_kwargs: (barrier.wait(timeout=5), {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]})[1]
+                try:
+                    with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                        compiler.compile(sanitized["artifact_id"])
+                except Exception as exc:
+                    failures.append(exc)
+            workers = [threading.Thread(target=compile_one, args=(sanitized,)) for sanitized in (san, second)]
+            for worker in workers: worker.start()
+            for worker in workers: worker.join()
+            self.assertEqual(failures, [])
+            queue = OperationalContextCandidateStore(s.root)
+            pending = queue.list_scope(scope="project", scope_ref=w, state="pending")
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(ContextService(s,w).list(), [])
+        finally: tmp.cleanup()
+
+    def test_cancelled_bridge_batch_never_persists_a_proposal(self):
+        tmp,s,w,san=self.setup()
+        try:
+            cancelled = threading.Event()
+            compiler = ContextCompiler(s, w)
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":10},"confidence":"high","requires_review":True}]}
+            with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"), patch("gaia.context_compiler.build_material_proposal", side_effect=lambda **_: cancelled.set() or None):
+                with self.assertRaises(ContextCompileError):
+                    compiler.compile(san["artifact_id"], cancel_event=cancelled)
+            self.assertEqual(OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w), [])
         finally: tmp.cleanup()
     def test_rejects_unconfirmed_and_invalid_model_result(self):
         tmp,s,w,san=self.setup()

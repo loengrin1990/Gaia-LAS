@@ -324,6 +324,7 @@ def run_local_llm_prompt(
     provider_name: str | None = None,
     model: str | None = None,
     response_schema: dict[str, Any] | None = None,
+    json_mode: bool | None = None,
 ) -> dict[str, Any]:
     route = dict(resolve_route(task))
     if provider_name:
@@ -368,7 +369,7 @@ def run_local_llm_prompt(
         local_prompt,
         float(route.get("temperature", temperature)),
         max_tokens=int(route.get("max_tokens") or local_llm_max_tokens()),
-        context_length=route.get("context_length"), response_schema=response_schema,
+        context_length=route.get("context_length"), response_schema=response_schema, json_mode=json_mode,
     )
     if is_ollama_provider(provider) and task == TASK_CONTEXT_COMPILER and route.get("model_keep_alive"):
         payload["keep_alive"] = route["model_keep_alive"]
@@ -448,6 +449,7 @@ def local_llm_payload(
     max_tokens: int | None = None,
     context_length: int | None = None,
     response_schema: dict[str, Any] | None = None,
+    json_mode: bool | None = None,
 ) -> dict[str, Any]:
     messages = [
         {"role": "system", "content": system},
@@ -464,7 +466,7 @@ def local_llm_payload(
             "options": {"temperature": temperature},
         }
         if response_schema is not None: payload["format"] = response_schema
-        elif provider.get("json_mode", True): payload["format"] = "json"
+        elif json_mode if json_mode is not None else provider.get("json_mode", True): payload["format"] = "json"
         context_length = context_length or provider.get("context_length")
         if isinstance(context_length, int) and not isinstance(context_length, bool) and context_length > 0:
             payload["options"]["num_ctx"] = context_length
