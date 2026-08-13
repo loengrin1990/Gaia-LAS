@@ -66,6 +66,26 @@ class OperationalContextReviewTests(unittest.TestCase):
         self.assertEqual({(item["value"], item["lifecycle"]) for item in values}, {("Synthetic state", "superseded"), ("New synthetic state", "active")})
         self.assertEqual([item["content"] for item in self.service.view(scope="project", scope_ref="project_a")["current_context"]], ["New synthetic state"])
 
+    def test_reviewed_unresolved_replacement_becomes_runtime_ambiguity_not_second_active_item(self) -> None:
+        old = self.add_candidate(candidate_id="candidate_old", value="Руководитель проекта")
+        old_card = self.service.confirm(old.id, actor_ref="actor_1")
+        alternative = self.add_candidate(candidate_id="candidate_new", value="Финансовый контролёр", replaces_id=old_card["id"])
+        self.service.leave_unresolved(alternative.id)
+        reader = __import__("gaia.operational_context_retrieval", fromlist=["OperationalContextReader", "RetrievalRequest", "TrustedLocalProcessingPolicy"])
+        result = reader.OperationalContextReader(self.store).retrieve(reader.RetrievalRequest(user_ref="user_a", project_ref="project_a", system_ref="system_a", supported_kinds=frozenset(("requirement",)), trusted_local_policy=reader.TrustedLocalProcessingPolicy(frozenset(("standard", "restricted", "unknown"))), max_items=10, max_chars=10000))
+        self.assertEqual(result.eligible_items, ())
+        self.assertEqual([item.content for item in result.ambiguities[0].involved_authorities], ["Руководитель проекта", "Финансовый контролёр"])
+        self.assertEqual(self.store.list_scope(scope="project", scope_ref="project_a")[0]["lifecycle"], "active")
+        self.assertEqual(self.service.view(scope="project", scope_ref="project_a")["history"][0]["status"], "Нерешённое противоречие")
+
+    def test_two_new_values_of_one_slot_are_grouped_without_current_authority(self) -> None:
+        self.add_candidate(candidate_id="candidate_a", value="Руководитель проекта")
+        self.add_candidate(candidate_id="candidate_b", value="Финансовый контролёр")
+        view = self.service.view(scope="project", scope_ref="project_a")
+        self.assertEqual(view["requires_decision"], [])
+        self.assertEqual([item["content"] for item in view["candidate_ambiguities"][0]["alternatives"]], ["Руководитель проекта", "Финансовый контролёр"])
+        self.assertEqual(view["current_context"], [])
+
     def test_rejection_never_creates_runtime_visible_operational_context(self) -> None:
         candidate = self.add_candidate()
         self.service.reject(candidate.id)

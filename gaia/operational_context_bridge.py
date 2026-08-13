@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -10,11 +11,28 @@ from .operational_context_review import OperationalContextCandidate, Operational
 from .storage import path_lock
 
 
-MATERIAL_SUBJECT_MARKERS = {
-    "текущий статус поставки": "delivery_status",
-    "финальное согласование": "final_approval",
-}
-COLLIDING_OC_AUTHORITY = object()
+COLLIDING_OC_AUTHORITY = object()  # compatibility sentinel; generic bridge no longer uses it
+
+
+def _normalise_subject(value: str) -> str:
+    """Closed deterministic normalisation; never semantic matching."""
+    normalised = unicodedata.normalize("NFKC", value).casefold().replace("ё", "е")
+    return " ".join("".join(char if char.isalnum() else " " for char in normalised).split())
+
+
+def _validated_slot_anchor(subject: object, evidence_text: str) -> str:
+    if not isinstance(subject, dict) or set(subject) != {"label", "evidence_id", "slot_anchor", "value_anchor"}:
+        return ""
+    slot, value = subject.get("slot_anchor"), subject.get("value_anchor")
+    if not isinstance(slot, str) or not slot.strip() or not isinstance(value, str) or not value.strip():
+        return ""
+    slot_start, value_start = evidence_text.find(slot), evidence_text.find(value)
+    if slot_start < 0 or value_start < 0 or slot_start == value_start:
+        return ""
+    first_start, first, second_start = (slot_start, slot, value_start) if slot_start < value_start else (value_start, value, slot_start)
+    if first_start + len(first) > second_start or any(char.isalnum() for char in evidence_text[first_start + len(first):second_start]):
+        return ""
+    return _normalise_subject(slot)
 
 
 def bridge_transaction(root: Any):
@@ -30,9 +48,8 @@ def bridge_transaction(root: Any):
 def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, candidate: dict[str, Any], evidence_text: str, sensitivity: str = "unknown") -> OperationalContextCandidate | object | None:
     """Build an OC proposal from already-validated extraction facts only.
 
-    The subject comes only from a closed mapping of an explicit label in the
-    exact cleaned evidence. No LLM-supplied identity or classifier is accepted.
-    Without that label, the caller must retain the legacy candidate path.
+    The model may propose a source-grounded authority-slot label, but code
+    derives the opaque identity.  Without a specific slot the legacy path wins.
     """
     kind = str(candidate.get("type") or "")
     block = candidate.get("block")
@@ -41,25 +58,25 @@ def build_material_proposal(*, root: Any, workspace_id: str, sanitized_id: str, 
     start, end = block.get("start"), block.get("end")
     if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start:
         return None
-    folded = " ".join(evidence_text.casefold().replace("ё", "е").split())
-    subject = next((value for marker, value in MATERIAL_SUBJECT_MARKERS.items() if marker in folded), "")
-    if not subject:
+    raw_subject = candidate.get("oc_subject")
+    slot = _validated_slot_anchor(raw_subject, evidence_text)
+    if not slot:
         return None
-    proposal_identity = f"{workspace_id}\x1f{sanitized_id}\x1f{kind}\x1f{subject}"
-    proposal_digest = hashlib.sha256(proposal_identity.encode("utf-8")).hexdigest()
+    subject = "ocs_" + hashlib.sha256(f"{kind}\x1f{slot}".encode("utf-8")).hexdigest()[:32]
     extraction_identity = f"{sanitized_id}\x1f{kind}\x1f{start}\x1f{end}"
     candidate_ref = f"moc_{hashlib.sha256(extraction_identity.encode('utf-8')).hexdigest()[:32]}"
-    candidate_id = f"occ_{proposal_digest[:32]}"
+    candidate_id = f"occ_{hashlib.sha256(extraction_identity.encode('utf-8')).hexdigest()[:32]}"
     if sensitivity not in SENSITIVITIES:
         sensitivity = "unknown"
     current = [item for item in OperationalContextStore(root).list_scope(scope="project", scope_ref=workspace_id) if item["lifecycle"] == "active" and item["kind"] == kind and item["subject_ref"] == subject]
     if len(current) > 1:
         return None
-    # The project-scope store requires an explicit replacement for one active
-    # identity. A second undecided project proposal cannot become a conflict
-    # through this producer, so skip it without creating a legacy duplicate.
+    # A repeated extraction of an equivalent value is not a second proposal.
     pending = OperationalContextCandidateStore(root).list_scope(scope="project", scope_ref=workspace_id, state="pending")
-    if any(item.kind == kind and item.subject_ref == subject and item.id != candidate_id for item in pending):
+    statement = _normalise_subject(str(candidate["statement"]))
+    if any(item.kind == kind and item.subject_ref == subject and _normalise_subject(item.value) == statement for item in pending):
+        return COLLIDING_OC_AUTHORITY
+    if any(_normalise_subject(str(item.get("value") or item.get("reference") or "")) == statement for item in current):
         return COLLIDING_OC_AUTHORITY
     return new_candidate(
         scope="project", scope_ref=workspace_id, kind=kind,

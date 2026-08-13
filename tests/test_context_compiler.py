@@ -19,7 +19,9 @@ from gaia.context_chunking import ContextChunk, EvidenceSpan
 from gaia.controlled_intake import ControlledIntake
 from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 from gaia.operational_context import OperationalContextStore
-from gaia.operational_context_review import OperationalContextCandidateStore, OperationalContextReviewService
+from gaia.operational_context_review import OperationalContextCandidateStore, OperationalContextReviewService, new_candidate
+from gaia.operational_context_bridge import COLLIDING_OC_AUTHORITY, build_material_proposal
+from gaia.operational_context import SafeProvenance
 from gaia.operational_context_retrieval import OperationalContextReader, RetrievalRequest, TrustedLocalProcessingPolicy
 from gaia.operational_context_assembler import compose_operational_context_package, new_free_form_text, trusted_system_text
 from gaia.operational_context_runtime import run_operational_context_dialogue
@@ -215,7 +217,7 @@ class ContextCompilerTests(unittest.TestCase):
             source = "Текущий статус поставки — материалы находятся на проверке качества."
             (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
             block = {"start": 0, "end": len(source)}
-            model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":block,"confidence":"high","requires_review":True}]}
+            model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":block,"confidence":"high","requires_review":True,"oc_subject":{"label":"Статус поставки","evidence_id":"E1","slot_anchor":"Текущий статус поставки —","value_anchor":"материалы находятся на проверке качества"}}]}
             compiler = ContextCompiler(s, w)
             compiler.model = model
             with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
@@ -226,7 +228,7 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(len(pending), 1); self.assertEqual(pending[0].sensitivity, "unknown")
             self.assertTrue(pending[0].provenance.candidate_ref.startswith("moc_"))
             self.assertEqual(OperationalContextStore(s.root).list_scope(scope="project", scope_ref=w), [])
-            changed_model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Изменённый заголовок","statement":"Материалы сейчас проходят проверку качества.","block":block,"confidence":"high","requires_review":True}]}
+            changed_model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Изменённый заголовок","statement":"Материалы сейчас проходят проверку качества.","block":block,"confidence":"high","requires_review":True,"oc_subject":{"label":"Статус поставки","evidence_id":"E1","slot_anchor":"Текущий статус поставки —","value_anchor":"материалы находятся на проверке качества"}}]}
             compiler = ContextCompiler(s, w); compiler.model = changed_model
             with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
                 compiler.compile(san["artifact_id"])
@@ -247,7 +249,7 @@ class ContextCompilerTests(unittest.TestCase):
             source = "Текущий статус поставки — материалы находятся на проверке качества."
             (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
             compiler = ContextCompiler(s, w)
-            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True,"oc_subject":{"label":"Статус поставки","evidence_id":"E1","slot_anchor":"Текущий статус поставки —","value_anchor":"материалы находятся на проверке качества"}}]}
             with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
                 compiler.compile(san["artifact_id"])
             queue = OperationalContextCandidateStore(s.root)
@@ -263,21 +265,48 @@ class ContextCompilerTests(unittest.TestCase):
             source = "Финальное согласование выполняет руководитель проекта."
             (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
             compiler = ContextCompiler(s, w)
-            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Финальное согласование","statement":source,"block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"requirement","title":"Финальное согласование","statement":source,"block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True,"oc_subject":{"label":"Исполнитель финального согласования","evidence_id":"E1","slot_anchor":"Финальное согласование выполняет","value_anchor":"руководитель проекта"}}]}
             with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
                 self.assertEqual(compiler.compile(san["artifact_id"]), [])
             proposal = OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w, state="pending")[0]
-            self.assertEqual(proposal.subject_ref, "final_approval")
+            self.assertTrue(proposal.subject_ref.startswith("ocs_"))
             self.assertEqual(ContextService(s,w).list(), [])
         finally: tmp.cleanup()
+
+    def test_slot_anchor_identity_prevents_broad_topic_false_merges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); base = {"type":"requirement", "block":{"start":0,"end":54}}
+            a_text = "Финальное согласование выполняет руководитель проекта."
+            b_text = "Финальное согласование выполняет финансовый контролёр."
+            c_text = "Финальное согласование занимает два рабочих дня."
+            a = build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_a", evidence_text=a_text, candidate={**base, "statement":a_text, "oc_subject":{"label":"Исполнитель финального согласования", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":"руководитель проекта"}})
+            b = build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_b", evidence_text=b_text, candidate={**base, "statement":b_text, "oc_subject":{"label":"Другой текст", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":"финансовый контролёр"}})
+            c = build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_c", evidence_text=c_text, candidate={**base, "statement":c_text, "oc_subject":{"label":"Срок финального согласования", "evidence_id":"E1", "slot_anchor":"Финальное согласование занимает", "value_anchor":"два рабочих дня"}})
+            broad = build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_d", evidence_text=a_text, candidate={**base, "statement":a_text, "oc_subject":{"label":"Финальное согласование", "evidence_id":"E1", "slot_anchor":"Финальное согласование", "value_anchor":"руководитель проекта"}})
+            self.assertEqual(a.subject_ref, b.subject_ref)
+            self.assertNotEqual(a.subject_ref, c.subject_ref)
+            self.assertIsNone(broad)
+
+    def test_incomplete_subject_falls_back_to_legacy_and_equivalent_current_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = "Финальное согласование выполняет руководитель проекта."
+            candidate = {"type":"requirement", "statement":source, "block":{"start":0,"end":len(source)}, "oc_subject":{"label":"Исполнитель финального согласования", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":"руководитель проекта"}}
+            proposal = build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_a", candidate=candidate, evidence_text=source)
+            self.assertIsNotNone(proposal)
+            self.assertIsNone(build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_b", candidate={**candidate, "oc_subject":{"label":"x", "evidence_id":"E1", "slot_anchor":"", "value_anchor":"руководитель проекта"}}, evidence_text=source))
+            self.assertIsNone(build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_c", candidate={**candidate, "oc_subject":{"label":"x", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":""}}, evidence_text=source))
+            queue = OperationalContextCandidateStore(root); review = OperationalContextReviewService(OperationalContextStore(root), queue)
+            queue.add(new_candidate(scope="project", scope_ref="project_a", kind="requirement", subject_ref=proposal.subject_ref, value=source, provenance=SafeProvenance(candidate_ref="cand_a"), candidate_id="cand_a"))
+            review.confirm("cand_a", actor_ref="actor_a")
+            self.assertIs(build_material_proposal(root=root, workspace_id="project_a", sanitized_id="san_d", candidate=candidate, evidence_text=source), COLLIDING_OC_AUTHORITY)
 
     def test_known_restricted_material_propagates_to_oc_proposal(self):
         tmp,s,w,san=self.setup()
         try:
-            source = "Текущий статус поставки — материалы находятся на проверке качества."
+            source = "Есть риск задержки."
             (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
             s._update(san["artifact_id"], sensitivity="restricted")
-            compiler = ContextCompiler(s, w); compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]}
+            compiler = ContextCompiler(s, w); compiler.model = lambda *_args, **_kwargs: {"candidates":[{"type":"risk","title":"Риск","statement":"Есть риск задержки.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True,"oc_subject":{"label":"Вероятность задержки","evidence_id":"E1","slot_anchor":"Есть риск","value_anchor":"задержки"}}]}
             with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
                 compiler.compile(san["artifact_id"])
             pending = OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w, state="pending")
@@ -309,7 +338,7 @@ class ContextCompilerTests(unittest.TestCase):
             barrier = threading.Barrier(2); failures = []
             def compile_one(sanitized):
                 compiler = ContextCompiler(s, w)
-                compiler.model = lambda *_args, **_kwargs: (barrier.wait(timeout=5), {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True}]})[1]
+                compiler.model = lambda *_args, **_kwargs: (barrier.wait(timeout=5), {"candidates":[{"type":"requirement","title":"Статус поставки","statement":"Материалы находятся на проверке качества.","block":{"start":0,"end":len(source)},"confidence":"high","requires_review":True,"oc_subject":{"label":"Статус поставки","evidence_id":"E1","slot_anchor":"Текущий статус поставки —","value_anchor":"материалы находятся на проверке качества"}}]})[1]
                 try:
                     with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
                         compiler.compile(sanitized["artifact_id"])

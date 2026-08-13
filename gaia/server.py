@@ -670,6 +670,9 @@ class Handler(BaseHTTPRequestHandler):
             if action == "reject":
                 service.reject(candidate_or_item_id)
                 json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            if action == "leave-unresolved":
+                service.leave_unresolved(candidate_or_item_id)
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
             if action == "retire":
                 service.retire(scope="project", scope_ref=str(workspace), item_id=candidate_or_item_id, actor_ref="local_user")
                 json_response(self, self._operational_context_review_payload(service, str(workspace))); return

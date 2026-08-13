@@ -68,7 +68,7 @@ class OperationalContextCandidate:
             _opaque(self.reference, "candidate.reference")
         if not isinstance(self.provenance, SafeProvenance) or self.sensitivity not in SENSITIVITIES:
             raise OperationalContextReviewError("candidate provenance or sensitivity is invalid.")
-        if not isinstance(self.reason, str) or self.state not in {"pending", "confirmed", "rejected"}:
+        if not isinstance(self.reason, str) or self.state not in {"pending", "confirmed", "rejected", "unresolved"}:
             raise OperationalContextReviewError("candidate state is invalid.")
         if self.replaces_id:
             _opaque(self.replaces_id, "candidate.replaces_id")
@@ -140,11 +140,11 @@ class OperationalContextCandidateStore:
         return sorted((item for item in candidates if item.scope == scope and item.scope_ref == scope_ref and (state is None or item.state == state)), key=lambda item: item.id)
 
     def set_state(self, candidate: OperationalContextCandidate, state: str) -> OperationalContextCandidate:
-        if state not in {"confirmed", "rejected"}:
+        if state not in {"confirmed", "rejected", "unresolved"}:
             raise OperationalContextReviewError("candidate state transition is invalid.")
         with path_lock(self.path):
             values = self._read(); current = self._parse(values.get(candidate.id), candidate.id)
-            if current.state != "pending":
+            if current.state not in {"pending", "unresolved"}:
                 raise OperationalContextReviewError("candidate was already decided.")
             updated = replace(current, state=state)
             values[updated.id] = _candidate_dict(updated); self._write(values)
@@ -223,8 +223,14 @@ class OperationalContextReviewService:
                     for item in self.store.list_scope(scope=history_scope, scope_ref=history_scope_ref)
                     if item["lifecycle"] in {"superseded", "retired"}
                 )
+        pending = self.candidates.list_scope(scope=scope, scope_ref=scope_ref, state="pending")
+        grouped: dict[tuple[str, str], list[OperationalContextCandidate]] = {}
+        for item in pending:
+            grouped.setdefault((item.kind, item.subject_ref), []).append(item)
+        competing = {identity for identity, items in grouped.items() if len({item.value for item in items}) > 1}
         return {
-            "requires_decision": [self._candidate_card(item) for item in self.candidates.list_scope(scope=scope, scope_ref=scope_ref, state="pending")],
+            "requires_decision": [self._candidate_card(item) for item in pending if (item.kind, item.subject_ref) not in competing],
+            "candidate_ambiguities": [{"kind": KIND_LABELS[identity[0]], "message": "Нужно уточнение", "hint": "Есть несколько новых вариантов одного текущего атрибута. Подтвердите подходящий вариант или оставьте их на проверке.", "alternatives": [self._candidate_card(item) for item in items]} for identity, items in grouped.items() if identity in competing],
             "current_context": [self._current_card(item) for item in self.store.list_scope(scope=scope, scope_ref=scope_ref) if item["lifecycle"] == "active" and item["confirmation"] == "confirmed"],
             "ambiguities": active_ambiguities, "deferred_ambiguities": deferred_ambiguities,
             "history": sorted(history, key=lambda item: (item["status"], item["content"])),
@@ -232,8 +238,12 @@ class OperationalContextReviewService:
 
     def confirm(self, candidate_id: str, *, actor_ref: str) -> dict[str, Any]:
         candidate = self.candidates.get(candidate_id)
-        if candidate.state != "pending":
+        if candidate.state not in {"pending", "unresolved"}:
             raise OperationalContextReviewError("candidate was already decided.")
+        if not candidate.replaces_id:
+            active = self._active_same_identity(candidate)
+            if active is not None:
+                candidate = replace(candidate, replaces_id=str(active["id"]))
         item_id = f"oc_{uuid.uuid4().hex}"
         evidence_id = f"oce_{uuid.uuid4().hex}"
         action = "replacement" if candidate.replaces_id else "promotion"
@@ -251,11 +261,34 @@ class OperationalContextReviewService:
         )
         saved = self.store.replace(candidate.replaces_id, item, evidence) if candidate.replaces_id else self.store.create(item, evidence)
         self.candidates.set_state(candidate, "confirmed")
+        self.store.clear_authority_ambiguity(scope=candidate.scope, scope_ref=candidate.scope_ref, kind=candidate.kind, subject_ref=candidate.subject_ref)
         return self._current_card(saved)
 
     def reject(self, candidate_id: str) -> None:
         candidate = self.candidates.get(candidate_id)
         self.candidates.set_state(candidate, "rejected")
+        self.store.clear_authority_ambiguity(scope=candidate.scope, scope_ref=candidate.scope_ref, kind=candidate.kind, subject_ref=candidate.subject_ref)
+
+    def leave_unresolved(self, candidate_id: str) -> None:
+        candidate = self.candidates.get(candidate_id)
+        if candidate.state != "pending":
+            raise OperationalContextReviewError("only a replacement proposal can become an unresolved disagreement.")
+        if not candidate.replaces_id:
+            active = self._active_same_identity(candidate)
+            if active is not None:
+                candidate = replace(candidate, replaces_id=str(active["id"]))
+        if not candidate.replaces_id:
+            raise OperationalContextReviewError("only a replacement proposal can become an unresolved disagreement.")
+        self.store.set_authority_ambiguity(
+            scope=candidate.scope, scope_ref=candidate.scope_ref, active_item_id=candidate.replaces_id,
+            candidate_id=candidate.id, kind=candidate.kind, subject_ref=candidate.subject_ref,
+            value=candidate.value, provenance=candidate.provenance, sensitivity=candidate.sensitivity,
+        )
+        self.candidates.set_state(candidate, "unresolved")
+
+    def _active_same_identity(self, candidate: OperationalContextCandidate) -> dict[str, Any] | None:
+        matches = [item for item in self.store.list_scope(scope=candidate.scope, scope_ref=candidate.scope_ref) if item["lifecycle"] == "active" and item["kind"] == candidate.kind and item["subject_ref"] == candidate.subject_ref]
+        return matches[0] if len(matches) == 1 else None
 
     def retire(self, *, scope: str, scope_ref: str, item_id: str, actor_ref: str) -> dict[str, Any]:
         evidence = new_evidence(scope=scope, scope_ref=scope_ref, action="retirement", target_item_id=item_id, actor_ref=actor_ref)
@@ -275,15 +308,19 @@ class OperationalContextReviewService:
 
     def _candidate_card(self, candidate: OperationalContextCandidate) -> dict[str, str]:
         previous_content = ""
-        if candidate.replaces_id:
-            previous = self.store.get(scope=candidate.scope, scope_ref=candidate.scope_ref, item_id=candidate.replaces_id)
+        previous_id = candidate.replaces_id
+        if not previous_id:
+            current = self._active_same_identity(candidate)
+            previous_id = str(current["id"]) if current else ""
+        if previous_id:
+            previous = self.store.get(scope=candidate.scope, scope_ref=candidate.scope_ref, item_id=previous_id)
             previous_content = str(previous["value"] or previous["reference"])
         return {
             "id": candidate.id, "content": candidate.value or candidate.reference,
             "kind": KIND_LABELS[candidate.kind], "context": "Проект" if candidate.scope == "project" else "Локальный контекст",
             "source": "Локальный подтверждаемый источник", "sensitivity": SENSITIVITY_LABELS[candidate.sensitivity],
             "reason": candidate.reason or "Требуется подтверждение человека.",
-            "replacement_of": candidate.replaces_id,
+            "replacement_of": previous_id,
             "previous_content": previous_content,
         }
 
@@ -297,7 +334,8 @@ class OperationalContextReviewService:
 
     @staticmethod
     def _candidate_history(candidate: OperationalContextCandidate) -> dict[str, str]:
-        return {"content": candidate.value or candidate.reference, "status": "Отклонено" if candidate.state == "rejected" else "Подтверждено", "source": "Локальный подтверждаемый источник", "sensitivity": SENSITIVITY_LABELS[candidate.sensitivity]}
+        status = "Отклонено" if candidate.state == "rejected" else "Нерешённое противоречие" if candidate.state == "unresolved" else "Подтверждено"
+        return {"content": candidate.value or candidate.reference, "status": status, "source": "Локальный подтверждаемый источник", "sensitivity": SENSITIVITY_LABELS[candidate.sensitivity]}
 
     @staticmethod
     def _lifecycle_history(item: dict[str, Any]) -> dict[str, str]:
@@ -306,7 +344,7 @@ class OperationalContextReviewService:
     def _ambiguity_card(self, ambiguity: AuthorityAmbiguity) -> dict[str, Any]:
         alternatives = []
         for authority in ambiguity.involved_authorities:
-            item = self.store.get(scope=authority.scope, scope_ref=authority.scope_ref, item_id=authority.item_id)
+            item = self.store.get(scope=authority.scope, scope_ref=authority.scope_ref, item_id=authority.item_id) if authority.confirmation_ref else {"value": authority.content, "reference": ""}
             alternatives.append({
                 "content": str(item["value"] or item["reference"]),
                 "source": "Локальный подтверждённый источник",

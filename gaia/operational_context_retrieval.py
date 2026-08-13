@@ -79,7 +79,7 @@ class AuthorityReference:
     scope_ref: str
     provenance: dict[str, str]
     confirmation_ref: str
-    content: str
+    content: str = ""
 
     @classmethod
     def from_item(cls, item: dict[str, Any]) -> "AuthorityReference":
@@ -158,6 +158,15 @@ class OperationalContextReader:
             except OperationalContextError:
                 exclusions.append(SafeDiagnostic("invalid_record"))
 
+        persisted_ambiguities: list[AuthorityAmbiguity] = []
+        try:
+            for raw in self.store.authority_ambiguities(scope="project", scope_ref=request.project_ref):
+                active = self.store.get(scope="project", scope_ref=request.project_ref, item_id=str(raw["active_item_id"]))
+                alternative = AuthorityReference(str(raw["candidate_id"]), "project", request.project_ref, dict(raw["provenance"]), "", str(raw["value"]))
+                persisted_ambiguities.append(AuthorityAmbiguity(str(raw["kind"]), str(raw["subject_ref"]), str(raw["sensitivity"]), (AuthorityReference.from_item(active), alternative)))
+        except (KeyError, TypeError, OperationalContextError):
+            exclusions.append(SafeDiagnostic("invalid_record"))
+
         applicable: list[dict[str, Any]] = []
         for item in candidates:
             item_id = str(item.get("id", ""))
@@ -167,10 +176,12 @@ class OperationalContextReader:
                 continue
             applicable.append(item)
 
+        ambiguous_slots = {(item.kind, item.subject_ref) for item in persisted_ambiguities}
         conflicts = self._conflicts(applicable)
         ambiguous_ids = {str(item["id"]) for group in conflicts for item in group}
+        ambiguous_ids.update(str(item.involved_authorities[0].item_id) for item in persisted_ambiguities)
         eligible = [item for item in applicable if str(item["id"]) not in ambiguous_ids]
-        ambiguities = [AuthorityAmbiguity.from_items(group) for group in conflicts]
+        ambiguities = persisted_ambiguities + [AuthorityAmbiguity.from_items(group) for group in conflicts if (str(group[0]["kind"]), str(group[0]["subject_ref"])) not in ambiguous_slots]
 
         eligible.sort(key=lambda item: (str(item["kind"]), str(item["updated_at"]), str(item["id"])))
         bounded: list[dict[str, Any]] = []

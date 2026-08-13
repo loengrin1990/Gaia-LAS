@@ -25,6 +25,7 @@ OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequenc
 RELATIONS_FIELD = "relations"
 MATERIAL_EVIDENCE_IDS_FIELD = "material_evidence_ids"
 MATERIAL_EVIDENCE_MODALITIES_FIELD = "material_evidence_modalities"
+OC_SUBJECT_FIELD = "oc_subject"
 MATERIAL_EVIDENCE_MODALITIES = {"text", "table_layout", "visual"}
 RPM1_CROSS_MODAL_COMPILER_VERSION = "rpm-1-cross-modal"
 RPM1_CROSS_MODAL_REQUIRED_MODALITIES = {"text", "visual"}
@@ -57,6 +58,15 @@ def context_response_schema(max_candidates: int, evidence_ids: list[str] | tuple
     properties[RELATIONS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "maxItems": 8}
     properties[MATERIAL_EVIDENCE_IDS_FIELD] = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 160}, "minItems": 1, "maxItems": 8}
     properties[MATERIAL_EVIDENCE_MODALITIES_FIELD] = {"type": "array", "items": {"type": "string", "enum": sorted(MATERIAL_EVIDENCE_MODALITIES)}, "minItems": 1, "maxItems": 3}
+    properties[OC_SUBJECT_FIELD] = {"anyOf": [
+        {"type": "null"},
+        {"type": "object", "properties": {
+            "label": {"type": "string", "minLength": 1, "maxLength": 160},
+            "evidence_id": {"type": "string", "enum": list(evidence_ids)},
+            "slot_anchor": {"type": "string", "minLength": 1, "maxLength": 160},
+            "value_anchor": {"type": "string", "minLength": 1, "maxLength": 160},
+        }, "additionalProperties": False},
+    ]}
     return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_id", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
@@ -85,6 +95,7 @@ def local_context_model(text: str, cancel_event: Any = None, section_type_hint: 
         "evidence_id выбирай только из предложенных точных фрагментов; не возвращай evidence text или координаты. Если подходящего фрагмента нет, верни candidates: []. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
+        "Если факт безопасно задаёт конкретный текущий атрибут (не широкую тему), можешь добавить oc_subject: {label, evidence_id, slot_anchor, value_anchor}. label — только понятная подпись; slot_anchor и value_anchor обязательны и должны быть буквальными непустыми частями того же фрагмента-основания. slot_anchor включает отношение атрибута к значению, value_anchor — само значение; между ними допустимы только пробелы или пунктуация. Если это нельзя указать точно, не добавляй oc_subject. "
         "Не используй русские enum, пробелы в ключах или ключи requirement, solution, risk, question, action как замену структуры кандидата. "
         "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_id\":\"E1\",\"confidence\":\"high\",\"requires_review\":true}]}. "
         + (f"Тип задан структурой документа: {section_type_hint}. Не классифицируй его заново; возвращай только этот type. " if section_type_hint else "Извлеки только явно сказанные требования, решения, риски, вопросы и действия; ")
@@ -499,7 +510,7 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
                 raise CandidateValidationError("evidence_id_missing")
         if not active_required.issubset(item):
             raise CandidateValidationError("schema_required_fields")
-        if set(item) - active_required - OPTIONAL - {RELATIONS_FIELD, MATERIAL_EVIDENCE_IDS_FIELD, MATERIAL_EVIDENCE_MODALITIES_FIELD}:
+        if set(item) - active_required - OPTIONAL - {RELATIONS_FIELD, MATERIAL_EVIDENCE_IDS_FIELD, MATERIAL_EVIDENCE_MODALITIES_FIELD, OC_SUBJECT_FIELD}:
             raise CandidateValidationError("schema_unknown_field")
         if item["type"] not in TYPES: raise CandidateValidationError("unknown_type")
         if (not isinstance(item["title"],str) or not 1<=len(item["title"])<=160 or not isinstance(item["statement"],str)
@@ -531,6 +542,26 @@ def validate_candidates(payload: Any, length: int, max_candidates: int = MAX_CAN
 def _metadata_normalize(value: object) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold().replace("ё", "е")
     return " ".join("".join(char if char.isalnum() else " " for char in text).split())
+
+
+def _grounded_oc_subject(subject: object, evidence_id: str, evidence: str) -> dict[str, str] | None:
+    """Accept only a literal, structurally complete authority-slot assertion."""
+    if not isinstance(subject, dict) or set(subject) != {"label", "evidence_id", "slot_anchor", "value_anchor"}:
+        return None
+    values = {key: subject.get(key) for key in ("label", "evidence_id", "slot_anchor", "value_anchor")}
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()) or values["evidence_id"] != evidence_id:
+        return None
+    slot, value = str(values["slot_anchor"]), str(values["value_anchor"])
+    slot_start, value_start = evidence.find(slot), evidence.find(value)
+    if slot_start < 0 or value_start < 0 or slot_start == value_start:
+        return None
+    first_start, first_text, second_start, second_text = (slot_start, slot, value_start, value) if slot_start < value_start else (value_start, value, slot_start, slot)
+    if first_start + len(first_text) > second_start:
+        return None
+    gap = evidence[first_start + len(first_text):second_start]
+    if any(char.isalnum() for char in gap):
+        return None
+    return {key: str(value).strip() for key, value in values.items()}
 
 
 def _material_evidence_fragment(value: str) -> str:
@@ -574,6 +605,11 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
             candidate.pop("consequence", None)
             candidate.pop(RELATIONS_FIELD, None)
             candidate.update(_ground_metadata(span.text))
+            subject = _grounded_oc_subject(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text)
+            if subject is None:
+                candidate.pop(OC_SUBJECT_FIELD, None)
+            else:
+                candidate[OC_SUBJECT_FIELD] = subject
         elif "evidence_quote" in candidate:  # Legacy deterministic test doubles only.
             quote = candidate.pop("evidence_quote")
             matches = [match.start() for match in re.finditer(re.escape(quote), unit.text)]

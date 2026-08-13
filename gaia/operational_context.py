@@ -231,6 +231,29 @@ class OperationalContextStore:
         newer = sorted(x["id"] for x in state["items"].values() if x.get("supersedes_id") == item_id)
         return {"item": item, "supersedes": item.get("supersedes_id", ""), "superseded_by": newer}
 
+    def set_authority_ambiguity(self, *, scope: Scope, scope_ref: str, active_item_id: str, candidate_id: str, kind: str, subject_ref: str, value: str, provenance: SafeProvenance, sensitivity: Sensitivity) -> None:
+        """Persist a reviewed unresolved alternative without creating another active item."""
+        _scope(scope); _opaque(scope_ref, "scope_ref"); _opaque(active_item_id, "active_item_id"); _opaque(candidate_id, "candidate_id")
+        if kind not in KIND_REGISTRY or sensitivity not in SENSITIVITIES:
+            raise OperationalContextError("authority ambiguity is invalid.")
+        path = self._partition_path(scope, scope_ref)
+        with path_lock(path):
+            state = self._read(path, scope, scope_ref); active = state["items"].get(active_item_id)
+            if not active or active.get("lifecycle") != "active" or (active.get("kind"), active.get("subject_ref")) != (kind, subject_ref):
+                raise OperationalContextError("authority ambiguity target is invalid.")
+            values = state.setdefault("ambiguities", {})
+            values[f"{kind}:{subject_ref}"] = {"active_item_id": active_item_id, "candidate_id": candidate_id, "kind": kind, "subject_ref": subject_ref, "value": value, "provenance": asdict(provenance), "sensitivity": sensitivity}
+            self._write(path, state)
+
+    def authority_ambiguities(self, *, scope: Scope, scope_ref: str) -> list[dict[str, Any]]:
+        state = self._read(self._partition_path(scope, scope_ref), scope, scope_ref)
+        return [dict(value) for value in state.get("ambiguities", {}).values()]
+
+    def clear_authority_ambiguity(self, *, scope: Scope, scope_ref: str, kind: str, subject_ref: str) -> None:
+        path = self._partition_path(scope, scope_ref)
+        with path_lock(path):
+            state = self._read(path, scope, scope_ref); state.get("ambiguities", {}).pop(f"{kind}:{subject_ref}", None); self._write(path, state)
+
     def _write_new(self, item: OperationalItem, evidence: ConfirmationEvidence, old_id: str | None) -> dict[str, Any]:
         if evidence.scope != item.scope or evidence.scope_ref != item.scope_ref or evidence.target_item_id != item.id or item.confirmation_ref != evidence.id:
             raise OperationalContextError("confirmation evidence does not match the new item.")
@@ -277,7 +300,7 @@ class OperationalContextStore:
         except (OSError, json.JSONDecodeError) as exc:
             raise OperationalContextError("operational context partition is invalid.") from exc
         if (not isinstance(payload, dict) or payload.get("schema_version") != 1
-                or not isinstance(payload.get("items"), dict) or not isinstance(payload.get("evidence"), dict)):
+                or not isinstance(payload.get("items"), dict) or not isinstance(payload.get("evidence"), dict) or ("ambiguities" in payload and not isinstance(payload["ambiguities"], dict))):
             raise OperationalContextError("operational context partition is invalid.")
         evidence: dict[str, ConfirmationEvidence] = {}
         try:
