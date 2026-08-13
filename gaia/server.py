@@ -33,6 +33,17 @@ from .controlled_intake import ControlledIntake
 from .context_compiler import ContextCompileError, ContextCompiler, ContextService
 from .context_search import ContextSearchError, parse_params, search
 from .context_overview import overview
+from .operational_context import KIND_REGISTRY, OperationalContextError, OperationalContextStore
+from .operational_context_review import (
+    OperationalContextCandidateStore,
+    OperationalContextReviewError,
+    OperationalContextReviewService,
+)
+from .operational_context_retrieval import (
+    OperationalContextReader,
+    RetrievalRequest,
+    TrustedLocalProcessingPolicy,
+)
 from .provenance import ProvenanceError
 from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .launchers import close_gaia_window, launch_gaia_window, launch_module
@@ -275,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/reviews/"):
             self.handle_review_get()
             return
+        if self.path.startswith("/api/operational-context/"):
+            self.handle_operational_context_review_get()
+            return
         if self.path.startswith("/api/context"):
             self.handle_context_get()
             return
@@ -299,6 +313,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.startswith("/api/reviews/"):
             self.handle_review_action()
+            return
+        if route.startswith("/api/operational-context/"):
+            self.handle_operational_context_review_action()
             return
         if route.startswith("/api/context/"):
             self.handle_context_action()
@@ -582,6 +599,83 @@ class Handler(BaseHTTPRequestHandler):
                 review_action_failure(intake, project, artifact_id, action, trace_id, exc)
             json_response(self, api_error_payload("review_failed", "Не удалось завершить локальную проверку материала. Данные не изменены.", trace_id=trace_id), 400); return
         error_response(self, "not_found", "not found", 404)
+
+    def _operational_context_review(self, project: str, *, create_metadata: bool = False) -> OperationalContextReviewService | None:
+        intake = ControlledIntake(create_metadata=create_metadata)
+        workspace = intake.existing_workspace(project)
+        if not workspace:
+            return None
+        return OperationalContextReviewService(
+            OperationalContextStore(intake.store.root),
+            OperationalContextCandidateStore(intake.store.root),
+        )
+
+    @staticmethod
+    def _operational_context_ambiguities(service: OperationalContextReviewService, workspace: str) -> tuple[Any, ...]:
+        return OperationalContextReader(service.store).retrieve(RetrievalRequest(
+            user_ref="local_user", project_ref=workspace, system_ref=RUNTIME_ID,
+            supported_kinds=frozenset(KIND_REGISTRY),
+            trusted_local_policy=TrustedLocalProcessingPolicy(frozenset(("standard", "restricted"))),
+            max_items=100, max_chars=100_000,
+        )).ambiguities
+
+    @classmethod
+    def _operational_context_review_payload(cls, service: OperationalContextReviewService, workspace: str) -> dict[str, Any]:
+        return service.view(
+            scope="project",
+            scope_ref=workspace,
+            ambiguities=cls._operational_context_ambiguities(service, workspace),
+            history_scopes=(("system", RUNTIME_ID), ("user", "local_user")),
+        )
+
+    def handle_operational_context_review_get(self) -> None:
+        route = urlparse(self.path)
+        project = parse_qs(route.query).get("project", [""])[0]
+        if route.path != "/api/operational-context/review" or not project.strip():
+            error_response(self, "operational_context_review_invalid", "Выберите рабочее пространство для просмотра текущего контекста.", 400)
+            return
+        try:
+            service = self._operational_context_review(project)
+            if service is None:
+                json_response(self, {"requires_decision": [], "current_context": [], "ambiguities": [], "deferred_ambiguities": [], "history": []})
+                return
+            workspace = ControlledIntake(create_metadata=False).existing_workspace(project)
+            json_response(self, self._operational_context_review_payload(service, str(workspace)))
+        except (OperationalContextError, OperationalContextReviewError):
+            error_response(self, "operational_context_review_failed", "Не удалось загрузить Operational Context. Данные не изменены.", 400)
+
+    def handle_operational_context_review_action(self) -> None:
+        route = urlparse(self.path).path.split("/")
+        candidate_or_item_id = route[4] if len(route) >= 5 else ""
+        action = route[5] if len(route) >= 6 else ""
+        payload = self.read_json(); project = str(payload.get("project") or "")
+        if not project.strip():
+            error_response(self, "operational_context_review_invalid", "Выберите рабочее пространство для действия с контекстом.", 400)
+            return
+        try:
+            service = self._operational_context_review(project)
+            if service is None:
+                raise OperationalContextReviewError("workspace is unavailable.")
+            workspace = ControlledIntake(create_metadata=False).existing_workspace(project)
+            ambiguities = self._operational_context_ambiguities(service, str(workspace))
+            if candidate_or_item_id == "ambiguity" and action == "defer":
+                service.defer_ambiguity(str(payload.get("review_ref") or ""), ambiguities)
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            if candidate_or_item_id == "ambiguity" and action == "retire-alternative":
+                service.retire_ambiguity_alternative(str(payload.get("review_ref") or ""), payload.get("alternative_index"), ambiguities, actor_ref="local_user")
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            if action == "confirm":
+                service.confirm(candidate_or_item_id, actor_ref="local_user")
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            if action == "reject":
+                service.reject(candidate_or_item_id)
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            if action == "retire":
+                service.retire(scope="project", scope_ref=str(workspace), item_id=candidate_or_item_id, actor_ref="local_user")
+                json_response(self, self._operational_context_review_payload(service, str(workspace))); return
+            error_response(self, "not_found", "not found", 404)
+        except (OperationalContextError, OperationalContextReviewError):
+            error_response(self, "operational_context_review_failed", "Не удалось сохранить решение по Operational Context. Данные не изменены.", 400)
 
     def handle_context_get(self) -> None:
         route = urlparse(self.path); parts=route.path.split("/"); project=parse_qs(route.query).get("project",[""])[0]

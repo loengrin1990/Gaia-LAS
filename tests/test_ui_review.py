@@ -37,6 +37,22 @@ class UiReviewContractTests(unittest.TestCase):
         self.assertIn("function applyContextOverviewFilter(kind)", INDEX_HTML)
         self.assertNotIn("loadJourneySummary(); });\n    document.getElementById('contextSearchClear')", INDEX_HTML)
 
+    def test_operational_context_review_uses_two_safe_local_areas(self) -> None:
+        for text in (
+            'id="operationalContextReview"', 'id="operationalCurrentContext"',
+            'Требует решения', 'Текущий контекст', '/api/operational-context/review?',
+            'Подтвердить', 'Отклонить', 'Больше не актуально', 'Нужно уточнение',
+            'Чувствительность:', 'Обычный', 'Ограниченный',
+            'Подтвердить, что этот элемент больше не актуален?',
+            'Было: ${item.previous_content}', 'Стало: ${item.content}',
+            "confirm:'Заменить',reject:'Оставить как есть'", 'Оставить нерешённым',
+            'Вариант ${index+1}', 'Открыть прежнюю сводку', 'renderOperationalContextReview(data);',
+            'Новых предложений нет.', 'Нерешённые противоречия', 'История проверки',
+            'Больше не актуально', 'ambiguity.hint',
+        ):
+            self.assertIn(text, INDEX_HTML)
+        self.assertNotIn('Выбрать победителя', INDEX_HTML)
+
     def test_stage_six_journey_uses_business_sections_and_central_statuses(self) -> None:
         for label in ("Материалы", "Проверка", "Контекст проекта", "Сводка"):
             self.assertIn(label, INDEX_HTML)
