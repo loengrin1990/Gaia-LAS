@@ -1,6 +1,6 @@
 # Context Assembler
 
-`gaia.context_assembler` — внутренняя read-only граница для Dialogue. Она отбирает только query-scoped, `confirmed` и `current` Operational Context внутри workspace, затем структурированно компонует его с существующим Lore `MemorySelection`.
+`gaia.context_assembler` — внутренняя read-only граница для Dialogue. Текущая legacy-реализация отбирает только query-scoped, `confirmed` и `current` Context внутри workspace, затем структурированно компонует его с существующим Lore `MemorySelection`.
 
 Термин `current` в существующей реализации — pre-v0/legacy semantics. Он не считается автоматически эквивалентным `lifecycle=active` из Operational Context v0: mapping/adaptation и доказательство его scope, subject identity и confirmation evidence относятся к отдельному будущему slice.
 
@@ -8,7 +8,7 @@
 
 `DialogueContextBudget` задаёт общий символьный бюджет и резерв для Operational Context. Неиспользованная ёмкость одного слоя доступна другому; элементы Context не обрезаются, чтобы не терять связь с provenance.
 
-Эта реализация описывает уже существующую workspace-ограниченную границу и не является полной реализацией Operational Context v0. Нормативные scope, lifecycle, privacy, promotion и conflict semantics для следующих slices определены в [Operational Context v0](OPERATIONAL_CONTEXT_V0.md). Контракт композиции: MemoryHub `DEC-20260809-005-context-assembler-composition-contract`.
+Эта реализация описывает уже существующую workspace-ограниченную legacy-границу и не является полной реализацией Operational Context v0. Нормативные scope, lifecycle, privacy, promotion и conflict semantics для следующих slices определены в [Operational Context v0](OPERATIONAL_CONTEXT_V0.md). В частности, trusted local authority resolution отделён от downstream disclosure: будущий OC-3 сохраняет sensitivity/authority provenance в package, а routing/egress позже решает, что можно передать consumer. Нынешняя реализация этого разделения не реализует. Контракт композиции: MemoryHub `DEC-20260809-005-context-assembler-composition-contract`.
 
 Dialogue передаёт полный contextual query в Lore. Для trusted Context selection он строит отдельную bounded projection: термины текущего сообщения идут первыми, а последний пользовательский вопрос добавляется только как компактный предмет для follow-up. Это сохраняет ограничение Context Search и не сокращает Lore query. Только Dialogue создаёт read-only reader уже существующего workspace; если workspace ещё не зарегистрирован или в нём нет подходящего Context, это нормальное пустое состояние. Другие вызовы `create_package`, включая Scribe и rebuild, не передают этот reader и сохраняют прежний Lore-only prompt.
 

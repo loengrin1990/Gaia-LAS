@@ -13,13 +13,13 @@ Operational Context (OC) — подтверждённое актуальное �
 | Scribe | Формирует и обновляет долговременную Memory только через её собственный контролируемый процесс. |
 | Lore | Извлекает релевантные долговременные знания, историю и обоснования из Memory. |
 | Operational Context | Хранит подтверждённое актуальное состояние с ограниченной областью видимости. |
-| Context Assembler | Read-only собирает ограниченный пакет из запроса, eligible OC, Lore/Memory и нужной истории диалога. |
+| Context Assembler | Read-only сохраняет authority/provenance/sensitivity в ограниченном package из запроса, локально разрешённого OC, Lore/Memory и нужной истории диалога; не является egress boundary. |
 | Heart | Ведёт диалог только поверх уже подготовленного пакета; не создаёт и не повышает OC. |
 | Orchestrator | Управляет workflow там, где он нужен, но не обязан быть прокси каждого простого read-only обращения. |
 
 ## Инварианты v0
 
-1. Текущим источником истины является только `active` и `confirmed` item, прошедший scope и privacy eligibility и имеющий валидное immutable evidence подтверждения.
+1. Текущим источником истины является только `active` и `confirmed` item, прошедший exact scope и trusted-local authority eligibility и имеющий валидное immutable evidence подтверждения. Возможность Gaia учесть item внутри разрешённого локального контура не равна разрешению раскрыть его конкретному downstream consumer.
 2. Project item проекта A никогда не выдаётся проекту B. Совпадение текста, пользователя, источника или идентификатора документа не является разрешением на передачу между проектами.
 3. Содержимое приватного материала не становится OC, Memory или глобально доступными метаданными автоматически.
 4. Каждый доступный item сохраняет стабильный идентификатор, subject identity, scope и безопасные provenance/confirmation-ссылки. Assembler не отделяет значение от этих свойств.
@@ -43,7 +43,7 @@ Operational Context (OC) — подтверждённое актуальное �
 | `lifecycle` | `active`, `superseded` или `retired`. |
 | `confirmation` | `confirmed` для доступного runtime item; само значение допустимо только вместе с валидным `confirmation_ref`. Остальные состояния принадлежат candidate-потоку и не являются operational items. |
 | `confirmation_ref` | Обязательная immutable audit/promotion reference для confirmed item. Событие доказывает candidate/source transition, opaque `actor_ref`, timestamp и action; raw персональные данные и source content в item не копируются. |
-| `sensitivity` | Метка обработки и допустимой выдачи: минимум `standard` или `restricted`. |
+| `sensitivity` | Метка handling classification: минимум `standard` или `restricted`. Она сохраняется при authority resolution, composition и downstream disclosure; v0 не выполняет автоматическую declassification. |
 | `supersedes_id` | Необязательная ссылка на непосредственно заменённый item. |
 
 Operational identity — точное сочетание `scope + scope_ref + kind + subject_ref`. Оно применяется для applicability, conflict detection и replacement semantics; значение `value` не может неявно определять subject. Confidence не входит в operational item v0. Он может существовать у candidate как сигнал для человека, но после human confirmation не является источником authority. Произвольные графовые связи, оценка релевантности и поля «на будущее» не входят в модель v0.
@@ -97,7 +97,15 @@ Candidate содержит proposed scope/kind/subject_ref/value/reference, бе
 | Candidate extraction | Создать отделённый candidate с минимальным предложенным фактом и безопасной ссылкой на provenance. | Автоматически подтверждать candidate или раскрывать source другому scope. |
 | Promotion | По явному действию сохранить лишь выбранный, минимально необходимый value/reference, scope и sensitivity. | Копировать документ целиком, повышать невыбранные фрагменты или ослаблять export/privacy ограничения. |
 
-`restricted` item выдаётся только consumer, который одновременно прошёл scope eligibility и имеет разрешённый privacy contract. Если такой contract не доказан, item исключается с безопасной причиной без раскрытия значения. Provenance и диагностика не должны содержать raw source, путь к приватному файлу, цитату или скрытые идентификаторы. Действующие [контракт хранения и безопасности](SECURITY_STORAGE_POLICY.md), [модель хранения](STORAGE_MODEL.md) и [защитный контур](PROTECTION_PIPELINE.md) имеют приоритет для материала и его производных.
+### Trusted local authority resolution и downstream disclosure
+
+Эти процессы разделены. Trusted local authority resolution внутри разрешённого доверенного контура Gaia рассматривает все items, допустимые по exact scope, lifecycle, confirmation и локальному privacy boundary, включая `restricted`. Так Gaia определяет current state и конфликт; downstream consumer capability не вправе преждевременно исключить restricted item и тем самым сделать другой факт ложным бесспорным authority.
+
+Downstream disclosure / egress — отдельная более поздняя граница. Она решает, какой уже определённый package или результат разрешено передать конкретному consumer. Если у consumer нет restricted capability, raw restricted item, его value/reference/provenance, выявляющая его conflict relation причина и содержательный результат, materially зависящий от него, не передаются. В частности, при конфликте standard A и restricted B нельзя ни отбросить B и выдать A как valid, ни сообщить, что A недействителен из-за B. Поздний routing/runtime layer выбирает разрешённый trusted/local path либо безопасно сообщает, что данный downstream route нельзя использовать; UX и routing в v0 не определяются.
+
+Если conclusion, summary, decision, suppression/invalidation другого current fact или иной содержательный package materially зависит от restricted input, его handling classification не может автоматически стать ниже `restricted`. Это не information-flow engine, а fail-closed v0 principle: automatic declassification запрещена. Пользователь не обязан помнить sensitivity ранее добавленного материала при каждом запросе: Gaia сохраняет classification и применяет её при authority resolution, composition и disclosure. Human gate остаётся для promotion/declassification только там, где это отдельно требует contract.
+
+Provenance и диагностика не должны содержать raw source, путь к приватному файлу, цитату или скрытые идентификаторы. Действующие [контракт хранения и безопасности](SECURITY_STORAGE_POLICY.md), [модель хранения](STORAGE_MODEL.md) и [защитный контур](PROTECTION_PIPELINE.md) имеют приоритет для материала и его производных.
 
 ## Граница с Memory
 
@@ -105,35 +113,35 @@ Memory — canonical home для долговременных знаний, ис
 
 Материализованное `value` допускается лишь когда для текущей работы нужен небольшой изменяемый факт, который не является самостоятельной durable knowledge entity. Если такой факт становится устойчивым знанием/решением, его canonical запись создаётся процессом Memory/Scribe, а OC в дальнейшем ссылается на неё.
 
-При конфликте OC и Memory OC имеет приоритет только в вопросе текущего состояния и только при `active + confirmed + eligible`. Memory не переписывается и не подавляется. Если конфликт указывает, что Memory decision более не применимо либо нуждается в пересмотре, создаётся candidate/запрос человеку в соответствующем процессе; OC-0 не вводит автоматическую reconciliation между слоями.
+При конфликте OC и Memory OC имеет приоритет только в вопросе текущего состояния и только при `active + confirmed + trusted-local eligible`. Memory не переписывается и не подавляется. Если конфликт указывает, что Memory decision более не применимо либо нуждается в пересмотре, создаётся candidate/запрос человеку в соответствующем процессе; OC-0 не вводит автоматическую reconciliation между слоями.
 
 ## Retrieval eligibility contract
 
-Будущий retrieval получает минимум: current user, exact current project/workspace, query/task и идентификатор локального system environment. Он возвращает ограниченный набор eligible `active` items вместе с `id`, scope, sensitivity, safe provenance и диагностикой исключений. Retrieval не обязан использовать semantic ranking в v0.
+Будущий retrieval получает минимум: current user, exact current project/workspace, query/task и идентификатор локального system environment. В trusted local boundary он возвращает ограниченный набор authority-eligible `active` items вместе с `id`, scope, sensitivity, safe provenance и диагностикой исключений; конкретному downstream consumer этот набор сам по себе не раскрывается. Retrieval не обязан использовать semantic ranking в v0.
 
 Item eligible, только когда одновременно:
 
 1. `lifecycle=active`, `confirmation=confirmed` и `confirmation_ref` валидно ссылается на immutable confirmation/promotion evidence;
 2. scope и `scope_ref` точно совпали с допустимым окружением запроса;
-3. sensitivity разрешена consumer и текущему запросу;
-4. `kind` поддержан данным consumer;
+3. sensitivity допускает trusted local processing Gaia для текущего запроса; downstream consumer capability применяется только на отдельной disclosure/egress boundary;
+4. `kind` поддержан trusted local processing для текущего запроса;
 5. item не находится в неразрешённом конфликте для той же operational identity;
 6. item помещается в запрошенный bounded budget без отделения от provenance.
 
-Фильтрация детерминирована. Исключённый item получает одну безопасную причину из закрытого набора, например: `not_active`, `not_confirmed`, `invalid_confirmation_evidence`, `scope_mismatch`, `privacy_restricted`, `unsupported_kind`, `unresolved_conflict`, `budget_exceeded` или `invalid_record`. Эти технические коды предназначены для API/диагностики; UI обязан отображать им понятные русские подписи. Результаты упорядочиваются стабильно по kind-defined applicability/composition rule, затем `updated_at`, затем `id`; при отсутствии явного kind rule конфликтующие applicable items возвращают ambiguity, а не выбираются по scope.
+Фильтрация authority детерминирована. Исключённый item получает одну безопасную причину из закрытого набора, например: `not_active`, `not_confirmed`, `invalid_confirmation_evidence`, `scope_mismatch`, `unsupported_kind`, `unresolved_conflict`, `budget_exceeded` или `invalid_record`. Disclosure boundary использует отдельные безопасные причины и не раскрывает существование, value, provenance или отношения restricted item неразрешённому consumer. Эти технические коды предназначены для API/диагностики; UI обязан отображать им понятные русские подписи. Результаты упорядочиваются стабильно по kind-defined applicability/composition rule, затем `updated_at`, затем `id`; при отсутствии явного kind rule конфликтующие applicable items возвращают ambiguity, а не выбираются по scope.
 
 ## Context Assembler boundary
 
-Assembler имеет право read-only читать query/task, verified session/conversation context, eligible OC и Lore-selected Memory. Он формирует bounded package для Heart/runtime, сохраняя происхождение и различая authority слоёв:
+Assembler имеет право read-only читать query/task, verified session/conversation context, authority-eligible OC и Lore-selected Memory. Он формирует bounded package, сохраняя происхождение, sensitivity и различая authority слоёв; конкретный downstream disclosure решается после этой границы:
 
 ```text
-query/task + eligible Operational Context + relevant Lore/Memory
+query/task + authority-eligible Operational Context + relevant Lore/Memory
            + required session context -> bounded context package
 ```
 
 Assembler не читает raw private sources ради обхода OC, не вызывает Scribe, не создаёт candidates, не подтверждает/promote items, не меняет lifecycle и не разрешает конфликты. Он не заменяет query-scoped выбор выгрузкой «всего известного о проекте». Каждый включённый item остаётся атомарным с `id`, operational identity, sensitivity, provenance и confirmation evidence; невошедший по budget item не обрезается до потери этих связей.
 
-Heart получает только package. Он не считается authority для обновления Memory или OC и не должен интерпретировать отсутствие OC как разрешение на утверждение непроверенного current state.
+Assembler не ослабляет sensitivity. Если package materially зависит от restricted input, его handling classification не может автоматически стать standard; raw restricted item и раскрывающий его производный content не передаются неразрешённому consumer. Heart получает только package, прошедший соответствующую disclosure/egress boundary. Он не считается authority для обновления Memory или OC и не должен интерпретировать отсутствие OC как разрешение на утверждение непроверенного current state.
 
 ## Conflict semantics v0
 
@@ -142,7 +150,7 @@ Heart получает только package. Он не считается author
 | Два active OC items противоречат для одной operational identity | Оба исключаются из authority для этого предмета с `unresolved_conflict`; требуется human resolution. |
 | Новый item противоречит active item той же operational identity | Новый является candidate до подтверждения; старый остаётся `active`. После подтверждения replacement старый становится `superseded`. |
 | Items разных scopes одновременно применимы | Используется только явное composition/precedence rule их `kind`; без такого правила — ambiguity и human gate, без общей scope ladder. |
-| OC противоречит Memory | Eligible OC определяет только current state; Memory сохраняется без автоматического изменения. Создаётся задача проверки/кандидат согласно владельцу canonical Memory. |
+| OC противоречит Memory | Authority-eligible OC определяет только current state; Memory сохраняется без автоматического изменения. Если конфликт или вывод materially зависит от restricted OC, его disclosure получает не ниже restricted handling. Создаётся задача проверки/кандидат согласно владельцу canonical Memory. |
 | Новый source document противоречит confirmed OC | Из него может возникнуть candidate с provenance; confirmed OC не меняется до human confirmation replacement или retirement. |
 
 ## Non-goals v0
@@ -168,9 +176,9 @@ OC-0 не реализует и не утверждает: redesign Heart; но�
 | Slice | Результат и граница |
 |---|---|
 | OC-1 Store | Минимальная schema/model, closed kind registry, scoped persistence, subject identity, immutable confirmation/replacement/retirement audit evidence, lifecycle и audit/provenance без runtime consumer. Не мигрирует старые записи без отдельного решения. |
-| OC-2 Retrieval | Deterministic eligibility/filtering, stable ordering, ambiguity и безопасная диагностика; без semantic ranking. |
-| OC-3 Context Assembler | Read-only bounded package из OC, Lore и необходимой истории; без promotion и без redesign Heart. |
+| OC-2 Retrieval | Deterministic trusted-local authority eligibility/filtering, stable ordering, ambiguity и безопасная диагностика; без semantic ranking и без downstream disclosure. |
+| OC-3 Context Assembler | Read-only bounded package из authority-eligible OC, Lore и необходимой истории с сохранением sensitivity/authority provenance; без promotion, disclosure routing и redesign Heart. |
 | OC-4 Review / UX | Экран кандидатов и контролируемые действия confirmation, replacement, retirement и conflict resolution с понятными русскими подписями. |
-| OC-5 Runtime integration | Узкая передача готового package в Dialogue/Heart и проверка end-to-end privacy/scope boundaries; без обязательной проксизации всех вызовов через Orchestrator. |
+| OC-5 Runtime integration | Узкая передача готового package в Dialogue/Heart, disclosure/egress routing и проверка end-to-end privacy/scope boundaries, включая запрет передачи restricted-derived content неразрешённому consumer; без обязательной проксизации всех вызовов через Orchestrator. |
 
 Каждый slice начинается с проверки этого контракта и действующих storage/privacy contracts. Изменение базовой семантики, scope precedence, privacy gate или Memory boundary требует отдельного архитектурного решения до реализации.
