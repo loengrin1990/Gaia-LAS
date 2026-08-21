@@ -69,17 +69,19 @@ class ContextCompilerTests(unittest.TestCase):
         evidence = "Финальное согласование выполняет руководитель проекта."
         complete = {"label":"Исполнитель", "evidence_id":"E1", "slot_anchor":"Финальное согласование выполняет", "value_anchor":"руководитель проекта"}
         cases = (
-            (None, "absent_from_model", "oc_subject_absent"),
-            ({"label":"Исполнитель"}, "incomplete", "oc_subject_shape_incomplete"),
-            ({**complete, "evidence_id":"E2"}, "evidence_unresolved", "oc_subject_evidence_id_mismatch"),
-            ({**complete, "slot_anchor":""}, "slot_anchor_missing", "slot_anchor_missing"),
-            ({**complete, "value_anchor":""}, "value_anchor_missing", "value_anchor_missing"),
-            ({**complete, "slot_anchor":"Финальное согласование", "value_anchor":"руководитель проекта"}, "assertion_shape_invalid", "anchors_not_adjacent"),
-            (complete, "grounded_valid", "grounded"),
+            (None, False, "missing_contract_violation", "field_missing_contract_violation", "oc_subject_field_missing"),
+            (None, True, "explicit_null", "explicit_null", "oc_subject_explicit_null"),
+            ({"label":"Исполнитель"}, True, "object_received", "object_grounding_failed", "oc_subject_shape_incomplete"),
+            ({**complete, "evidence_id":"E2"}, True, "object_received", "object_grounding_failed", "oc_subject_evidence_id_mismatch"),
+            ({**complete, "slot_anchor":""}, True, "object_received", "object_grounding_failed", "slot_anchor_missing"),
+            ({**complete, "value_anchor":""}, True, "object_received", "object_grounding_failed", "value_anchor_missing"),
+            ({**complete, "slot_anchor":"Финальное согласование", "value_anchor":"руководитель проекта"}, True, "object_received", "object_grounding_failed", "anchors_not_adjacent"),
+            (complete, True, "object_received", "grounded_valid", "grounded"),
         )
-        for subject, stage, reason in cases:
+        for subject, field_present, model_field, stage, reason in cases:
             with self.subTest(stage=stage):
-                diagnostic = _oc_subject_diagnostic(subject, "E1", evidence)
+                diagnostic = _oc_subject_diagnostic(subject, "E1", evidence, field_present=field_present)
+                self.assertEqual(diagnostic["model_field"], model_field)
                 self.assertEqual((diagnostic["stage"], diagnostic["reason"]), (stage, reason))
                 self.assertNotIn("Финальное", json.dumps(diagnostic, ensure_ascii=False))
                 self.assertNotIn("руководитель", json.dumps(diagnostic, ensure_ascii=False))
@@ -98,11 +100,64 @@ class ContextCompilerTests(unittest.TestCase):
             self.assertEqual(len(legacy), 1)
             receipt = json.loads(compiler._receipt_path(san["artifact_id"]).read_text(encoding="utf-8"))
             diagnostic = receipt["producer_diagnostics"][0]
-            self.assertEqual(diagnostic["oc_subject"]["stage"], "absent_from_model")
+            self.assertEqual(diagnostic["oc_subject"]["stage"], "field_missing_contract_violation")
+            self.assertEqual(diagnostic["parser_oc_subject"], "missing_contract_violation")
             self.assertEqual(diagnostic["bridge"], {"stage":"bridge_rejected", "reason":"subject_not_grounded"})
-            self.assertEqual(diagnostic["fingerprint"]["parser_contract_version"], "context-parser-v1")
+            self.assertEqual(diagnostic["fingerprint"]["parser_contract_version"], "context-parser-v2-oc-subject-required")
             self.assertNotIn(source, json.dumps(receipt, ensure_ascii=False))
         finally: tmp.cleanup()
+
+    def test_explicit_null_oc_subject_stays_on_legacy_path_with_distinct_diagnostic(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Обсудили финальное согласование."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            payload = {"candidates":[{"type":"requirement","title":"Обсуждение","statement":source,"evidence_id":"E1","confidence":"high","requires_review":True,"oc_subject":None}]}
+            with patch("gaia.context_compiler.local_context_model", return_value=payload), patch("gaia.context_compiler.execute_context_model_call"):
+                compiler = ContextCompiler(s, w); compiler._uses_local_provider = True
+                with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                    legacy = compiler.compile(san["artifact_id"])
+            self.assertEqual(len(legacy), 1)
+            receipt = json.loads(compiler._receipt_path(san["artifact_id"]).read_text(encoding="utf-8"))
+            diagnostic = receipt["producer_diagnostics"][0]
+            self.assertEqual(diagnostic["parser_oc_subject"], "explicit_null")
+            self.assertEqual(diagnostic["oc_subject"]["stage"], "explicit_null")
+            self.assertEqual(OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w), [])
+        finally: tmp.cleanup()
+
+    def test_invalid_oc_subject_object_stays_on_legacy_path_after_grounding(self):
+        tmp,s,w,san=self.setup()
+        try:
+            source = "Финальное согласование выполняет руководитель проекта."
+            (s.root / "sanitized" / w / f"{san['artifact_id']}.txt").write_text(source, encoding="utf-8")
+            subject = {"label":"Исполнитель","evidence_id":"E1","slot_anchor":"Финальное согласование выполняет","value_anchor":"несуществующее значение"}
+            payload = {"candidates":[{"type":"requirement","title":"Согласование","statement":source,"evidence_id":"E1","confidence":"high","requires_review":True,"oc_subject":subject}]}
+            with patch("gaia.context_compiler.local_context_model", return_value=payload), patch("gaia.context_compiler.execute_context_model_call"):
+                compiler = ContextCompiler(s, w); compiler._uses_local_provider = True
+                with patch.object(compiler, "_preload"), patch.object(compiler, "_unload"):
+                    legacy = compiler.compile(san["artifact_id"])
+            self.assertEqual(len(legacy), 1)
+            receipt = json.loads(compiler._receipt_path(san["artifact_id"]).read_text(encoding="utf-8"))
+            diagnostic = receipt["producer_diagnostics"][0]
+            self.assertEqual(diagnostic["parser_oc_subject"], "object_received")
+            self.assertEqual(diagnostic["oc_subject"]["stage"], "object_grounding_failed")
+            self.assertEqual(diagnostic["bridge"], {"stage":"bridge_rejected", "reason":"subject_not_grounded"})
+            self.assertEqual(OperationalContextCandidateStore(s.root).list_scope(scope="project", scope_ref=w), [])
+        finally: tmp.cleanup()
+
+    def test_all_candidate_types_accept_required_explicit_null_subject(self):
+        payload = {"candidates":[
+            {"type": item_type, "title": item_type, "statement": "Явный факт.", "evidence_id": "E1", "confidence": "high", "requires_review": True, "oc_subject": None}
+            for item_type in ("requirement", "decision", "risk", "open_question", "action")
+        ]}
+        validated = validate_candidates(payload, 100, 5, evidence_ids={"E1"})
+        self.assertEqual([item["type"] for item in validated], ["requirement", "decision", "risk", "open_question", "action"])
+
+    def test_prompt_examples_do_not_route_without_a_received_grounded_subject(self):
+        source = "Финальное согласование выполняет финансовый контролёр."
+        candidate = {"type":"requirement", "statement":source, "block":{"start":0,"end":len(source)}, "oc_subject":None}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(build_material_proposal(root=Path(tmp), workspace_id="project", sanitized_id="san", candidate=candidate, evidence_text=source))
 
     def test_inexact_evidence_is_rejected_without_fuzzy_repair(self):
         with self.assertRaises(CandidateValidationError) as rejected:
@@ -453,6 +508,8 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(properties["evidence_id"], {"type":"string", "enum":["E1"]})
         self.assertEqual(properties["confidence"]["enum"], ["low", "medium", "high"])
         self.assertTrue(properties["requires_review"]["const"])
+        self.assertIn("oc_subject", candidate["required"])
+        self.assertEqual(properties["oc_subject"]["anyOf"][0], {"type":"null"})
         valid = {"type":"action", "title":"x" * 160, "statement":"y" * 1200, "evidence_id":"E1", "confidence":"high", "requires_review":True}
         self.assertEqual(validate_candidates({"candidates":[valid]}, 20, evidence_ids={"E1"}), [valid])
         for field, value in (("title", ""), ("title", "x" * 161), ("statement", ""), ("statement", "y" * 1201), ("confidence", "other"), ("requires_review", False)):
@@ -491,7 +548,7 @@ class ContextCompilerTests(unittest.TestCase):
         try:
             existing=ContextCompiler(s,w,lambda text:{"candidates":[{"type":"requirement","title":"Требование","statement":"Сохранить локальную проверку.","block":{"start":0,"end":8},"confidence":"high","requires_review":True}]}).compile(san["artifact_id"])[0]
             ContextService(s,w).decide(existing["id"],"confirm")
-            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v5")
+            with self.assertRaises(ProvenanceError): ContextCompiler(s,w,lambda text:(_ for _ in ()).throw(RuntimeError("synthetic failure"))).compile(san["artifact_id"],compiler_version="context-v5-failure")
             self.assertEqual(ContextService(s,w).get(existing["id"])["status"],"confirmed")
         finally: tmp.cleanup()
 
@@ -551,10 +608,17 @@ class ContextCompilerTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[0]["task"], "context_compiler")
         self.assertEqual(call.call_args.args[0]["timeout"], 240)
         self.assertIn("evidence_id выбирай только", call.call_args.args[0]["prompt"])
+        self.assertIn("oc_subject обязателен", call.call_args.args[0]["prompt"])
+        self.assertIn("Нельзя переводить, перефразировать, нормализовать", call.call_args.args[0]["prompt"])
+        self.assertIn("Финальное согласование выполняет финансовый контролёр", call.call_args.args[0]["prompt"])
+        self.assertIn("Финальное согласование занимает два рабочих дня", call.call_args.args[0]["prompt"])
+        self.assertIn("Обсудили финальное согласование", call.call_args.args[0]["prompt"])
+        self.assertIn('"requires_review":true,"oc_subject":null', call.call_args.args[0]["prompt"])
         self.assertNotIn('"block"', call.call_args.args[0]["prompt"])
         from gaia.context_compiler import context_response_schema
         candidate = context_response_schema(16, ["E1"])["properties"]["candidates"]["items"]
         self.assertIn("evidence_id", candidate["required"])
+        self.assertIn("oc_subject", candidate["required"])
         self.assertNotIn("actor_ref", candidate["required"])
         self.assertNotIn("deadline", candidate["required"])
         self.assertNotIn("status", candidate["required"])
@@ -686,7 +750,7 @@ class ContextCompilerTests(unittest.TestCase):
                 self.assertEqual(compiler.compile(san["artifact_id"]),[])
             compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: (_ for _ in ()).throw(ContextCompileError("local_model_invalid","safe","json_parse"))
             with patch.object(compiler,"_preload"), patch("gaia.context_compiler.provider_config",return_value={"type":"ollama","endpoint":"http://127.0.0.1:1"}), patch("gaia.context_compiler.execute_context_model_call",side_effect=RuntimeError("unavailable")):
-                with self.assertRaises(ContextCompileError) as failed: compiler.compile(san["artifact_id"],compiler_version="context-v5")
+                with self.assertRaises(ContextCompileError) as failed: compiler.compile(san["artifact_id"],compiler_version="context-v5-unload")
                 self.assertEqual(failed.exception.diagnostic_code,"json_parse")
         finally: tmp.cleanup()
 

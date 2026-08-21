@@ -18,9 +18,9 @@ from .runtime_diagnostics import emit as emit_runtime_diagnostic
 from .context_model_executor import ContextModelExecutorError, execute_context_model_call
 from .operational_context_bridge import BRIDGE_CONTRACT_VERSION, COLLIDING_OC_AUTHORITY, bridge_transaction, build_material_proposal_with_diagnostic, persist_material_proposals
 
-COMPILER_VERSION = "context-v4"
-PROMPT_SCHEMA_VERSION = "context-schema-v4-evidence-id"
-PARSER_CONTRACT_VERSION = "context-parser-v1"
+COMPILER_VERSION = "context-v5"
+PROMPT_SCHEMA_VERSION = "context-schema-v5-oc-subject-required"
+PARSER_CONTRACT_VERSION = "context-parser-v2-oc-subject-required"
 OC_SUBJECT_DIAGNOSTIC_VERSION = "oc-subject-diagnostic-v1"
 TYPES = {"requirement", "decision", "risk", "open_question", "action"}
 OPTIONAL = {"actor_ref", "deadline", "status", "priority", "reason", "consequence"}
@@ -65,11 +65,11 @@ def context_response_schema(max_candidates: int, evidence_ids: list[str] | tuple
         {"type": "object", "properties": {
             "label": {"type": "string", "minLength": 1, "maxLength": 160},
             "evidence_id": {"type": "string", "enum": list(evidence_ids)},
-            "slot_anchor": {"type": "string", "minLength": 1, "maxLength": 160},
-            "value_anchor": {"type": "string", "minLength": 1, "maxLength": 160},
+            "slot_anchor": {"type": "string", "minLength": 1, "maxLength": 160, "description": "Copy an exact verbatim substring from the selected evidence fragment. Do not translate, paraphrase, normalize, or infer it."},
+            "value_anchor": {"type": "string", "minLength": 1, "maxLength": 160, "description": "Copy an exact verbatim substring from the selected evidence fragment. Do not translate, paraphrase, normalize, or infer it."},
         }, "additionalProperties": False},
     ]}
-    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_id", "confidence", "requires_review"], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
+    return {"type": "object", "properties": {"candidates": {"type": "array", "maxItems": max_candidates, "items": {"type": "object", "properties": properties, "required": ["type", "title", "statement", "evidence_id", "confidence", "requires_review", OC_SUBJECT_FIELD], "additionalProperties": False}}}, "required": ["candidates"], "additionalProperties": False}
 
 
 def _safe_attempt_category(response: Any, diagnostic_code: str) -> str:
@@ -92,14 +92,14 @@ def local_context_model(text: str, cancel_event: Any = None, section_type_hint: 
     choices = "\n".join(f"{span.id}: {span.text}" for span in evidence_spans)
     prompt = (
         "Верни только объект JSON без Markdown. Единственный допустимый ключ верхнего уровня: candidates. "
-        "Обязательные поля каждого кандидата: type, title, statement, evidence_id, confidence, requires_review. "
+        "Обязательные поля каждого кандидата: type, title, statement, evidence_id, confidence, requires_review, oc_subject. "
         "title — непустая строка не длиннее 160 символов; statement — непустая строка не длиннее 1200 символов. "
         "evidence_id выбирай только из предложенных точных фрагментов; не возвращай evidence text или координаты. Если подходящего фрагмента нет, верни candidates: []. "
         "type: только requirement, decision, risk, open_question или action. Для русского «Решение» всегда используй type decision; type solution запрещён. confidence: только строка low, medium или high; никогда не число. "
         "requires_review: только JSON boolean true, ключ пишется только requires_review с подчёркиванием. "
-        "Если факт безопасно задаёт конкретный текущий атрибут (не широкую тему), можешь добавить oc_subject: {label, evidence_id, slot_anchor, value_anchor}. label — только понятная подпись; slot_anchor и value_anchor обязательны и должны быть буквальными непустыми частями того же фрагмента-основания. slot_anchor включает отношение атрибута к значению, value_anchor — само значение; между ними допустимы только пробелы или пунктуация. Если это нельзя указать точно, не добавляй oc_subject. "
+        "oc_subject обязателен у каждого кандидата: верни либо null, либо объект {label, evidence_id, slot_anchor, value_anchor}. null допустим только когда в фрагменте нет конкретного безопасно заменяемого текущего атрибута; это не запасной вариант при сомнении. Для объекта label — только понятная подпись; slot_anchor и value_anchor обязательны: скопируй каждый посимвольно как точную substring из одного выбранного evidence fragment. Нельзя переводить, перефразировать, нормализовать, подставлять синоним или выводить anchor по смыслу. slot_anchor включает отношение атрибута к значению, value_anchor — само значение; между буквальными anchors допускаются только пробелы или пунктуация. Если точный literal authority-slot нельзя скопировать, верни oc_subject: null. Пример исполнителя: для «Финальное согласование выполняет финансовый контролёр.» верни slot_anchor «Финальное согласование выполняет» и value_anchor «финансовый контролёр». Пример другого атрибута той же темы: для «Финальное согласование занимает два рабочих дня.» верни slot_anchor «Финальное согласование занимает» и value_anchor «два рабочих дня». Если фрагмент не задаёт безопасный заменяемый атрибут, например «Обсудили финальное согласование.», верни oc_subject: null. Эти примеры объясняют структуру, а не задают список разрешённых фраз. "
         "Не используй русские enum, пробелы в ключах или ключи requirement, solution, risk, question, action как замену структуры кандидата. "
-        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_id\":\"E1\",\"confidence\":\"high\",\"requires_review\":true}]}. "
+        "Пример: {\"candidates\":[{\"type\":\"requirement\",\"title\":\"Проверка\",\"statement\":\"Проверить материал.\",\"evidence_id\":\"E1\",\"confidence\":\"high\",\"requires_review\":true,\"oc_subject\":null}]}. "
         + (f"Тип задан структурой документа: {section_type_hint}. Не классифицируй его заново; возвращай только этот type. " if section_type_hint else "Извлеки только явно сказанные требования, решения, риски, вопросы и действия; ")
         + "не добавляй предположений.\n\nФрагменты-основания:\n" + choices + "\n\nМатериал:\n" + text
     )
@@ -547,18 +547,19 @@ def _metadata_normalize(value: object) -> str:
     return " ".join("".join(char if char.isalnum() else " " for char in text).split())
 
 
-def _grounded_oc_subject(subject: object, evidence_id: str, evidence: str) -> dict[str, str] | None:
+def _grounded_oc_subject(subject: object, evidence_id: str, evidence: str, *, field_present: bool = True) -> dict[str, str] | None:
     """Accept only a literal, structurally complete authority-slot assertion."""
-    if _oc_subject_diagnostic(subject, evidence_id, evidence)["stage"] != "grounded_valid":
+    if _oc_subject_diagnostic(subject, evidence_id, evidence, field_present=field_present)["stage"] != "grounded_valid":
         return None
     values = {key: subject.get(key) for key in ("label", "evidence_id", "slot_anchor", "value_anchor")}
     return {key: str(value).strip() for key, value in values.items()}
 
 
-def _oc_subject_presence(subject: object) -> dict[str, bool]:
+def _oc_subject_presence(subject: object, *, field_present: bool) -> dict[str, bool]:
     raw = subject if isinstance(subject, dict) else {}
     return {
-        "subject_present": subject is not None,
+        "field_present": field_present,
+        "subject_present": isinstance(subject, dict),
         "label_present": isinstance(raw.get("label"), str) and bool(raw["label"].strip()),
         "evidence_id_present": isinstance(raw.get("evidence_id"), str) and bool(raw["evidence_id"].strip()),
         "slot_anchor_present": isinstance(raw.get("slot_anchor"), str) and bool(raw["slot_anchor"].strip()),
@@ -566,58 +567,63 @@ def _oc_subject_presence(subject: object) -> dict[str, bool]:
     }
 
 
-def _oc_subject_diagnostic(subject: object, evidence_id: str, evidence: str) -> dict[str, Any]:
+def _oc_subject_diagnostic(subject: object, evidence_id: str, evidence: str, *, field_present: bool = False) -> dict[str, Any]:
     """Classify OC subject grounding without retaining candidate or source content."""
-    flags = _oc_subject_presence(subject)
+    flags = _oc_subject_presence(subject, field_present=field_present)
     result: dict[str, Any] = {
         "diagnostic_version": OC_SUBJECT_DIAGNOSTIC_VERSION,
-        "stage": "absent_from_model",
-        "reason": "oc_subject_absent",
+        "model_field": "missing_contract_violation",
+        "stage": "field_missing_contract_violation",
+        "reason": "oc_subject_field_missing",
         "flags": flags,
         "slot_anchor_length": 0,
         "value_anchor_length": 0,
     }
-    if subject is None:
+    if not field_present:
         return result
+    if subject is None:
+        result.update(model_field="explicit_null", stage="explicit_null", reason="oc_subject_explicit_null")
+        return result
+    result["model_field"] = "object_received"
     if not isinstance(subject, dict) or set(subject) != {"label", "evidence_id", "slot_anchor", "value_anchor"}:
-        result.update(stage="incomplete", reason="oc_subject_shape_incomplete")
+        result.update(stage="object_grounding_failed", reason="oc_subject_shape_incomplete")
         return result
     values = {key: subject.get(key) for key in ("label", "evidence_id", "slot_anchor", "value_anchor")}
     if not isinstance(values["label"], str) or not values["label"].strip():
-        result.update(stage="incomplete", reason="label_missing")
+        result.update(stage="object_grounding_failed", reason="label_missing")
         return result
     if not isinstance(values["evidence_id"], str) or not values["evidence_id"].strip():
-        result.update(stage="evidence_unresolved", reason="oc_subject_evidence_id_missing")
+        result.update(stage="object_grounding_failed", reason="oc_subject_evidence_id_missing")
         return result
     if not isinstance(values["slot_anchor"], str) or not values["slot_anchor"].strip():
-        result.update(stage="slot_anchor_missing", reason="slot_anchor_missing")
+        result.update(stage="object_grounding_failed", reason="slot_anchor_missing")
         return result
     if not isinstance(values["value_anchor"], str) or not values["value_anchor"].strip():
-        result.update(stage="value_anchor_missing", reason="value_anchor_missing")
+        result.update(stage="object_grounding_failed", reason="value_anchor_missing")
         return result
     slot, value = str(values["slot_anchor"]), str(values["value_anchor"])
     result["slot_anchor_length"] = len(slot)
     result["value_anchor_length"] = len(value)
     if values["evidence_id"] != evidence_id:
-        result.update(stage="evidence_unresolved", reason="oc_subject_evidence_id_mismatch")
+        result.update(stage="object_grounding_failed", reason="oc_subject_evidence_id_mismatch")
         return result
     slot_start = evidence.find(slot)
     if slot_start < 0:
-        result.update(stage="slot_anchor_not_literal", reason="slot_anchor_not_literal")
+        result.update(stage="object_grounding_failed", reason="slot_anchor_not_literal")
         return result
     value_start = evidence.find(value)
     if value_start < 0:
-        result.update(stage="value_anchor_not_literal", reason="value_anchor_not_literal")
+        result.update(stage="object_grounding_failed", reason="value_anchor_not_literal")
         return result
     if slot_start == value_start:
-        result.update(stage="assertion_shape_invalid", reason="anchors_same_position")
+        result.update(stage="object_grounding_failed", reason="anchors_same_position")
         return result
     first_start, first_text, second_start = (slot_start, slot, value_start) if slot_start < value_start else (value_start, value, slot_start)
     if first_start + len(first_text) > second_start:
-        result.update(stage="assertion_shape_invalid", reason="anchors_overlap")
+        result.update(stage="object_grounding_failed", reason="anchors_overlap")
         return result
     if any(char.isalnum() for char in evidence[first_start + len(first_text):second_start]):
-        result.update(stage="assertion_shape_invalid", reason="anchors_not_adjacent")
+        result.update(stage="object_grounding_failed", reason="anchors_not_adjacent")
         return result
     result.update(stage="grounded_valid", reason="grounded")
     return result
@@ -625,13 +631,13 @@ def _oc_subject_diagnostic(subject: object, evidence_id: str, evidence: str) -> 
 
 def _producer_diagnostic_record(candidate: dict[str, Any], candidate_index: int, compiler_version: str, route: dict[str, Any], bridge: dict[str, str]) -> dict[str, Any]:
     """Persist only categorical producer observability; never candidate text or anchors."""
-    grounding = dict(candidate.get("_oc_subject_diagnostic") or _oc_subject_diagnostic(None, "", ""))
+    grounding = dict(candidate.get("_oc_subject_diagnostic") or _oc_subject_diagnostic(None, "", "", field_present=False))
     return {
         "diagnostic_version": OC_SUBJECT_DIAGNOSTIC_VERSION,
         "candidate_index": candidate_index,
         "candidate_type": str(candidate.get("type") or ""),
         "evidence_id": str(candidate.get("_oc_subject_evidence_id") or ""),
-        "parser_oc_subject": "preserved" if grounding["flags"]["subject_present"] else "not_provided",
+        "parser_oc_subject": str(grounding.get("model_field") or "missing_contract_violation"),
         "oc_subject": grounding,
         "bridge": {"stage": str(bridge.get("stage") or "bridge_rejected"), "reason": str(bridge.get("reason") or "unknown")},
         "fingerprint": {
@@ -688,8 +694,9 @@ def _ground_candidates(candidates: list[dict[str, Any]], unit: ContextChunk) -> 
             candidate.pop(RELATIONS_FIELD, None)
             candidate.update(_ground_metadata(span.text))
             candidate["_oc_subject_evidence_id"] = evidence_id
-            candidate["_oc_subject_diagnostic"] = _oc_subject_diagnostic(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text)
-            subject = _grounded_oc_subject(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text)
+            field_present = OC_SUBJECT_FIELD in candidate
+            candidate["_oc_subject_diagnostic"] = _oc_subject_diagnostic(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text, field_present=field_present)
+            subject = _grounded_oc_subject(candidate.get(OC_SUBJECT_FIELD), evidence_id, span.text, field_present=field_present)
             if subject is None:
                 candidate.pop(OC_SUBJECT_FIELD, None)
             else:

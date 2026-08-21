@@ -2,11 +2,11 @@
 
 ## Модель и контракт извлечения
 
-Сборщик контекста использует только локальный маршрут `ollama_qwen3_14b`: модель `qwen3:14b` через Ollama `/api/chat`, `temperature=0`, `think=false`, `num_ctx=16384` и JSON Schema. Автоматического перехода на другую модель нет.
+Сборщик контекста использует только локальный маршрут `ollama_ministral_3_14b`: модель `ministral-3:14b` через Ollama `/api/chat`, `temperature=0`, `think=false`, `num_ctx=16384` и JSON Schema. Автоматического перехода на другую модель нет.
 
 Каждая смысловая единица обрабатывается отдельным вызовом модели. `chunk_max_units=1` и `chunk_overlap_chars=0` остаются compatibility-параметрами: они валидируются, но не могут вернуть batching или overlap в Stage 7 route. Заголовки Markdown и канонические заголовки нужны только структурному parser: они не добавляются в модельный текст. Канонические «Требования», «Решения», «Риски», «Открытые вопросы» и «Действия» детерминированно задают тип потомку; нетипизированный фрагмент классифицирует модель.
 
-Модель обязана выбрать `evidence_id` из точных bounded fragments текущей смысловой единицы. Gaia по этому идентификатору сама вычисляет локальные и глобальные offsets; приблизительные offsets и fuzzy-совпадения не используются. Неверный или отсутствующий идентификатор — контролируемая ошибка фрагмента; после одной повторной попытки завершается вся job без частичного сохранения.
+Модель обязана выбрать `evidence_id` из точных bounded fragments текущей смысловой единицы и явно вернуть `oc_subject` у каждого кандидата: полный literal-grounded object либо `null`, когда безопасного заменяемого authority slot в фрагменте нет. Gaia по `evidence_id` сама вычисляет локальные и глобальные offsets; приблизительные offsets и fuzzy-совпадения не используются. Неверный или отсутствующий идентификатор — контролируемая ошибка фрагмента; после одной повторной попытки завершается вся job без частичного сохранения. Пропущенный `oc_subject` не отменяет legacy extraction: он фиксируется как нарушение producer-контракта и этот кандидат безопасно остаётся в legacy Context.
 
 `actor_ref`, `deadline`, `status` и `priority` извлекаются локально только из exact evidence; отрицательные назначения не дают ответственного или срока. `reason`, `consequence` и `relations` не сохраняются из evidence-based model response: для них нет deterministic grounding rule. Исторические context records остаются читаемыми.
 
@@ -18,7 +18,7 @@
 
 ## Runtime и диагностика
 
-До первого вызова Gaia загружает Ollama-модель и после job делает best-effort unload. Каждый вызов модели выполняется в отдельном дочернем процессе с ограничением времени и корректной отменой. Receipt не содержит prompt, raw response или source text; он хранит только версии, route/model, timestamp, счётчики, итоговые IDs и content-free producer diagnostics. Для каждого извлечённого кандидата эта диагностика различает наличие и полноту `oc_subject`, evidence/anchor grounding, assertion shape и итог OC bridge/legacy fallback. Она не хранит candidate text, `label`, anchors или фрагмент материала. Безопасная диагностика также различает timeout, process/result error, пустой ответ, JSON/schema error, несовпадение и неоднозначность evidence.
+До первого вызова Gaia загружает Ollama-модель и после job делает best-effort unload. Каждый вызов модели выполняется в отдельном дочернем процессе с ограничением времени и корректной отменой. Receipt не содержит prompt, raw response или source text; он хранит только версии, route/model, timestamp, счётчики, итоговые IDs и content-free producer diagnostics. Для каждого извлечённого кандидата эта диагностика различает пропуск `oc_subject` как нарушение контракта, явный `null`, полученный object, literal grounding и итог OC bridge/legacy fallback. Она не хранит candidate text, `label`, anchors или фрагмент материала. Безопасная диагностика также различает timeout, process/result error, пустой ответ, JSON/schema error, несовпадение и неоднозначность evidence.
 
 ## Ручная приёмка
 
