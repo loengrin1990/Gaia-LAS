@@ -4,10 +4,15 @@ import json
 from pathlib import Path
 import unittest
 
-from gaia.config import ConfigError, config_version, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
+from gaia.config import CONTROLLED_INTAKE_EXTENSIONS, ConfigError, config_version, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
+from gaia.ui import INDEX_HTML
 
 
 class ConfigContractTests(unittest.TestCase):
+    def test_materials_ui_matches_controlled_intake_formats(self) -> None:
+        self.assertEqual(CONTROLLED_INTAKE_EXTENSIONS, frozenset({".txt", ".md", ".pdf"}))
+        self.assertIn('id="journeyFiles" class="native-file-input" type="file" multiple accept=".txt,.md,.pdf"', INDEX_HTML)
+
     def test_missing_config_version_defaults_to_current_version(self) -> None:
         self.assertEqual(config_version({}), 1)
 

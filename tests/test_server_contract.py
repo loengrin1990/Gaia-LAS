@@ -6,12 +6,30 @@ from unittest.mock import Mock, patch
 from email.message import Message
 from types import SimpleNamespace
 
-from gaia.server import Handler, MAX_JSON_BODY_SIZE, MAX_MULTIPART_BODY_SIZE, MAX_UPLOAD_FILE_SIZE, MAX_UPLOAD_FILES, MULTIPART_READ_CHUNK_SIZE, SESSION_COOKIE_NAME, SESSION_TOKEN, multipart_files, multipart_value, mutation_is_authorized, parse_multipart
+from gaia.server import Handler, MAX_JSON_BODY_SIZE, MAX_MULTIPART_BODY_SIZE, MAX_UPLOAD_FILE_SIZE, MAX_UPLOAD_FILES, MULTIPART_READ_CHUNK_SIZE, MultipartField, SESSION_COOKIE_NAME, SESSION_TOKEN, multipart_files, multipart_value, mutation_is_authorized, parse_multipart
 from gaia.context_compiler import ContextCompileError
 from gaia.jobs import JobQueueFullError
 
 
 class ServerContractTests(unittest.TestCase):
+    def test_material_upload_rejects_unsupported_format_before_intake_or_job(self) -> None:
+        handler = SimpleNamespace()
+        fields = [
+            MultipartField("project", "synthetic", b"synthetic"),
+            MultipartField("files", "", b"not a DOCX", filename="brief.docx"),
+        ]
+        with (
+            patch("gaia.server.parse_multipart", return_value=fields),
+            patch("gaia.server.error_response") as response,
+            patch("gaia.server.ControlledIntake") as intake,
+            patch("gaia.server.submit_analyze_job") as submit,
+        ):
+            Handler.handle_analyze(handler)
+        self.assertEqual(response.call_args.args[1], "unsupported_file_type")
+        self.assertEqual(response.call_args.args[3], 400)
+        intake.assert_not_called()
+        submit.assert_not_called()
+
     def test_review_check_does_not_submit_analysis_before_confirmation(self) -> None:
         service = Mock(); service.start.return_value = {"artifact_id": "san_1", "state": "requires_review", "cleaned_text": "[PERSON_1]"}
         intake = Mock(); intake.review.return_value = service

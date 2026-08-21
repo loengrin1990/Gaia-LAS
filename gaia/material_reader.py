@@ -62,11 +62,16 @@ class MaterialReader:
         self._persist(store, workspace_id, source_id, extraction["artifact_id"], result.evidence)
         return extraction
 
-    def read_pdf(self, content: bytes) -> MaterialReadResult:
+    def ensure_pdf_runtime(self) -> None:
+        """Fail before controlled admission when the required parser is absent."""
         try:
-            from pypdf import PdfReader
+            import pypdf  # noqa: F401
         except ImportError as exc:
             raise MaterialReaderError("PDF-обработка недоступна: не установлена обязательная библиотека.") from exc
+
+    def read_pdf(self, content: bytes) -> MaterialReadResult:
+        self.ensure_pdf_runtime()
+        from pypdf import PdfReader
         try:
             reader = PdfReader(BytesIO(content))
         except Exception as exc:

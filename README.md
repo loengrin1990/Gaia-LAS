@@ -7,7 +7,7 @@ Codex/ChatGPT.
 ## Запуск
 
 ```bash
-python3 app.py
+.venv/bin/python3 app.py
 ```
 
 ### Нативное окно macOS
@@ -281,7 +281,7 @@ Python-модулей без изменения API.
 ## Проверка config
 
 ```bash
-python3 -B -m gaia.config
+.venv/bin/python3 -B -m gaia.config
 ```
 
 Команда должна вывести `Gaia config OK` и рабочий URL. Если путь неверный или
@@ -625,8 +625,8 @@ Retention никогда не чистит `Obsidian Vault/Проекты`.
 Канонические проверки после изменения кода:
 
 ```bash
-python3 -B -m unittest discover -s tests
-python3 -B -m gaia.config
+.venv/bin/python3 -B -m unittest discover -s tests
+.venv/bin/python3 -B -m gaia.config
 ```
 
 ## Документация сервиса

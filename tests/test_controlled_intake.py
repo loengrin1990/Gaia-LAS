@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from gaia.controlled_intake import ControlledIntake
 from gaia.provenance import ProvenanceError, ProvenanceStore
@@ -43,3 +44,28 @@ class ControlledIntakeTests(unittest.TestCase):
             intake = ControlledIntake(ProvenanceStore(Path(tmp) / "storage"))
             with self.assertRaises(ProvenanceError):
                 intake.admit("", [("brief.txt", b"synthetic")])
+
+    def test_unsupported_or_binary_upload_is_rejected_before_controlled_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProvenanceStore(Path(tmp) / "storage")
+            intake = ControlledIntake(store)
+            for filename, content in (
+                ("brief.docx", b"not a controlled DOCX"),
+                ("table.xlsx", b"not a controlled XLSX"),
+                ("recording.mp3", b"not a controlled recording"),
+                ("binary.txt", b"\x00\x01not text"),
+            ):
+                with self.subTest(filename=filename), self.assertRaises(ProvenanceError):
+                    intake.admit("format-control", [(filename, content)])
+                self.assertEqual(store._registry()["workspaces"], {})
+                self.assertEqual(store._registry()["objects"], {})
+
+    def test_pdf_runtime_is_checked_before_a_source_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ProvenanceStore(Path(tmp) / "storage")
+            intake = ControlledIntake(store)
+            with patch("gaia.controlled_intake.MaterialReader.ensure_pdf_runtime", side_effect=ProvenanceError("PDF-обработка недоступна")):
+                with self.assertRaisesRegex(ProvenanceError, "PDF-обработка недоступна"):
+                    intake.admit("pdf-runtime-control", [("brief.pdf", b"%PDF-synthetic")])
+            self.assertEqual(store._registry()["workspaces"], {})
+            self.assertEqual(store._registry()["objects"], {})

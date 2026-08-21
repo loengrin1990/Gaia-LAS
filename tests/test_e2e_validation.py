@@ -20,6 +20,58 @@ from gaia.server import Handler, SESSION_COOKIE_NAME, SESSION_TOKEN
 class EndToEndValidationTests(unittest.TestCase):
     """The user-visible loopback path; every payload is synthetic."""
 
+    def test_materials_route_rejects_unsupported_format_and_accepts_real_pdf(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        store = ProvenanceStore(Path(temporary.name) / "storage")
+        server: ThreadingHTTPServer | None = None
+        project = "synthetic-format-truth"
+
+        def request(filename: str, content: bytes) -> tuple[int, dict[str, object]]:
+            assert server is not None
+            boundary = "----format-truth-boundary"
+            body = (
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"project\"\r\n\r\n{project}\r\n"
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+            port = server.server_address[1]
+            headers = {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": f"http://127.0.0.1:{port}",
+                "Cookie": f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            }
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("POST", "/api/analyze", body, headers)
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            connection.close()
+            return response.status, payload
+
+        with patch("gaia.controlled_intake.default_store", return_value=store):
+            try:
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                status, rejected = request("brief.docx", b"synthetic DOCX bytes")
+                self.assertEqual(status, 400)
+                self.assertEqual(rejected["error"]["code"], "unsupported_file_type")
+                self.assertEqual(store._registry()["objects"], {})
+
+                fixture = Path(__file__).parent / "fixtures" / "RPM-0_acceptance_mixed_technical_architecture.pdf"
+                status, accepted = request(fixture.name, fixture.read_bytes())
+                self.assertEqual(status, 202)
+                artifact_id = str(accepted["review"]["artifact_id"])
+                workspace = ControlledIntake(store).existing_workspace(project)
+                self.assertIsNotNone(workspace)
+                extraction_id = store.object_metadata(str(workspace), artifact_id)["parents"][0]
+                extracted = (store.root / "artifacts" / str(workspace) / f"{extraction_id}.txt").read_text(encoding="utf-8")
+                self.assertIn("Техническая архитектура", extracted)
+                self.assertNotIn("\x00", extracted)
+            finally:
+                if server:
+                    server.shutdown()
+                    server.server_close()
+                temporary.cleanup()
+
     def test_confirmed_material_reaches_context_summary_and_survives_restart(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         store = ProvenanceStore(Path(temporary.name) / "storage")

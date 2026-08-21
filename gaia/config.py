@@ -422,6 +422,11 @@ MEDIA_EXTENSIONS = {
 DOCUMENT_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx"}
 SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | MEDIA_EXTENSIONS
 
+# The legacy analysis and dialogue adapters still have their own extraction
+# capabilities.  New project materials must use only formats that the
+# controlled provenance → protection → review path can extract itself.
+CONTROLLED_INTAKE_EXTENSIONS = frozenset({".txt", ".md", ".pdf"})
+
 
 def ensure_dirs() -> None:
     if _SETTINGS_ERROR:

@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .config import CONTROLLED_INTAKE_EXTENSIONS
 from .provenance import ProvenanceError, ProvenanceStore, default_store
 from .storage import atomic_write_text, path_lock
 from .protection import protect
@@ -40,13 +41,15 @@ class ControlledIntake:
     def admit(self, project: str, uploaded: list[tuple[str, bytes]]) -> dict[str, Any]:
         if not project.strip():
             raise ProvenanceError("Выберите рабочее пространство перед добавлением материала.")
+        self._validate_uploads(uploaded)
         workspace_id = self._workspace_for(project)
         operation_id = f"op_{uuid.uuid4().hex}"
         materials: list[dict[str, Any]] = []
         protected_uploads: list[tuple[str, bytes]] = []
         for filename, content in uploaded:
-            is_pdf = Path(filename).suffix.lower() == ".pdf"
-            source = self.store.accept_bytes(workspace_id, content, "application/pdf" if is_pdf else "application/octet-stream")
+            suffix = Path(filename).suffix.lower()
+            is_pdf = suffix == ".pdf"
+            source = self.store.accept_bytes(workspace_id, content, "application/pdf" if is_pdf else "text/plain")
             material = {"source_id": source["source_id"], "duplicate": source["duplicate"], "status": "duplicate" if source["duplicate"] else "accepted"}
             if source["duplicate"]:
                 # Never fall back to raw bytes for an already admitted source.
@@ -69,6 +72,29 @@ class ControlledIntake:
             materials.append(material)
         self._save_operation(operation_id, workspace_id, materials, "accepted")
         return {"operation_id": operation_id, "workspace_id": workspace_id, "materials": materials, "protected_uploads": protected_uploads}
+
+    @staticmethod
+    def _validate_uploads(uploaded: list[tuple[str, bytes]]) -> None:
+        """Keep unsupported or binary data out of the controlled material store."""
+        needs_pdf_runtime = False
+        for filename, content in uploaded:
+            suffix = Path(filename).suffix.lower()
+            if suffix not in CONTROLLED_INTAKE_EXTENSIONS:
+                raise ProvenanceError(
+                    f"Формат {suffix or 'без расширения'} пока не поддерживается для добавления материалов. "
+                    "Поддерживаются TXT, MD и PDF."
+                )
+            if suffix == ".pdf":
+                needs_pdf_runtime = True
+                continue
+            try:
+                text = content.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ProvenanceError(f"Файл {filename} должен содержать текст в UTF-8.") from exc
+            if "\x00" in text or any(ord(char) < 32 and char not in "\t\n\r" for char in text):
+                raise ProvenanceError(f"Файл {filename} не похож на обычный текстовый материал.")
+        if needs_pdf_runtime:
+            MaterialReader().ensure_pdf_runtime()
 
     def finish(self, operation_id: str, status: str) -> None:
         with path_lock(self.path):

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import SETTINGS, SUPPORTED_EXTENSIONS, ConfigError, ensure_dirs
+from .config import CONTROLLED_INTAKE_EXTENSIONS, SETTINGS, SUPPORTED_EXTENSIONS, ConfigError, ensure_dirs
 from .archive import apply_retention, retention_status
 from .conversations import (
     ConversationError,
@@ -466,14 +466,18 @@ class Handler(BaseHTTPRequestHandler):
         profile = multipart_value(form, "profile")
         query = multipart_value(form, "query")
         uploaded: list[tuple[str, bytes]] = []
-        skipped = 0
         for item in multipart_files(form, "files"):
             if not item.filename:
                 continue
             suffix = Path(item.filename).suffix.lower()
-            if suffix not in SUPPORTED_EXTENSIONS:
-                skipped += 1
-                continue
+            if suffix not in CONTROLLED_INTAKE_EXTENSIONS:
+                error_response(
+                    self,
+                    "unsupported_file_type",
+                    "Этот формат пока нельзя безопасно добавить как материал. Поддерживаются TXT, MD и PDF.",
+                    400,
+                )
+                return
             if len(item.content) > MAX_UPLOAD_FILE_SIZE:
                 error_response(self, "file_too_large", f"Файл превышает лимит {MAX_UPLOAD_FILE_SIZE} bytes.", 413)
                 return
@@ -508,7 +512,7 @@ class Handler(BaseHTTPRequestHandler):
             "progress": job.progress,
             "status_url": f"/api/jobs/{job.id}",
             "intake": {"operation_id": intake["operation_id"], "materials": intake["materials"]} if intake else {},
-            "skipped_files": skipped,
+            "skipped_files": 0,
         }, 202)
 
     def handle_material_get(self) -> None:
