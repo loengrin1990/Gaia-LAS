@@ -41,6 +41,7 @@ class Settings:
     local_llm_providers: dict[str, dict[str, Any]]
     local_llm_routes: dict[str, dict[str, Any]]
     dialogue_read_path: str
+    dialogue_observation_enabled: bool
     host: str
     port: int
     retention_runs_days: int
@@ -134,10 +135,14 @@ def optional_str(payload: dict[str, Any], key: str, default: str) -> str:
 
 
 def load_dialogue_read_path(payload: dict[str, Any]) -> str:
-    value = payload.get("dialogue_read_path", "legacy")
+    value = payload.get("dialogue_read_path", "hybrid")
     if value not in {"legacy", "hybrid"}:
         raise ConfigError("Config value `dialogue_read_path` must be `legacy` or `hybrid`.")
     return value
+
+
+def load_dialogue_observation_enabled(payload: dict[str, Any]) -> bool:
+    return optional_bool(payload, "dialogue_observation_enabled", False)
 
 
 def config_version(payload: dict[str, Any]) -> int:
@@ -348,6 +353,7 @@ def load_settings(validate: bool = True) -> Settings:
         raise ConfigError("Config value `local_llm.default_provider` must reference a configured provider.")
     local_llm_routes = load_local_llm_routes(local_llm, local_llm_providers, default_provider)
     dialogue_read_path = load_dialogue_read_path(payload)
+    dialogue_observation_enabled = load_dialogue_observation_enabled(payload)
 
     settings = Settings(
         config_version=version,
@@ -373,6 +379,7 @@ def load_settings(validate: bool = True) -> Settings:
         local_llm_providers=local_llm_providers,
         local_llm_routes=local_llm_routes,
         dialogue_read_path=dialogue_read_path,
+        dialogue_observation_enabled=dialogue_observation_enabled,
         host=host,
         port=port_value,
         retention_runs_days=optional_int(retention, "runs_days", 7),
@@ -470,6 +477,7 @@ def describe_settings(settings: Settings | None = SETTINGS) -> str:
         f"processing: analyze_job_timeout={settings.analyze_job_timeout_seconds}s transcription_timeout={settings.transcription_timeout_seconds}s completed_job_retention={settings.completed_job_retention_seconds}s",
         f"lm_studio_endpoint: {settings.lm_studio_endpoint}",
         f"dialogue_read_path: {settings.dialogue_read_path}",
+        f"dialogue_observation_enabled: {settings.dialogue_observation_enabled}",
         f"local_llm: prompt_char_limit={settings.local_llm_prompt_char_limit} max_tokens={settings.local_llm_max_tokens} default_provider={settings.local_llm_default_provider} providers={','.join(settings.local_llm_providers)} routes={','.join(settings.local_llm_routes)}",
     ])
 

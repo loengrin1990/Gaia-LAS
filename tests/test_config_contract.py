@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from gaia.config import CONTROLLED_INTAKE_EXTENSIONS, ConfigError, config_version, load_dialogue_read_path, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
+from gaia.config import CONTROLLED_INTAKE_EXTENSIONS, ConfigError, config_version, load_dialogue_observation_enabled, load_dialogue_read_path, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
 from gaia.ui import INDEX_HTML
 
 
@@ -37,16 +37,23 @@ class ConfigContractTests(unittest.TestCase):
             validate_loopback_host("0.0.0.0", "server.host")
         validate_loopback_host("127.0.0.1", "server.host")
 
-    def test_dialogue_read_path_defaults_to_legacy_and_rejects_unknown_values(self) -> None:
-        self.assertEqual(load_dialogue_read_path({}), "legacy")
+    def test_dialogue_read_path_defaults_to_hybrid_and_rejects_unknown_values(self) -> None:
+        self.assertEqual(load_dialogue_read_path({}), "hybrid")
         self.assertEqual(load_dialogue_read_path({"dialogue_read_path": "legacy"}), "legacy")
         self.assertEqual(load_dialogue_read_path({"dialogue_read_path": "hybrid"}), "hybrid")
         with self.assertRaisesRegex(ConfigError, "dialogue_read_path"):
             load_dialogue_read_path({"dialogue_read_path": "automatic"})
 
-    def test_example_keeps_dialogue_on_legacy_path(self) -> None:
+    def test_example_uses_hybrid_path_and_observation_is_opt_in(self) -> None:
         payload = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))
-        self.assertEqual(payload["dialogue_read_path"], "legacy")
+        self.assertEqual(payload["dialogue_read_path"], "hybrid")
+        self.assertFalse(payload["dialogue_observation_enabled"])
+
+    def test_dialogue_observation_is_disabled_by_default_and_can_be_enabled(self) -> None:
+        self.assertFalse(load_dialogue_observation_enabled({}))
+        self.assertTrue(load_dialogue_observation_enabled({"dialogue_observation_enabled": True}))
+        with self.assertRaisesRegex(ConfigError, "dialogue_observation_enabled"):
+            load_dialogue_observation_enabled({"dialogue_observation_enabled": "true"})
 
     def test_example_context_compiler_route_matches_the_stage_7_contract(self) -> None:
         payload = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))

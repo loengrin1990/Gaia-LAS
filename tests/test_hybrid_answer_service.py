@@ -43,4 +43,41 @@ class HybridAnswerServiceTests(unittest.TestCase):
             result = HybridAnswerService("/unused", reasoner=lambda _: (_ for _ in ()).throw(RuntimeError("route unavailable"))).answer("правило", "workspace")
         self.assertEqual(result.status, "LOCAL_PROVIDER_UNAVAILABLE")
 
+    def test_oc_backed_by_current_query_hit_is_allowed(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Правило подтверждено.")
+        eligible = ({"id": "oc-1", "kind": "requirement", "subject_ref": "subject", "value": "Правило подтверждено", "reference": "", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san-1", "candidate_ref": "candidate-1"}},)
+        response = {"ok": True, "answer": "Подтвержденный ответ", "used_facts": ["oc-1"], "provider": "local", "model": "model", "done_reason": "stop"}
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=type("R", (), {"eligible_items": eligible})()):
+            result = HybridAnswerService("/unused", reasoner=lambda _: response).answer("правило", "workspace")
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertTrue(result.oc_applied)
+
+    def test_oc_backed_by_valid_source_not_in_current_query_hits_is_allowed(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Другая тема.")
+        eligible = ({"id": "oc-1", "kind": "requirement", "subject_ref": "subject", "value": "Правило подтверждено", "reference": "", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san-1", "candidate_ref": "candidate-1"}},)
+        response = {"ok": True, "answer": "Подтвержденный ответ", "used_facts": ["oc-1"], "provider": "local", "model": "model", "done_reason": "stop"}
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=type("R", (), {"eligible_items": eligible})()):
+            result = HybridAnswerService("/unused", reasoner=lambda _: response).answer("правило", "workspace")
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertTrue(result.oc_applied)
+        self.assertTrue(result.provenance_complete)
+
+    def test_oc_with_dangling_source_ref_never_reaches_reasoner(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Другая тема.")
+        eligible = ({"id": "oc-1", "kind": "requirement", "subject_ref": "subject", "value": "Правило подтверждено", "reference": "", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san-missing", "candidate_ref": "candidate-1"}},)
+        called = []
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=type("R", (), {"eligible_items": eligible})()):
+            result = HybridAnswerService("/unused", reasoner=lambda _: called.append(True) or {}).answer("правило", "workspace")
+        self.assertEqual(result.status, "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(called, [])
+
+    def test_oc_only_answer_with_unresolvable_provenance_never_reaches_reasoner(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Другая тема.")
+        eligible = ({"id": "oc-1", "kind": "requirement", "subject_ref": "subject", "value": "Правило подтверждено", "reference": "", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"candidate_ref": "candidate-1"}},)
+        called = []
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=type("R", (), {"eligible_items": eligible})()):
+            result = HybridAnswerService("/unused", reasoner=lambda _: called.append(True) or {}).answer("правило", "workspace")
+        self.assertEqual(result.status, "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(called, [])
+
 if __name__ == '__main__': unittest.main()

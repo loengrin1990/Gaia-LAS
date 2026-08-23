@@ -5,7 +5,9 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Callable, Protocol
+import uuid
 
 from .config import SETTINGS
 from .controlled_intake import ControlledIntake
@@ -13,6 +15,7 @@ from .hybrid_answer_service import HybridAnswerService
 from .local_llm import run_lm_studio
 from .models import Conversation
 from .operational_context_runtime import run_operational_context_dialogue
+from .runtime_diagnostics import emit_dialogue_observation
 
 
 _FOLLOW_UP = re.compile(r"^(?:а|и)\s+(?:для|у|по|что\s+насч[её]т)\b", re.IGNORECASE)
@@ -21,6 +24,20 @@ WORKSPACE_RESOLUTION_FAILED = "WORKSPACE_RESOLUTION_FAILED"
 # The current intake mapping is one project key to one workspace.  Keep this
 # status reserved so a future multi-value mapping can fail closed explicitly.
 WORKSPACE_RESOLUTION_AMBIGUOUS = "WORKSPACE_RESOLUTION_AMBIGUOUS"
+_OBSERVATION_FAILURE_REASONS = {
+    "INSUFFICIENT_EVIDENCE": "insufficient_evidence",
+    "LOCAL_PROVIDER_UNAVAILABLE": "provider_unavailable",
+    "LOCAL_REASONING_ROUTE_MISSING": "local_reasoning_route_missing",
+    "PROVIDER_INCOMPLETE_RESPONSE": "provider_incomplete_response",
+    "PROVENANCE_UNRESOLVED": "provenance_unresolved",
+    "USED_FACTS_MALFORMED": "used_facts_malformed",
+    "SOURCE_REGISTRY_UNAVAILABLE": "source_registry_unavailable",
+    "SOURCE_EVIDENCE_UNAVAILABLE": "source_evidence_unavailable",
+    "PACKAGE_BUILD_FAILURE": "package_build_failure",
+    WORKSPACE_RESOLUTION_FAILED: "workspace_resolution_failed",
+    WORKSPACE_RESOLUTION_AMBIGUOUS: "workspace_resolution_ambiguous",
+    "INTERNAL_VERIFICATION_FAILURE": "internal_verification_failure",
+}
 
 
 class _ReadOnlyStoreRoot(Protocol):
@@ -32,6 +49,27 @@ class _ReadOnlyStore:
 
     def __init__(self, root: Path) -> None:
         self.root = root
+
+
+class _HybridDispatchOutcome:
+    def __init__(
+        self,
+        response: dict[str, Any],
+        *,
+        hybrid_invoked: bool = False,
+        hybrid_completed: bool = False,
+        evidence_found: bool = False,
+        oc_applied: bool = False,
+        provenance_complete: bool = False,
+        failure_status: str = "",
+    ) -> None:
+        self.response = response
+        self.hybrid_invoked = hybrid_invoked
+        self.hybrid_completed = hybrid_completed
+        self.evidence_found = evidence_found
+        self.oc_applied = oc_applied
+        self.provenance_complete = provenance_complete
+        self.failure_status = failure_status
 
 
 def resolve_existing_dialogue_workspace(storage_root: Path, project: str) -> tuple[str, str]:
@@ -74,9 +112,11 @@ class DialogueAnswerDispatcher:
         self,
         hybrid_service_factory: Callable[[Any], HybridAnswerService] = HybridAnswerService,
         workspace_resolver: Callable[[Path, str], tuple[str, str]] = resolve_existing_dialogue_workspace,
+        observation_emitter: Callable[..., None] = emit_dialogue_observation,
     ) -> None:
         self._hybrid_service_factory = hybrid_service_factory
         self._workspace_resolver = workspace_resolver
+        self._observation_emitter = observation_emitter
 
     def dispatch(
         self,
@@ -94,11 +134,14 @@ class DialogueAnswerDispatcher:
             return None
         if self._read_path() == "legacy":
             return self._legacy(conversation, query, analysis_package, build_legacy_runtime, legacy_plain_answer, legacy_operational_answer)
-        return self._hybrid(conversation, safe_user_query)
+        started = time.monotonic()
+        outcome = self._hybrid(conversation, safe_user_query)
+        self._observe(outcome, elapsed_ms=round((time.monotonic() - started) * 1000))
+        return outcome.response
 
     @staticmethod
     def _read_path() -> str:
-        return getattr(SETTINGS, "dialogue_read_path", "legacy") if SETTINGS is not None else "legacy"
+        return getattr(SETTINGS, "dialogue_read_path", "hybrid") if SETTINGS is not None else "hybrid"
 
     @staticmethod
     def _legacy(
@@ -116,13 +159,13 @@ class DialogueAnswerDispatcher:
             result = asdict(legacy_operational_answer(runtime_package))
         return {**result, "read_path": "legacy"}
 
-    def _hybrid(self, conversation: Conversation, safe_user_query: str) -> dict[str, Any]:
+    def _hybrid(self, conversation: Conversation, safe_user_query: str) -> _HybridDispatchOutcome:
         storage_root = getattr(SETTINGS, "storage_dir", None)
         if storage_root is None:
-            return self._failure("INTERNAL_VERIFICATION_FAILURE")
+            return _HybridDispatchOutcome(self._failure("INTERNAL_VERIFICATION_FAILURE"), failure_status="INTERNAL_VERIFICATION_FAILURE")
         resolution_status, workspace_id = self._workspace_resolver(storage_root, conversation.project)
         if resolution_status != "SUCCESS":
-            return self._failure(resolution_status)
+            return _HybridDispatchOutcome(self._failure(resolution_status), failure_status=resolution_status)
         try:
             result = self._hybrid_service_factory(storage_root).answer(
                 safe_user_query,
@@ -130,10 +173,53 @@ class DialogueAnswerDispatcher:
                 referent_hint=build_hybrid_referent_hint(conversation, safe_user_query),
             )
         except Exception:
-            return self._failure("INTERNAL_VERIFICATION_FAILURE")
+            return _HybridDispatchOutcome(self._failure("INTERNAL_VERIFICATION_FAILURE"), hybrid_invoked=True, failure_status="INTERNAL_VERIFICATION_FAILURE")
         if result.status != "SUCCESS" or not result.answer.strip():
-            return self._failure(result.status)
-        return {"ok": True, "answer": result.answer, "status": "ok", "read_path": "hybrid"}
+            return _HybridDispatchOutcome(
+                self._failure(result.status),
+                hybrid_invoked=True,
+                hybrid_completed=True,
+                evidence_found=bool(getattr(result, "evidence_found", False)),
+                oc_applied=bool(getattr(result, "oc_applied", False)),
+                provenance_complete=bool(getattr(result, "provenance_complete", False)),
+                failure_status=result.status,
+            )
+        return _HybridDispatchOutcome(
+            {"ok": True, "answer": result.answer, "status": "ok", "read_path": "hybrid"},
+            hybrid_invoked=True,
+            hybrid_completed=True,
+            evidence_found=bool(getattr(result, "evidence_found", False)),
+            oc_applied=bool(getattr(result, "oc_applied", False)),
+            provenance_complete=bool(getattr(result, "provenance_complete", False)),
+        )
+
+    def _observe(self, outcome: _HybridDispatchOutcome, *, elapsed_ms: int) -> None:
+        settings = SETTINGS
+        enabled = bool(getattr(settings, "dialogue_observation_enabled", False))
+        service_docs = getattr(settings, "service_docs", None)
+        if not enabled or service_docs is None:
+            return
+        observation = {
+            "observation_id": f"dialogue-{uuid.uuid4().hex}",
+            "dialogue_read_path": "hybrid",
+            "hybrid_invoked": outcome.hybrid_invoked,
+            "hybrid_completed": outcome.hybrid_completed,
+            "evidence_found": outcome.evidence_found,
+            "oc_applied": outcome.oc_applied,
+            "provenance_complete": outcome.provenance_complete,
+            "elapsed_ms": max(0, elapsed_ms),
+            "failure_reason": _OBSERVATION_FAILURE_REASONS.get(outcome.failure_status, "internal_verification_failure") if outcome.failure_status else None,
+            "eligible_for_adjudication": bool(outcome.response.get("ok")),
+        }
+        try:
+            self._observation_emitter(
+                enabled=True,
+                path=Path(service_docs) / "dialogue_observation.jsonl",
+                observation=observation,
+            )
+        except Exception:
+            # An observation failure is never allowed to alter the Dialogue answer.
+            pass
 
     @staticmethod
     def _failure(status: str) -> dict[str, Any]:

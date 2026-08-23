@@ -39,14 +39,15 @@ class FakeHybridService:
 
 
 class DialogueAnswerDispatcherTests(unittest.TestCase):
-    def dispatch(self, path: str, *, result=None, messages=None, resolver=None):
+    def dispatch(self, path: str, *, result=None, messages=None, resolver=None, observation_enabled=False, service_docs=None, observation_emitter=None):
         calls: list[tuple[str, str, str]] = []
         result = result or SimpleNamespace(status="SUCCESS", answer="Готовый ответ")
         dispatcher = DialogueAnswerDispatcher(
             lambda _: FakeHybridService(result, calls),
             resolver or (lambda _root, _project: ("SUCCESS", "ws_opaque")),
+            observation_emitter or (lambda **_kwargs: None),
         )
-        settings = SimpleNamespace(dialogue_read_path=path, storage_dir=Path("/private/tmp/gaia-dispatcher"))
+        settings = SimpleNamespace(dialogue_read_path=path, storage_dir=Path("/private/tmp/gaia-dispatcher"), dialogue_observation_enabled=observation_enabled, service_docs=service_docs)
         return dispatcher, settings, calls, conversation(messages)
 
     def test_legacy_uses_exact_existing_fallback_path_and_never_constructs_hybrid(self):
@@ -133,6 +134,35 @@ class DialogueAnswerDispatcherTests(unittest.TestCase):
             result = dispatcher.dispatch(run_local=False, conversation=item, query="Вопрос", safe_user_query="Вопрос", analysis_package=SimpleNamespace(prompt="legacy"), build_legacy_runtime=lambda *args: self.fail("no path"))
         self.assertIsNone(result)
         self.assertEqual(calls, [])
+
+    def test_observation_is_one_content_free_record_and_emitter_failure_does_not_change_answer(self):
+        result = SimpleNamespace(status="SUCCESS", answer="ANSWER SECRET", evidence_found=True, oc_applied=False, provenance_complete=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            dispatcher, settings, _calls, item = self.dispatch("hybrid", result=result, observation_enabled=True, service_docs=Path(temporary), observation_emitter=lambda **_kwargs: (_ for _ in ()).throw(OSError("diagnostics unavailable")))
+            with patch("gaia.dialogue_answer_dispatcher.SETTINGS", settings):
+                response = dispatcher.dispatch(run_local=True, conversation=item, query="QUERY SECRET", safe_user_query="QUERY SECRET", analysis_package=SimpleNamespace(prompt="legacy"), build_legacy_runtime=lambda *args: self.fail("legacy runtime must not run"))
+        self.assertTrue(response["ok"])
+
+    def test_enabled_observation_emits_exactly_one_completed_hybrid_record(self):
+        emitted = []
+        result = SimpleNamespace(status="SUCCESS", answer="Готовый ответ", evidence_found=True, oc_applied=True, provenance_complete=True)
+        dispatcher, settings, _calls, item = self.dispatch("hybrid", result=result, observation_enabled=True, service_docs=Path("/private/tmp/gaia-observation"), observation_emitter=lambda **kwargs: emitted.append(kwargs))
+        with patch("gaia.dialogue_answer_dispatcher.SETTINGS", settings):
+            response = dispatcher.dispatch(run_local=True, conversation=item, query="Вопрос", safe_user_query="Вопрос", analysis_package=SimpleNamespace(prompt="legacy"), build_legacy_runtime=lambda *args: self.fail("legacy runtime must not run"))
+        self.assertTrue(response["ok"])
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["observation"], {
+            "observation_id": emitted[0]["observation"]["observation_id"],
+            "dialogue_read_path": "hybrid",
+            "hybrid_invoked": True,
+            "hybrid_completed": True,
+            "evidence_found": True,
+            "oc_applied": True,
+            "provenance_complete": True,
+            "elapsed_ms": emitted[0]["observation"]["elapsed_ms"],
+            "failure_reason": None,
+            "eligible_for_adjudication": True,
+        })
 
 
 if __name__ == "__main__":

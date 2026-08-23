@@ -11,6 +11,11 @@ from typing import Any
 
 DIAGNOSTICS_FLAG = "GAIA_STAGE6_RUNTIME_DIAGNOSTICS"
 DIAGNOSTICS_PATH = "GAIA_STAGE6_DIAGNOSTICS_PATH"
+_DIALOGUE_OBSERVATION_FIELDS = frozenset((
+    "observation_id", "dialogue_read_path", "hybrid_invoked", "hybrid_completed",
+    "evidence_found", "oc_applied", "provenance_complete", "elapsed_ms",
+    "failure_reason", "eligible_for_adjudication",
+))
 
 
 def diagnostics_enabled() -> bool:
@@ -42,4 +47,18 @@ def emit(component: str, event_code: str, correlation_id: str, **fields: Any) ->
             stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
     except OSError:
         # Observation must never alter the review or the system picker behaviour.
+        pass
+
+
+def emit_dialogue_observation(*, enabled: bool, path: Path, observation: dict[str, Any]) -> None:
+    """Append one allow-listed, content-free Hybrid Dialogue observation."""
+    if not enabled or set(observation) != _DIALOGUE_OBSERVATION_FIELDS:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"timestamp": datetime.now(timezone.utc).isoformat(), **observation}
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except OSError:
+        # Telemetry must never change a Dialogue result or select Legacy.
         pass
