@@ -144,16 +144,42 @@ class DeterministicLexicalSourceRetriever:
         selected: list[SourceEvidenceHit] = []
         selected_per_source: dict[str, int] = {}
         used = 0
-        for item in candidates:
-            if selected_per_source.get(item.source_id, 0) >= 2 or used + len(item.excerpt) > request.max_chars:
-                continue
-            selected.append(item); selected_per_source[item.source_id] = selected_per_source.get(item.source_id, 0) + 1; used += len(item.excerpt)
-            if len(selected) >= request.max_hits:
+        covered_query_stems: set[str] = set()
+        query_stems = stems(tokens(request.query))
+        coverage_promotions = 0
+        first_score = candidates[0].retrieval_score if candidates else 0.0
+        remaining = list(candidates)
+        while remaining and len(selected) < request.max_hits:
+            eligible = [
+                item for item in remaining
+                if selected_per_source.get(item.source_id, 0) < 2
+                and used + len(item.excerpt) <= request.max_chars
+            ]
+            if not eligible:
                 break
+            item = eligible[0]
+            if selected:
+                coverage_candidate = next(
+                    (
+                        candidate for candidate in eligible
+                        if candidate.retrieval_score >= first_score * 0.70
+                        and (stems(tokens(candidate.excerpt)) & query_stems) - covered_query_stems
+                    ),
+                    None,
+                )
+                if coverage_candidate is not None:
+                    item = coverage_candidate
+                    if item is not eligible[0]:
+                        coverage_promotions += 1
+            selected.append(item)
+            selected_per_source[item.source_id] = selected_per_source.get(item.source_id, 0) + 1
+            used += len(item.excerpt)
+            covered_query_stems.update(stems(tokens(item.excerpt)) & query_stems)
+            remaining.remove(item)
         expanded, expansion_diagnostics = self._expand_context(selected, materials, request.max_chars - used)
         return SourceRetrievalResult(
             tuple(selected + expanded), tuple(diagnostics),
-            {"implementation": "deterministic_lexical_v1", "materials_scanned": len(materials), "chunks_scanned": scanned_chunks, "hits_selected": len(selected), "selected_chars": used, "context_expansion_chars": sum(len(item.excerpt) for item in expanded), "context_expansion_count": len(expanded), **expansion_diagnostics},
+            {"implementation": "deterministic_lexical_v1", "materials_scanned": len(materials), "chunks_scanned": scanned_chunks, "hits_selected": len(selected), "selected_chars": used, "coverage_promotions": coverage_promotions, "context_expansion_chars": sum(len(item.excerpt) for item in expanded), "context_expansion_count": len(expanded), **expansion_diagnostics},
         )
 
     def _expand_context(self, primary_hits: list[SourceEvidenceHit], materials: tuple[SourceMaterial, ...], remaining_chars: int) -> tuple[list[SourceEvidenceHit], dict[str, int]]:
