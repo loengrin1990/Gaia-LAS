@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from gaia.config import CONTROLLED_INTAKE_EXTENSIONS, ConfigError, config_version, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
+from gaia.config import CONTROLLED_INTAKE_EXTENSIONS, ConfigError, config_version, load_dialogue_read_path, load_local_llm_routes, validate_local_endpoint, validate_loopback_host
 from gaia.ui import INDEX_HTML
 
 
@@ -36,6 +36,17 @@ class ConfigContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "loopback IP"):
             validate_loopback_host("0.0.0.0", "server.host")
         validate_loopback_host("127.0.0.1", "server.host")
+
+    def test_dialogue_read_path_defaults_to_legacy_and_rejects_unknown_values(self) -> None:
+        self.assertEqual(load_dialogue_read_path({}), "legacy")
+        self.assertEqual(load_dialogue_read_path({"dialogue_read_path": "legacy"}), "legacy")
+        self.assertEqual(load_dialogue_read_path({"dialogue_read_path": "hybrid"}), "hybrid")
+        with self.assertRaisesRegex(ConfigError, "dialogue_read_path"):
+            load_dialogue_read_path({"dialogue_read_path": "automatic"})
+
+    def test_example_keeps_dialogue_on_legacy_path(self) -> None:
+        payload = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["dialogue_read_path"], "legacy")
 
     def test_example_context_compiler_route_matches_the_stage_7_contract(self) -> None:
         payload = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))

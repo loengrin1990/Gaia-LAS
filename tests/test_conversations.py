@@ -163,6 +163,42 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual(conversations[0].messages[1].role, "assistant")
         self.assertEqual(conversations[0].messages[1].structured_answer["summary"], "Есть риск тестирования.")
 
+    def test_hybrid_dispatch_result_uses_the_existing_assistant_persistence_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = SimpleNamespace(service_docs=Path(tmp) / "service", projects=Path(tmp) / "projects")
+            fake_package = AnalysisPackage(
+                run_id="run-1", project="Автопретензии", profile_id="default", profile_title="Обычный анализ",
+                route="local", safe_for_codex_after_confirmation=False, local_fallback_required=True,
+                policy_notes=[], memory_chars=0, memory_sources=[], evidence_plan=[], memory_total_sections=0,
+                query_mask_status="выполнено", query_mask_replacements=0, query_mask_review=None,
+                masked_query="Вопрос", files=[], prompt="legacy prompt", journal_path="", safety_audit_path="",
+            )
+            hybrid_failure = {
+                "ok": False,
+                "answer": "Локальный модуль подготовки ответа не вернул полный результат.",
+                "error": "Локальный модуль подготовки ответа не вернул полный результат.",
+                "status": "failed",
+                "read_path": "hybrid",
+            }
+            with (
+                patch("gaia.conversations.SETTINGS", settings),
+                patch("gaia.projects.SETTINGS", settings),
+                patch("gaia.conversations.project_names", return_value=["Автопретензии"]),
+                patch("gaia.conversations.create_package", return_value=fake_package),
+                patch("gaia.conversations.dispatch_dialogue_answer", return_value=hybrid_failure) as dispatch,
+                patch("gaia.conversations.run_lm_studio") as legacy,
+                patch("gaia.conversations.run_operational_context_dialogue") as legacy_oc,
+            ):
+                item = create_conversation("Автопретензии", "Рабочий")
+                result = add_user_turn(item.id, "Вопрос", run_local=True)
+                saved = list_conversations("Автопретензии")[0]
+        self.assertEqual([message.role for message in saved.messages], ["user", "assistant"])
+        self.assertEqual(saved.messages[-1].masked_text, hybrid_failure["answer"])
+        self.assertEqual(result["local_result"]["read_path"], "hybrid")
+        dispatch.assert_called_once()
+        legacy.assert_not_called()
+        legacy_oc.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

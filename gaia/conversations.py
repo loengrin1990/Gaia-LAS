@@ -12,6 +12,7 @@ from .config import SETTINGS
 from .context_assembler import ContextReader
 from .context_compiler import ContextService
 from .context_search import MAX_QUERY_LENGTH, MAX_TERMS
+from .dialogue_answer_dispatcher import dispatch_dialogue_answer
 from .controlled_intake import ControlledIntake
 from .local_llm import run_lm_studio
 from .masking import mask_with_review
@@ -167,11 +168,11 @@ def _add_user_turn_locked(
 
     local_result: dict[str, Any] | None = None
     if run_local:
-        runtime_package = build_operational_context_runtime_package(conversation, query, package)
-        if runtime_package is None:
-            local_result = run_lm_studio(package.prompt)
-        else:
-            local_result = asdict(run_operational_context_dialogue(runtime_package))
+        local_result = dispatch_dialogue_answer(
+            run_local=run_local, conversation=conversation, query=query, safe_user_query=safe_user_text,
+            analysis_package=package, build_legacy_runtime=build_operational_context_runtime_package,
+            legacy_plain_answer=run_lm_studio, legacy_operational_answer=run_operational_context_dialogue,
+        )
         answer = str(local_result.get("answer") or local_result.get("error") or "")
         if answer:
             answer_mask = mask_with_review("Диалог: ответ локальной модели", answer, strict_dialog_privacy=True)
