@@ -294,6 +294,8 @@ def select_applicable_current_authority(query: str, eligible_items: tuple[dict[s
 class HybridEvidencePackage:
     query: str
     source_evidence: tuple[SourceEvidenceHit, ...]
+    rehydrated_grounding: tuple[SourceEvidenceHit, ...]
+    rehydrated_oc_grounding: tuple[OperationalOverlayHit, ...]
     oc_overlay: tuple[OperationalOverlayHit, ...]
     applicable_current_authority: tuple[OperationalOverlayHit, ...]
     observed_tensions: tuple[dict[str, str], ...]
@@ -305,6 +307,8 @@ class HybridEvidencePackage:
             "schema": "gaia.d3.hybrid-evidence-package.v2",
             "query": self.query,
             "source_evidence": [item.as_dict() for item in self.source_evidence],
+            "rehydrated_grounding": [item.as_dict() for item in self.rehydrated_grounding],
+            "rehydrated_oc_grounding": [item.as_dict() for item in self.rehydrated_oc_grounding],
             "oc_overlay": [item.as_dict() for item in self.oc_overlay],
             "applicable_current_authority": [item.as_dict() for item in self.applicable_current_authority],
             "observed_tensions": list(self.observed_tensions),
@@ -313,13 +317,14 @@ class HybridEvidencePackage:
         }
 
 
-def assemble_hybrid_package(query: str, source_result: SourceRetrievalResult, oc_overlay: tuple[OperationalOverlayHit, ...], applicable_current_authority: tuple[OperationalOverlayHit, ...] = ()) -> HybridEvidencePackage:
+def assemble_hybrid_package(query: str, source_result: SourceRetrievalResult, oc_overlay: tuple[OperationalOverlayHit, ...], applicable_current_authority: tuple[OperationalOverlayHit, ...] = (), rehydrated_grounding: tuple[SourceEvidenceHit, ...] = (), rehydrated_oc_grounding: tuple[OperationalOverlayHit, ...] = ()) -> HybridEvidencePackage:
     unresolved = () if source_result.hits else ("no_matching_queryable_source_evidence",)
     tensions = _observed_tensions(source_result.hits, oc_overlay)
-    return HybridEvidencePackage(query, source_result.hits, oc_overlay, applicable_current_authority, tensions, unresolved, {
+    return HybridEvidencePackage(query, source_result.hits, rehydrated_grounding, rehydrated_oc_grounding, oc_overlay, applicable_current_authority, tensions, unresolved, {
         "source": source_result.as_dict(),
         "oc_selected": len(oc_overlay),
         "applicable_current_authority_selected": len(applicable_current_authority),
+        "rehydrated_oc_selected": len(rehydrated_oc_grounding),
         "oc_is_not_exhaustive_project_knowledge": True,
     })
 

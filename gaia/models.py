@@ -219,6 +219,7 @@ class ConversationMessage:
     route: str = ""
     safety_status: str = ""
     structured_answer: dict[str, Any] | None = None
+    hybrid_grounding: dict[str, Any] | None = None
 
 
 @dataclass

@@ -18,8 +18,6 @@ from .operational_context_runtime import run_operational_context_dialogue
 from .runtime_diagnostics import emit_dialogue_observation
 
 
-_FOLLOW_UP = re.compile(r"^(?:а|и)\s+(?:для|у|по|что\s+насч[её]т)\b", re.IGNORECASE)
-_MAX_REFERENT_HINT_CHARS = 320
 WORKSPACE_RESOLUTION_FAILED = "WORKSPACE_RESOLUTION_FAILED"
 # The current intake mapping is one project key to one workspace.  Keep this
 # status reserved so a future multi-value mapping can fail closed explicitly.
@@ -93,18 +91,14 @@ def resolve_existing_dialogue_workspace(storage_root: Path, project: str) -> tup
     return "SUCCESS", workspace_id
 
 
-def build_hybrid_referent_hint(conversation: Conversation, current_masked_text: str) -> str:
-    """Return one bounded prior user turn only for a clear short follow-up."""
-    current = current_masked_text.strip()
-    if len(current.split()) > 6 or not _FOLLOW_UP.match(current):
-        return ""
-    messages = conversation.messages
-    if messages and messages[-1].role == "user" and messages[-1].masked_text == current:
-        messages = messages[:-1]
-    for message in reversed(messages):
-        if message.role == "user" and message.masked_text.strip():
-            return message.masked_text.strip()[:_MAX_REFERENT_HINT_CHARS]
-    return ""
+def build_hybrid_grounding(conversation: Conversation, current_masked_text: str) -> dict[str, Any]:
+    """Bounded discourse plus only machine provenance from the prior Hybrid success."""
+    messages = conversation.messages[:-1] if conversation.messages and conversation.messages[-1].role == "user" and conversation.messages[-1].masked_text == current_masked_text else conversation.messages
+    prior_users = [message.masked_text.strip()[:320] for message in messages if message.role == "user" and message.masked_text.strip()][-2:]
+    # Carry-forward is deliberately one hop: an earlier assistant turn cannot
+    # become grounding merely because a later turn did not produce Hybrid output.
+    prior_assistant = messages[-1] if messages and messages[-1].role == "assistant" else None
+    return {"prior_user_turns": tuple(prior_users), "prior_grounding": dict(prior_assistant.hybrid_grounding) if prior_assistant and isinstance(prior_assistant.hybrid_grounding, dict) else {}}
 
 
 class DialogueAnswerDispatcher:
@@ -169,11 +163,8 @@ class DialogueAnswerDispatcher:
         if resolution_status != "SUCCESS":
             return _HybridDispatchOutcome(self._failure(resolution_status), failure_status=resolution_status)
         try:
-            result = self._hybrid_service_factory(storage_root).answer(
-                safe_user_query,
-                workspace_id,
-                referent_hint=build_hybrid_referent_hint(conversation, safe_user_query),
-            )
+            grounding = build_hybrid_grounding(conversation, safe_user_query)
+            result = self._hybrid_service_factory(storage_root).answer(safe_user_query, workspace_id, **grounding)
         except Exception:
             return _HybridDispatchOutcome(self._failure("INTERNAL_VERIFICATION_FAILURE"), hybrid_invoked=True, failure_status="INTERNAL_VERIFICATION_FAILURE")
         if result.status != "SUCCESS" or not result.answer.strip():
@@ -187,7 +178,7 @@ class DialogueAnswerDispatcher:
                 failure_status=result.status,
             )
         return _HybridDispatchOutcome(
-            {"ok": True, "answer": result.answer, "status": "ok", "read_path": "hybrid"},
+            {"ok": True, "answer": result.answer, "status": "ok", "read_path": "hybrid", "hybrid_grounding": result.carry_forward_metadata() if callable(getattr(result, "carry_forward_metadata", None)) else {}},
             hybrid_invoked=True,
             hybrid_completed=True,
             evidence_found=bool(getattr(result, "evidence_found", False)),
@@ -227,6 +218,8 @@ class DialogueAnswerDispatcher:
     def _failure(status: str) -> dict[str, Any]:
         if status == "INSUFFICIENT_EVIDENCE":
             message = "В доступных подтверждённых данных недостаточно сведений для ответа."
+        elif status == "GROUNDING_AMBIGUOUS":
+            message = "Уточните, к какому из ранее обсуждавшихся подтверждённых материалов относится вопрос."
         elif status == "CURRENT_AUTHORITY_NOT_USED":
             message = "Не удалось сформировать ответ с опорой на подтверждённое актуальное правило."
         elif status in {"LOCAL_PROVIDER_UNAVAILABLE", "LOCAL_REASONING_ROUTE_MISSING", "PROVIDER_INCOMPLETE_RESPONSE"}:

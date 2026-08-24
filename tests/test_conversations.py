@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from gaia.context_search import MAX_QUERY_LENGTH
-from gaia.conversations import add_user_turn, build_context_search_query, create_conversation, list_conversations
+from gaia.conversations import add_user_turn, build_context_search_query, create_conversation, list_conversations, read_conversation, write_conversation
 from gaia.models import AnalysisPackage, Conversation, ConversationMessage
 
 
@@ -59,6 +59,19 @@ class ConversationTests(unittest.TestCase):
 
         self.assertEqual([item.id for item in conversations], [first.id])
         self.assertEqual(conversations[0].project, "Автопретензии")
+
+    def test_optional_hybrid_grounding_roundtrips_and_old_message_remains_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "conversation.json"
+            item = self.conversation([
+                ConversationMessage("old", "assistant", "", "Старый ответ", ""),
+                ConversationMessage("new", "assistant", "", "Новый ответ", "", hybrid_grounding={"version": 1, "successful": True, "source_refs": [{"source_id": "src-1", "sanitized_id": "san-1", "start_offset": 0, "end_offset": 8}]}),
+            ])
+            with patch("gaia.conversations.conversation_path", return_value=path):
+                write_conversation(item)
+            restored = read_conversation(path)
+        self.assertIsNone(restored.messages[0].hybrid_grounding)
+        self.assertEqual(restored.messages[1].hybrid_grounding["source_refs"][0]["sanitized_id"], "san-1")
 
     def test_add_user_turn_saves_message_and_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

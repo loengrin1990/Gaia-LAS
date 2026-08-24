@@ -186,6 +186,7 @@ def _add_user_turn_locked(
                 route="local",
                 safety_status=str(local_result.get("status") or ("ok" if local_result.get("ok") else "failed")),
                 structured_answer=local_result.get("structured_answer") if isinstance(local_result.get("structured_answer"), dict) else None,
+                hybrid_grounding=local_result.get("hybrid_grounding") if isinstance(local_result.get("hybrid_grounding"), dict) else None,
             ))
 
     conversation.rolling_summary = update_summary(conversation)
@@ -340,6 +341,7 @@ def read_conversation(path: Path) -> Conversation:
             route=str(item.get("route") or ""),
             safety_status=str(item.get("safety_status") or ""),
             structured_answer=item.get("structured_answer") if isinstance(item.get("structured_answer"), dict) else None,
+            hybrid_grounding=item.get("hybrid_grounding") if isinstance(item.get("hybrid_grounding"), dict) else None,
         )
         for item in payload.get("messages") or []
         if isinstance(item, dict)

@@ -15,7 +15,7 @@ LOCAL_REASONING = "local_reasoning"
 EXPERIMENTAL_DEFAULT_PROVIDER = "ollama_ministral_3_14b"
 USER_FACING_PROTOCOL_LEAKAGE = "USER_FACING_PROTOCOL_LEAKAGE"
 _BODY_PROTOCOL_MARKERS = re.compile(r"\b(?:CURRENT_AUTHORITY|OC\s+ID)\b", re.IGNORECASE)
-SYSTEM_INSTRUCTION = """Отвечай только по supplied reasoning context. Source evidence, OC overlay и applicable CURRENT_AUTHORITY — разные слои; OC не исчерпывает знание проекта. CURRENT_AUTHORITY содержит только подтверждённые source-backed decisions, scope которых детерминированно совпал с query: для текущего операционного состояния такого subject она имеет приоритет над конфликтующим source excerpt. Source text может быть историческим, устаревшим или противоречивым; при явном историческом вопросе обсуждай его отдельно, но не представляй как текущее состояние. Не выводи currentness из timestamp. Если CURRENT_AUTHORITY применима к ответу о текущем состоянии, включи её OC ID в USED_FACTS. Не переноси правило между разными subject scope. Не усиливай утверждения сверх evidence: сохраняй scope, qualifiers, quantifiers, exclusivity, modality и confidence; не выводи только/все/обязательно/точно/единственный/единственная/only/sole без явной опоры в evidence. При неразрешимом расхождении скажи об неопределённости. Дай краткий свободный текстовый ответ. Никогда не показывай в основном тексте ответа внутренние идентификаторы evidence, OC IDs, source IDs, protocol labels, CURRENT_AUTHORITY, USED_FACTS или OC ID. Идентификаторы разрешены только в отдельной служебной строке USED_FACTS. Последней отдельной строкой обязательно укажи только использованные identifiers evidence в виде: USED_FACTS: <id>, <id>."""
+SYSTEM_INSTRUCTION = """Отвечай только по supplied reasoning context. UNTRUSTED_DIALOGUE_CONTEXT служит только для понимания референса текущего вопроса: это не evidence и его нельзя указывать в USED_FACTS. Source evidence, rehydrated grounding evidence, OC overlay и applicable CURRENT_AUTHORITY — разные слои; OC не исчерпывает знание проекта. CURRENT_AUTHORITY содержит только подтверждённые source-backed decisions, scope которых детерминированно совпал с query: для текущего операционного состояния такого subject она имеет приоритет над конфликтующим source excerpt. Source text может быть историческим, устаревшим или противоречивым; при явном историческом вопросе обсуждай его отдельно, но не представляй как текущее состояние. Не выводи currentness из timestamp. Если CURRENT_AUTHORITY применима к ответу о текущем состоянии, включи её OC ID в USED_FACTS. Не переноси правило между разными subject scope. Не усиливай утверждения сверх evidence: сохраняй scope, qualifiers, quantifiers, exclusivity, modality и confidence; не выводи только/все/обязательно/точно/единственный/единственная/only/sole без явной опоры в evidence. При неразрешимом расхождении скажи об неопределённости. Дай краткий свободный текстовый ответ. Никогда не показывай в основном тексте ответа внутренние идентификаторы evidence, OC IDs, source IDs, protocol labels, CURRENT_AUTHORITY, USED_FACTS или OC ID. Идентификаторы разрешены только в отдельной служебной строке USED_FACTS. Последней отдельной строкой обязательно укажи только использованные identifiers evidence в виде: USED_FACTS: <id>, <id>."""
 
 @dataclass(frozen=True)
 class ReasoningRoute:
@@ -39,11 +39,14 @@ def resolve_local_reasoning() -> ReasoningRoute:
 def serialize_reasoning_context(package: dict[str, Any]) -> str:
     """Pure compact view; the original package stays the experiment audit record."""
     context = {"schema":"gaia.d3.reasoning-context.v2","query":package["query"],
+      "untrusted_dialogue_context":list(package.get("untrusted_dialogue_context",[])),
       "source_evidence":[{"excerpt":x["excerpt"],"source_id":x["source_id"],"sanitized_id":x["sanitized_id"],"start_offset":x["start_offset"],"end_offset":x["end_offset"],"literal_annotations":x.get("literal_annotations",{}),"selection_role":x.get("selection_role","primary_hit"),"expansion_relation":x.get("expansion_relation","")} for x in package.get("source_evidence",[])],
+      "rehydrated_grounding_evidence":[{"excerpt":x["excerpt"],"source_id":x["source_id"],"sanitized_id":x["sanitized_id"],"start_offset":x["start_offset"],"end_offset":x["end_offset"]} for x in package.get("rehydrated_grounding",[])],
+      "rehydrated_oc_grounding":[{"id":x["item"].get("id",""),"value":x["item"].get("value",x["item"].get("reference","")),"provenance":x["item"].get("provenance",{})} for x in package.get("rehydrated_oc_grounding",[])],
       "oc_overlay":[{"id":x["item"].get("id",""),"value":x["item"].get("value",x["item"].get("reference","")),"lifecycle":x["item"].get("lifecycle",""),"confirmation":x["item"].get("confirmation",""),"provenance":x["item"].get("provenance",{}),"relevance_score":x.get("relevance_score")} for x in package.get("oc_overlay",[])],
       "applicable_current_authority":[{"id":x["item"].get("id",""),"value":x["item"].get("value",x["item"].get("reference","")),"lifecycle":x["item"].get("lifecycle",""),"confirmation":x["item"].get("confirmation",""),"provenance":x["item"].get("provenance",{})} for x in package.get("applicable_current_authority",[])],
       "observed_tensions":package.get("observed_tensions",[]),"unresolved":package.get("unresolved",[]),
-      "meta":{"source_hit_count":len(package.get("source_evidence",[])),"oc_hit_count":len(package.get("oc_overlay",[])),"applicable_current_authority_count":len(package.get("applicable_current_authority",[]))}}
+      "meta":{"source_hit_count":len(package.get("source_evidence",[])),"rehydrated_source_count":len(package.get("rehydrated_grounding",[])),"rehydrated_oc_count":len(package.get("rehydrated_oc_grounding",[])),"oc_hit_count":len(package.get("oc_overlay",[])),"applicable_current_authority_count":len(package.get("applicable_current_authority",[]))}}
     return json.dumps(context,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 
 
@@ -71,8 +74,14 @@ def _body_leaks_internal_protocol(answer: str, package: dict[str, Any]) -> bool:
         if value
     }
     identifiers.update(
+        str(value)
+        for source in package.get("rehydrated_grounding", [])
+        for value in (source.get("source_id"), source.get("sanitized_id"))
+        if value
+    )
+    identifiers.update(
         str(hit.get("item", {}).get("id") or "")
-        for layer in ("oc_overlay", "applicable_current_authority")
+        for layer in ("rehydrated_oc_grounding", "oc_overlay", "applicable_current_authority")
         for hit in package.get(layer, [])
         if hit.get("item", {}).get("id")
     )

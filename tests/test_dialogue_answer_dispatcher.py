@@ -11,7 +11,7 @@ from unittest.mock import patch
 from gaia.dialogue_answer_dispatcher import (
     WORKSPACE_RESOLUTION_FAILED,
     DialogueAnswerDispatcher,
-    build_hybrid_referent_hint,
+    build_hybrid_grounding,
     resolve_existing_dialogue_workspace,
 )
 from gaia.models import Conversation, ConversationMessage
@@ -33,8 +33,8 @@ class FakeHybridService:
     def __init__(self, result, calls):
         self.result = result; self.calls = calls
 
-    def answer(self, query, workspace_id, *, referent_hint=""):
-        self.calls.append((query, workspace_id, referent_hint))
+    def answer(self, query, workspace_id, **grounding):
+        self.calls.append((query, workspace_id, grounding))
         return self.result
 
 
@@ -60,14 +60,14 @@ class DialogueAnswerDispatcherTests(unittest.TestCase):
         self.assertEqual(len(legacy_calls), 1)
         self.assertEqual(calls, [])
 
-    def test_hybrid_receives_only_masked_current_query_workspace_and_bounded_user_hint(self):
+    def test_hybrid_receives_masked_current_query_workspace_and_bounded_grounding(self):
         messages = [user("Нужно ли повторное согласование гостя?"), assistant("Ответ ассистента нельзя использовать."), user("А для подрядчика?")]
         dispatcher, settings, calls, item = self.dispatch("hybrid", messages=messages)
         with patch("gaia.dialogue_answer_dispatcher.SETTINGS", settings), patch("gaia.dialogue_answer_dispatcher.run_lm_studio") as legacy:
             result = dispatcher.dispatch(run_local=True, conversation=item, query="raw query", safe_user_query="А для подрядчика?", analysis_package=SimpleNamespace(prompt="LEGACY SECRET"), build_legacy_runtime=lambda *args: self.fail("legacy runtime must not run"))
         self.assertTrue(result["ok"])
         self.assertEqual(result["read_path"], "hybrid")
-        self.assertEqual(calls, [("А для подрядчика?", "ws_opaque", "Нужно ли повторное согласование гостя?")])
+        self.assertEqual(calls, [("А для подрядчика?", "ws_opaque", {"prior_user_turns": ("Нужно ли повторное согласование гостя?",), "prior_grounding": {}})])
         legacy.assert_not_called()
 
     def test_hybrid_failures_never_invoke_legacy_and_never_expose_partial_answer(self):
@@ -122,11 +122,18 @@ class DialogueAnswerDispatcherTests(unittest.TestCase):
             intake.write_text(json.dumps({"workspaces": {key: "ws_missing"}}), encoding="utf-8")
             self.assertEqual(resolve_existing_dialogue_workspace(root, "SInt GateFlow"), (WORKSPACE_RESOLUTION_FAILED, ""))
 
-    def test_referent_hint_is_conservative_and_never_uses_assistant_or_summary(self):
-        item = conversation([user("Нужно ли повторное согласование гостя?"), assistant("assistant evidence"), user("А для подрядчика?")])
-        self.assertEqual(build_hybrid_referent_hint(item, "А для подрядчика?"), "Нужно ли повторное согласование гостя?")
-        self.assertEqual(build_hybrid_referent_hint(item, "Какая система авторитетна по состоянию доступа?"), "")
-        self.assertNotIn("assistant evidence", build_hybrid_referent_hint(item, "А для подрядчика?"))
+    def test_grounding_uses_bounded_user_turns_and_never_assistant_prose(self):
+        prior = ConversationMessage("assistant", "assistant", "", "assistant evidence", "", hybrid_grounding={"version": 1, "successful": True, "source_refs": [{"source_id": "src-1"}]})
+        item = conversation([user("Нужно ли повторное согласование гостя?"), prior, user("А для подрядчика?")])
+        grounding = build_hybrid_grounding(item, "А для подрядчика?")
+        self.assertEqual(grounding["prior_user_turns"], ("Нужно ли повторное согласование гостя?",))
+        self.assertNotIn("assistant evidence", str(grounding))
+        self.assertEqual(grounding["prior_grounding"]["source_refs"], [{"source_id": "src-1"}])
+
+    def test_grounding_does_not_skip_an_immediately_prior_non_hybrid_assistant(self):
+        first = ConversationMessage("assistant-1", "assistant", "", "older successful hybrid", "", hybrid_grounding={"version": 1, "successful": True, "source_refs": [{"source_id": "src-1"}]})
+        item = conversation([user("Первый вопрос"), first, user("Второй вопрос"), assistant("legacy or failed answer"), user("Продолжение")])
+        self.assertEqual(build_hybrid_grounding(item, "Продолжение")["prior_grounding"], {})
 
     def test_run_local_false_calls_no_answer_path(self):
         dispatcher, settings, calls, item = self.dispatch("hybrid")

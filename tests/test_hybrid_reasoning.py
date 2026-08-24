@@ -113,6 +113,15 @@ class HybridReasoningTests(unittest.TestCase):
                 self.assertFalse(result["ok"])
                 self.assertEqual(result["status"], USER_FACING_PROTOCOL_LEAKAGE)
 
+    def test_rehydrated_layers_are_separate_and_identifiers_remain_body_blocked(self):
+        package = {"query": "Как они связаны?", "untrusted_dialogue_context": ["Какие системы участвуют?"], "source_evidence": [], "rehydrated_grounding": [{"excerpt": "Подтверждённый фрагмент.", "source_id": "source-old", "sanitized_id": "sanitized-old", "start_offset": 0, "end_offset": 24}], "rehydrated_oc_grounding": [{"item": {"id": "oc-old", "value": "Подтверждённое правило", "provenance": {"source_ref": "sanitized-old"}}}], "oc_overlay": [], "applicable_current_authority": []}
+        context = serialize_reasoning_context(package)
+        self.assertIn('"untrusted_dialogue_context":["Какие системы участвуют?"]', context)
+        self.assertIn('"rehydrated_grounding_evidence"', context)
+        self.assertIn('"rehydrated_oc_grounding"', context)
+        leaked = {"model": "ministral-3:14b", "message": {"role": "assistant", "content": "Ответ source-old.\nUSED_FACTS: source-old"}, "done": True, "done_reason": "stop"}
+        self.assertEqual(run_hybrid_reasoning(package, request=self.request_for(leaked))["status"], USER_FACING_PROTOCOL_LEAKAGE)
+
     def test_reasoning_instruction_preserves_evidence_strength_without_domain_hints(self):
         self.assertIn("Не усиливай утверждения сверх evidence", SYSTEM_INSTRUCTION)
         self.assertIn("scope, qualifiers, quantifiers, exclusivity, modality и confidence", SYSTEM_INSTRUCTION)

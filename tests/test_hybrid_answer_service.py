@@ -34,8 +34,57 @@ class HybridAnswerServiceTests(unittest.TestCase):
     def test_empty_evidence_never_calls_reasoner(self):
         called = []
         with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=()), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=type("R", (), {"eligible_items": ()})()):
-            result = HybridAnswerService("/unused", reasoner=lambda _: called.append(True) or {}).answer("вопрос", "workspace", referent_hint="только поиск")
+            result = HybridAnswerService("/unused", reasoner=lambda _: called.append(True) or {}).answer("вопрос", "workspace", prior_user_turns=("только поиск",))
         self.assertEqual(result.status, "INSUFFICIENT_EVIDENCE")
+        self.assertEqual(called, [])
+
+    def test_accepted_source_and_oc_provenance_rehydrate_without_authority_inheritance(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Подтверждённое правило связи систем.")
+        eligible = ({"id": "oc-1", "kind": "decision", "subject_ref": "subject", "value": "Подтверждённое правило", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san-1"}, "authority_scope": {"label": "Только текущий вопрос", "query_aliases": ["действующее правило"]}},)
+        grounding = {"version": 1, "successful": True, "source_refs": [{"source_id": "src-1", "sanitized_id": "san-1", "start_offset": 0, "end_offset": len(material.text)}], "oc_refs": [{"id": "oc-1", "source_ref": "san-1"}]}
+        captured = {}
+        response = {"ok": True, "answer": "Системы связаны подтверждённым правилом.", "used_facts": ["san-1", "oc-1"], "provider": "local", "model": "model", "done_reason": "stop"}
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=SimpleNamespace(eligible_items=eligible)):
+            result = HybridAnswerService("/unused", reasoner=lambda package: captured.update(package) or response).answer("Как они связаны?", "workspace", prior_user_turns=("Какие системы участвуют?",), prior_grounding=grounding)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(len(captured["rehydrated_grounding"]), 1)
+        self.assertEqual([hit["item"]["id"] for hit in captured["rehydrated_oc_grounding"]], ["oc-1"])
+        self.assertEqual(captured["applicable_current_authority"], [])
+        self.assertEqual({item["evidence_layer"] for item in result.resolved_provenance}, {"rehydrated_grounding", "rehydrated_oc_grounding"})
+        self.assertEqual(result.carry_forward_metadata()["source_refs"], [])
+        self.assertEqual(result.carry_forward_metadata()["oc_refs"], [])
+
+    def test_stale_or_dangling_prior_grounding_is_dropped_without_blocking_current_retrieval(self):
+        material = SourceMaterial(MaterialAvailability.AVAILABLE, "src-current", "workspace", "san-current", text="Текущий подтверждённый ответ.")
+        grounding = {"version": 1, "successful": True, "source_refs": [{"source_id": "src-old", "sanitized_id": "san-old", "start_offset": 0, "end_offset": 10}], "oc_refs": [{"id": "oc-old", "source_ref": "san-old"}]}
+        captured = {}
+        response = {"ok": True, "answer": "Текущий подтверждённый ответ.", "used_facts": ["san-current"], "provider": "local", "model": "model", "done_reason": "stop"}
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(material,)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=SimpleNamespace(eligible_items=())):
+            result = HybridAnswerService("/unused", reasoner=lambda package: captured.update(package) or response).answer("текущий ответ", "workspace", prior_grounding=grounding)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["rehydrated_grounding"], [])
+        self.assertEqual(captured["rehydrated_oc_grounding"], [])
+
+    def test_disjoint_current_source_evidence_resets_prior_grounding(self):
+        current = SourceMaterial(MaterialAvailability.AVAILABLE, "src-current", "workspace", "san-current", text="Новый интеграционный контур с подтверждённым ответом.")
+        carried = SourceMaterial(MaterialAvailability.AVAILABLE, "src-prior", "workspace", "san-prior", text="Старый договорной контур.")
+        grounding = {"version": 1, "successful": True, "source_refs": [{"source_id": "src-prior", "sanitized_id": "san-prior", "start_offset": 0, "end_offset": len(carried.text)}]}
+        captured = {}
+        response = {"ok": True, "answer": "Новый подтверждённый ответ.", "used_facts": ["san-current"], "provider": "local", "model": "model", "done_reason": "stop"}
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(carried, current)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=SimpleNamespace(eligible_items=())):
+            result = HybridAnswerService("/unused", reasoner=lambda package: captured.update(package) or response).answer("новый интеграционный", "workspace", prior_grounding=grounding)
+        self.assertEqual(result.status, "SUCCESS")
+        self.assertEqual(captured["rehydrated_grounding"], [])
+        self.assertEqual(captured["diagnostics"]["grounding_resolution"], "reset")
+
+    def test_multiple_carried_sources_without_current_evidence_fails_closed_as_ambiguous(self):
+        first = SourceMaterial(MaterialAvailability.AVAILABLE, "src-1", "workspace", "san-1", text="Первый предмет.")
+        second = SourceMaterial(MaterialAvailability.AVAILABLE, "src-2", "workspace", "san-2", text="Второй предмет.")
+        grounding = {"version": 1, "successful": True, "source_refs": [{"source_id": "src-1", "sanitized_id": "san-1", "start_offset": 0, "end_offset": len(first.text)}, {"source_id": "src-2", "sanitized_id": "san-2", "start_offset": 0, "end_offset": len(second.text)}]}
+        called = []
+        with patch("gaia.hybrid_answer_service.SourceEvidenceReader.inventory", return_value=(first, second)), patch("gaia.hybrid_answer_service.OperationalContextReader.retrieve", return_value=SimpleNamespace(eligible_items=())):
+            result = HybridAnswerService("/unused", reasoner=lambda package: called.append(package) or {}).answer("Кто владелец?", "workspace", prior_grounding=grounding)
+        self.assertEqual(result.status, "GROUNDING_AMBIGUOUS")
         self.assertEqual(called, [])
 
     def test_reasoner_exception_is_a_typed_local_failure(self):

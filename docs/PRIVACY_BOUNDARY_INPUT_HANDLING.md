@@ -34,3 +34,5 @@ PB-0 возвращает `eligible_for_external=true` только если в�
 Неразрешённая ambiguity из одних valid standard inputs сохраняется явной и не получает automatic winner/current truth. Сама по себе она не делает внешний маршрут недоступным: поздний consumer обязан сохранить ambiguity, а не выдавать один вариант как current truth.
 
 External call не входит в PB-0. Поздний OC-5 обязан использовать этот результат как fail-closed input, а не как самостоятельное разрешение раскрытия.
+
+Hybrid multi-turn continuity остаётся локальной: в conversation сохраняются только machine provenance pointers accepted Hybrid output, без assistant prose, prompt, excerpts или raw user text. Для следующего turn используются не более двух уже masked user turns; они маркируются untrusted и не становятся factual evidence. Telemetry этого механизма, если включена отдельно, остаётся content-free и не содержит conversation text, source/OC identifiers или offsets.
