@@ -7,7 +7,7 @@ from pathlib import Path
 import json
 
 from gaia.operational_context import (KIND_REGISTRY, ConfirmationEvidence, OperationalContextError, OperationalContextStore,
-                                      SafeProvenance, new_evidence, new_item)
+                                      SafeProvenance, authority_scope_matches, new_evidence, new_item)
 
 
 class OperationalContextTests(unittest.TestCase):
@@ -35,6 +35,27 @@ class OperationalContextTests(unittest.TestCase):
         with self.assertRaises(OperationalContextError): self.draft(value="", reference="")
         with self.assertRaises(OperationalContextError): self.draft(sensitivity="secret")
         with self.assertRaises(OperationalContextError): self.draft(scope="user", kind="requirement")
+
+    def test_optional_reviewed_authority_scope_is_normalized_persisted_and_decision_only(self):
+        old, _ = self.create()
+        self.assertIsNone(old.authority_scope)
+        scope = {"label": "Продление пропуска", "query_aliases": ["Продлить пропуск", "продлить пропуск", "продление пропуска"]}
+        item, saved = self.create(item_id="oc_decision", evidence_id="oce_decision", kind="decision", subject_ref="extension", authority_scope=scope)
+        self.assertEqual(item.authority_scope["query_aliases"], ("продлить пропуск", "продление пропуска"))
+        self.assertEqual(saved["authority_scope"]["query_aliases"], ("продлить пропуск", "продление пропуска"))
+        self.assertTrue(authority_scope_matches(item.authority_scope, "Можно ли продлить пропуск после истечения?"))
+        self.assertFalse(authority_scope_matches(item.authority_scope, "Какой срок заявки на пропуск?"))
+        self.assertFalse(authority_scope_matches(item.authority_scope, "Продление контракта"))
+        with self.assertRaises(OperationalContextError): self.draft(authority_scope=scope)
+        with self.assertRaises(OperationalContextError): self.draft(kind="decision", authority_scope={"label": "x", "query_aliases": []})
+        with self.assertRaises(OperationalContextError): self.draft(kind="decision", authority_scope={"label": "x", "query_aliases": [str(index) for index in range(9)]})
+
+    def test_scope_change_requires_existing_replacement_semantics(self):
+        old, _ = self.create(item_id="oc_old", evidence_id="oce_old", kind="decision", subject_ref="extension", authority_scope={"label": "Продление пропуска", "query_aliases": ["продлить пропуск"]})
+        new = self.draft(item_id="oc_new", evidence_id="oce_new", kind="decision", subject_ref="extension", supersedes_id=old.id, authority_scope={"label": "Продление пропуска", "query_aliases": ["продление пропуска"]})
+        self.store.replace(old.id, new, self.evidence(new, action="replacement", evidence_id="oce_new", prior_item_id=old.id))
+        self.assertEqual(self.store.get(scope="project", scope_ref="project_a", item_id=old.id)["lifecycle"], "superseded")
+        self.assertEqual(self.store.get(scope="project", scope_ref="project_a", item_id=new.id)["authority_scope"]["query_aliases"], ["продление пропуска"])
 
     def test_safe_provenance_and_confirmation_fail_closed(self):
         with self.assertRaises(OperationalContextError): SafeProvenance.from_mapping({"source_path": "/private/document.txt"})

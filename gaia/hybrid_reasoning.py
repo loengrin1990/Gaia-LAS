@@ -13,7 +13,9 @@ from .local_llm import local_llm_payload, provider_config, response_content, rou
 
 LOCAL_REASONING = "local_reasoning"
 EXPERIMENTAL_DEFAULT_PROVIDER = "ollama_ministral_3_14b"
-SYSTEM_INSTRUCTION = """Отвечай только по supplied reasoning context. Source evidence и OC overlay — разные слои; OC не исчерпывает знание проекта. Не переноси правило между разными явно указанными subject scope. Явные current/final cues источника учитывай выше stale/pending формулировок OC только если это следует из самого evidence; не выводи currentness из timestamp. Не усиливай утверждения сверх evidence: сохраняй scope, qualifiers, quantifiers, exclusivity, modality и confidence; не выводи только/все/обязательно/точно/единственный/единственная/only/sole без явной опоры в evidence. Статус «авторитетный/authoritative» сам по себе не означает «единственный/only/sole/source of truth»; эксклюзивность допустима только если она явно утверждается evidence. При неразрешимом расхождении скажи об неопределённости. Дай краткий свободный текстовый ответ. Не включай внутренние идентификаторы evidence (например, src_, san_ или OC ID) в основной текст ответа; они допустимы только в служебной строке USED_FACTS. Последней отдельной строкой обязательно укажи только использованные identifiers evidence в виде: USED_FACTS: <id>, <id>."""
+USER_FACING_PROTOCOL_LEAKAGE = "USER_FACING_PROTOCOL_LEAKAGE"
+_BODY_PROTOCOL_MARKERS = re.compile(r"\b(?:CURRENT_AUTHORITY|OC\s+ID)\b", re.IGNORECASE)
+SYSTEM_INSTRUCTION = """Отвечай только по supplied reasoning context. Source evidence, OC overlay и applicable CURRENT_AUTHORITY — разные слои; OC не исчерпывает знание проекта. CURRENT_AUTHORITY содержит только подтверждённые source-backed decisions, scope которых детерминированно совпал с query: для текущего операционного состояния такого subject она имеет приоритет над конфликтующим source excerpt. Source text может быть историческим, устаревшим или противоречивым; при явном историческом вопросе обсуждай его отдельно, но не представляй как текущее состояние. Не выводи currentness из timestamp. Если CURRENT_AUTHORITY применима к ответу о текущем состоянии, включи её OC ID в USED_FACTS. Не переноси правило между разными subject scope. Не усиливай утверждения сверх evidence: сохраняй scope, qualifiers, quantifiers, exclusivity, modality и confidence; не выводи только/все/обязательно/точно/единственный/единственная/only/sole без явной опоры в evidence. При неразрешимом расхождении скажи об неопределённости. Дай краткий свободный текстовый ответ. Никогда не показывай в основном тексте ответа внутренние идентификаторы evidence, OC IDs, source IDs, protocol labels, CURRENT_AUTHORITY, USED_FACTS или OC ID. Идентификаторы разрешены только в отдельной служебной строке USED_FACTS. Последней отдельной строкой обязательно укажи только использованные identifiers evidence в виде: USED_FACTS: <id>, <id>."""
 
 @dataclass(frozen=True)
 class ReasoningRoute:
@@ -36,11 +38,12 @@ def resolve_local_reasoning() -> ReasoningRoute:
 
 def serialize_reasoning_context(package: dict[str, Any]) -> str:
     """Pure compact view; the original package stays the experiment audit record."""
-    context = {"schema":"gaia.d3.reasoning-context.v1","query":package["query"],
+    context = {"schema":"gaia.d3.reasoning-context.v2","query":package["query"],
       "source_evidence":[{"excerpt":x["excerpt"],"source_id":x["source_id"],"sanitized_id":x["sanitized_id"],"start_offset":x["start_offset"],"end_offset":x["end_offset"],"literal_annotations":x.get("literal_annotations",{}),"selection_role":x.get("selection_role","primary_hit"),"expansion_relation":x.get("expansion_relation","")} for x in package.get("source_evidence",[])],
       "oc_overlay":[{"id":x["item"].get("id",""),"value":x["item"].get("value",x["item"].get("reference","")),"lifecycle":x["item"].get("lifecycle",""),"confirmation":x["item"].get("confirmation",""),"provenance":x["item"].get("provenance",{}),"relevance_score":x.get("relevance_score")} for x in package.get("oc_overlay",[])],
+      "applicable_current_authority":[{"id":x["item"].get("id",""),"value":x["item"].get("value",x["item"].get("reference","")),"lifecycle":x["item"].get("lifecycle",""),"confirmation":x["item"].get("confirmation",""),"provenance":x["item"].get("provenance",{})} for x in package.get("applicable_current_authority",[])],
       "observed_tensions":package.get("observed_tensions",[]),"unresolved":package.get("unresolved",[]),
-      "meta":{"source_hit_count":len(package.get("source_evidence",[])),"oc_hit_count":len(package.get("oc_overlay",[]))}}
+      "meta":{"source_hit_count":len(package.get("source_evidence",[])),"oc_hit_count":len(package.get("oc_overlay",[])),"applicable_current_authority_count":len(package.get("applicable_current_authority",[]))}}
     return json.dumps(context,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 
 
@@ -56,6 +59,24 @@ def _answer_and_used_facts(raw: str) -> tuple[str, list[str]]:
     answer = raw[:match.start()].strip()
     facts = [value.strip() for value in match.group(1).split(",") if value.strip()]
     return answer, facts
+
+
+def _body_leaks_internal_protocol(answer: str, package: dict[str, Any]) -> bool:
+    if _BODY_PROTOCOL_MARKERS.search(answer):
+        return True
+    identifiers = {
+        str(value)
+        for source in package.get("source_evidence", [])
+        for value in (source.get("source_id"), source.get("sanitized_id"))
+        if value
+    }
+    identifiers.update(
+        str(hit.get("item", {}).get("id") or "")
+        for layer in ("oc_overlay", "applicable_current_authority")
+        for hit in package.get(layer, [])
+        if hit.get("item", {}).get("id")
+    )
+    return any(identifier in answer for identifier in identifiers)
 
 
 def run_hybrid_reasoning(package: dict[str, Any], *, request: Callable[..., Any] = urllib.request.urlopen) -> dict[str, Any]:
@@ -74,6 +95,8 @@ def run_hybrid_reasoning(package: dict[str, Any], *, request: Callable[..., Any]
             return {"ok": False, "status": "PROVIDER_INCOMPLETE_RESPONSE", "error": "PROVIDER_INCOMPLETE_RESPONSE", **result_base, "elapsed_seconds": round(time.monotonic()-started, 3)}
         answer, facts = _answer_and_used_facts(raw)
         if not answer or not facts or data.get("done_reason") == "length": raise ValueError("incomplete reasoning response")
+        if _body_leaks_internal_protocol(answer, package):
+            return {"ok": False, "status": USER_FACING_PROTOCOL_LEAKAGE, "error": USER_FACING_PROTOCOL_LEAKAGE, **result_base, "elapsed_seconds": round(time.monotonic()-started, 3)}
         return {"ok": True, "status": "OK", **result_base, "answer": answer, "used_facts": facts, "elapsed_seconds": round(time.monotonic()-started, 3)}
     except Exception as exc:
         return {"ok": False, "capability": route.capability, "provider": route.provider, "model": route.model, "package_sha256": hashlib.sha256(prompt.encode()).hexdigest(), "error": "local_reasoning_failed", "detail": str(exc), "elapsed_seconds": round(time.monotonic()-started, 3)}

@@ -31,6 +31,8 @@ _OBSERVATION_FAILURE_REASONS = {
     "PROVIDER_INCOMPLETE_RESPONSE": "provider_incomplete_response",
     "PROVENANCE_UNRESOLVED": "provenance_unresolved",
     "USED_FACTS_MALFORMED": "used_facts_malformed",
+    "CURRENT_AUTHORITY_NOT_USED": "current_authority_not_used",
+    "USER_FACING_PROTOCOL_LEAKAGE": "user_facing_protocol_leakage",
     "SOURCE_REGISTRY_UNAVAILABLE": "source_registry_unavailable",
     "SOURCE_EVIDENCE_UNAVAILABLE": "source_evidence_unavailable",
     "PACKAGE_BUILD_FAILURE": "package_build_failure",
@@ -225,6 +227,8 @@ class DialogueAnswerDispatcher:
     def _failure(status: str) -> dict[str, Any]:
         if status == "INSUFFICIENT_EVIDENCE":
             message = "В доступных подтверждённых данных недостаточно сведений для ответа."
+        elif status == "CURRENT_AUTHORITY_NOT_USED":
+            message = "Не удалось сформировать ответ с опорой на подтверждённое актуальное правило."
         elif status in {"LOCAL_PROVIDER_UNAVAILABLE", "LOCAL_REASONING_ROUTE_MISSING", "PROVIDER_INCOMPLETE_RESPONSE"}:
             message = "Локальный модуль подготовки ответа не вернул полный результат."
         else:

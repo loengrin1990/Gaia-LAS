@@ -10,6 +10,7 @@ from gaia.hybrid_read_path import (
     OperationalOverlaySelector,
     SourceRetrievalRequest,
     assemble_hybrid_package,
+    select_applicable_current_authority,
 )
 from gaia.source_evidence import MaterialAvailability, SourceMaterial
 
@@ -86,6 +87,24 @@ class HybridReadPathTests(unittest.TestCase):
         package = assemble_hybrid_package("несвязанный запрос", result, ())
         self.assertEqual(package.unresolved, ("no_matching_queryable_source_evidence",))
         self.assertIn("unparsed_or_missing_sanitized", [item["state"] for item in result.material_diagnostics])
+
+    def test_scoped_authority_matches_exact_reviewed_phrase_from_eligible_inventory(self) -> None:
+        query = "Можно ли продлить пропуск после истечения?"
+        eligible = tuple({"id": f"oc_other_{index}", "kind": "decision", "subject_ref": f"other_{index}", "value": query, "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san_1"}} for index in range(4)) + ({"id": "oc_extension", "kind": "decision", "subject_ref": "extension", "value": "Продление до истечения", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san_1"}, "authority_scope": {"label": "Продление пропуска", "query_aliases": ["продлить пропуск", "продление пропуска"]}},)
+        ordinary = OperationalOverlaySelector().select(query, eligible, max_items=3)
+        authority = select_applicable_current_authority(query, eligible)
+        unrelated = select_applicable_current_authority("Какие данные заполнить для оформления пропуска?", eligible)
+        self.assertNotIn("oc_extension", [hit.item["id"] for hit in ordinary])
+        self.assertEqual([hit.item["id"] for hit in authority], ["oc_extension"])
+        self.assertEqual(unrelated, ())
+
+    def test_multiple_reviewed_scopes_match_deterministically(self) -> None:
+        eligible = (
+            {"id": "oc_extension", "kind": "decision", "subject_ref": "extension", "value": "x", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san_1"}, "authority_scope": {"label": "Продление", "query_aliases": ["продлить пропуск", "продление пропуска"]}},
+            {"id": "oc_qr", "kind": "decision", "subject_ref": "qr", "value": "x", "lifecycle": "active", "confirmation": "confirmed", "provenance": {"source_ref": "san_1"}, "authority_scope": {"label": "QR-код", "query_aliases": ["qr код"]}},
+        )
+        selected = select_applicable_current_authority("Можно ли продлить пропуск и получить QR-код?", eligible)
+        self.assertEqual([hit.item["id"] for hit in selected], ["oc_extension", "oc_qr"])
 
     def test_structural_expansion_is_bounded_provenanced_and_generic(self) -> None:
         text = "# Документ\n\n## Основание\n\nЛокальный якорь правила.\n\n## Текущее состояние\n\nВводная строка раздела.\n\nТекущий маркер доступен.\n\n## Примечание\n\nДополнительный текст.\n"

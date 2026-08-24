@@ -71,7 +71,7 @@ class DialogueAnswerDispatcherTests(unittest.TestCase):
         legacy.assert_not_called()
 
     def test_hybrid_failures_never_invoke_legacy_and_never_expose_partial_answer(self):
-        for status in ("INSUFFICIENT_EVIDENCE", "LOCAL_PROVIDER_UNAVAILABLE", "PROVIDER_INCOMPLETE_RESPONSE", "PROVENANCE_UNRESOLVED"):
+        for status in ("INSUFFICIENT_EVIDENCE", "LOCAL_PROVIDER_UNAVAILABLE", "PROVIDER_INCOMPLETE_RESPONSE", "PROVENANCE_UNRESOLVED", "CURRENT_AUTHORITY_NOT_USED", "USER_FACING_PROTOCOL_LEAKAGE"):
             with self.subTest(status=status):
                 dispatcher, settings, calls, item = self.dispatch("hybrid", result=SimpleNamespace(status=status, answer="partial provider output"))
                 with patch("gaia.dialogue_answer_dispatcher.SETTINGS", settings), patch("gaia.dialogue_answer_dispatcher.run_lm_studio") as legacy:

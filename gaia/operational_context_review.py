@@ -19,6 +19,7 @@ from .operational_context import (
     OperationalContextError,
     OperationalContextStore,
     SafeProvenance,
+    normalize_authority_scope,
     _opaque,
     _scope,
     new_evidence,
@@ -55,6 +56,7 @@ class OperationalContextCandidate:
     reason: str = ""
     replaces_id: str = ""
     state: str = "pending"
+    authority_scope: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         _opaque(self.id, "candidate.id"); _scope(self.scope); _opaque(self.scope_ref, "candidate.scope_ref")
@@ -72,6 +74,10 @@ class OperationalContextCandidate:
             raise OperationalContextReviewError("candidate state is invalid.")
         if self.replaces_id:
             _opaque(self.replaces_id, "candidate.replaces_id")
+        scope = normalize_authority_scope(self.authority_scope)
+        if scope is not None and self.kind != "decision":
+            raise OperationalContextReviewError("authority scope is allowed only for decisions.")
+        object.__setattr__(self, "authority_scope", scope)
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> "OperationalContextCandidate":
@@ -83,10 +89,10 @@ class OperationalContextCandidate:
 def new_candidate(*, scope: str, scope_ref: str, kind: str, subject_ref: str,
                   value: str = "", reference: str = "", provenance: SafeProvenance,
                   sensitivity: str = "standard", reason: str = "", replaces_id: str = "",
-                  candidate_id: str | None = None) -> OperationalContextCandidate:
+                  candidate_id: str | None = None, authority_scope: dict[str, object] | None = None) -> OperationalContextCandidate:
     return OperationalContextCandidate(
         candidate_id or f"occ_{uuid.uuid4().hex}", scope, scope_ref, kind, subject_ref,
-        value, reference, provenance, sensitivity, reason, replaces_id,
+        value, reference, provenance, sensitivity, reason, replaces_id, "pending", authority_scope,
     )
 
 
@@ -258,6 +264,7 @@ class OperationalContextReviewService:
             subject_ref=candidate.subject_ref, value=candidate.value, reference=candidate.reference,
             provenance=candidate.provenance, confirmation_ref=evidence.id,
             sensitivity=candidate.sensitivity, item_id=item_id, supersedes_id=candidate.replaces_id,
+            authority_scope=candidate.authority_scope,
         )
         saved = self.store.replace(candidate.replaces_id, item, evidence) if candidate.replaces_id else self.store.create(item, evidence)
         self.candidates.set_state(candidate, "confirmed")

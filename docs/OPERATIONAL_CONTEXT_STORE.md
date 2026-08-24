@@ -10,7 +10,7 @@
 
 ## Модель и начальный registry
 
-`OperationalItem` содержит весь обязательный набор OC-0: opaque `id`, scope, scope_ref, kind, subject_ref, value/reference, structured provenance, timestamps, lifecycle, confirmed confirmation_ref, sensitivity и optional supersedes_id. Identity — точная четвёрка `scope + scope_ref + kind + subject_ref`; значение в неё не входит.
+`OperationalItem` содержит весь обязательный набор OC-0: opaque `id`, scope, scope_ref, kind, subject_ref, value/reference, structured provenance, timestamps, lifecycle, confirmed confirmation_ref, sensitivity и optional supersedes_id. Для `decision` допускается optional reviewed `authority_scope` с label и bounded набором нормализованных query aliases; он не меняет identity и не допускает in-place semantic update. Identity — точная четвёрка `scope + scope_ref + kind + subject_ref`; значение в неё не входит.
 
 Начальный закрытый registry переиспользует совместимую vocabulary Stage 7:
 

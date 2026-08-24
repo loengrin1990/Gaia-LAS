@@ -28,6 +28,9 @@ LIFECYCLES = frozenset(("active", "superseded", "retired"))
 SENSITIVITIES = frozenset(("standard", "restricted", "unknown"))
 EVIDENCE_ACTIONS = frozenset(("promotion", "replacement", "retirement"))
 _OPAQUE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_AUTHORITY_SCOPE_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
+AUTHORITY_SCOPE_MAX_ALIASES = 8
+AUTHORITY_SCOPE_MAX_CHARS = 160
 
 
 class OperationalContextError(ValueError):
@@ -57,6 +60,49 @@ def _opaque(value: str, field: str) -> str:
     if not isinstance(value, str) or not _OPAQUE_REF.fullmatch(value):
         raise OperationalContextError(f"{field} must be a safe opaque reference.")
     return value
+
+
+def normalize_authority_scope_text(value: str) -> str:
+    """Return the sole deterministic normal form used by scope storage and matching."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(_AUTHORITY_SCOPE_TOKEN.findall(value.casefold().replace("ё", "е")))
+
+
+def normalize_authority_scope(value: object) -> dict[str, object] | None:
+    """Validate the small reviewed query scope of a decision without inferring terms."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"label", "query_aliases"}:
+        raise OperationalContextError("authority scope is invalid.")
+    label = value.get("label")
+    aliases = value.get("query_aliases")
+    if not isinstance(label, str) or not label.strip() or len(label) > AUTHORITY_SCOPE_MAX_CHARS:
+        raise OperationalContextError("authority scope label is invalid.")
+    if not isinstance(aliases, (list, tuple)) or not aliases or len(aliases) > AUTHORITY_SCOPE_MAX_ALIASES:
+        raise OperationalContextError("authority scope aliases are invalid.")
+    normalized: list[str] = []
+    for alias in aliases:
+        if not isinstance(alias, str) or not alias.strip() or len(alias) > AUTHORITY_SCOPE_MAX_CHARS:
+            raise OperationalContextError("authority scope alias is invalid.")
+        item = normalize_authority_scope_text(alias)
+        if not item:
+            raise OperationalContextError("authority scope alias is invalid.")
+        if item not in normalized:
+            normalized.append(item)
+    if not normalized:
+        raise OperationalContextError("authority scope aliases are invalid.")
+    return {"label": label.strip(), "query_aliases": tuple(normalized)}
+
+
+def authority_scope_matches(scope: object, query: str) -> bool:
+    """Match reviewed aliases as contiguous normalized token sequences only."""
+    normalized_scope = normalize_authority_scope(scope)
+    normalized_query = normalize_authority_scope_text(query)
+    if normalized_scope is None or not normalized_query:
+        return False
+    padded_query = f" {normalized_query} "
+    return any(f" {alias} " in padded_query for alias in normalized_scope["query_aliases"])
 
 
 def _now() -> str:
@@ -135,6 +181,7 @@ class OperationalItem:
     confirmation_ref: str = ""
     sensitivity: Sensitivity = "standard"
     supersedes_id: str = ""
+    authority_scope: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         _opaque(self.id, "item.id"); _scope(self.scope); _opaque(self.scope_ref, "item.scope_ref")
@@ -161,15 +208,19 @@ class OperationalItem:
             raise OperationalContextError("item timestamps are required.")
         if self.supersedes_id:
             _opaque(self.supersedes_id, "item.supersedes_id")
+        scope = normalize_authority_scope(self.authority_scope)
+        if scope is not None and self.kind != "decision":
+            raise OperationalContextError("authority scope is allowed only for decisions.")
+        object.__setattr__(self, "authority_scope", scope)
 
     @property
     def identity(self) -> tuple[str, str, str, str]:
         return self.scope, self.scope_ref, self.kind, self.subject_ref
 
 
-def new_item(*, scope: Scope, scope_ref: str, kind: str, subject_ref: str, value: str = "", reference: str = "", provenance: SafeProvenance, confirmation_ref: str, sensitivity: Sensitivity = "standard", item_id: str | None = None, supersedes_id: str = "") -> OperationalItem:
+def new_item(*, scope: Scope, scope_ref: str, kind: str, subject_ref: str, value: str = "", reference: str = "", provenance: SafeProvenance, confirmation_ref: str, sensitivity: Sensitivity = "standard", item_id: str | None = None, supersedes_id: str = "", authority_scope: dict[str, object] | None = None) -> OperationalItem:
     now = _now()
-    return OperationalItem(item_id or f"oc_{uuid.uuid4().hex}", scope, scope_ref, kind, subject_ref, value, reference, provenance, now, now, "active", "confirmed", confirmation_ref, sensitivity, supersedes_id)
+    return OperationalItem(item_id or f"oc_{uuid.uuid4().hex}", scope, scope_ref, kind, subject_ref, value, reference, provenance, now, now, "active", "confirmed", confirmation_ref, sensitivity, supersedes_id, authority_scope)
 
 
 def new_evidence(*, scope: Scope, scope_ref: str, action: EvidenceAction, target_item_id: str, actor_ref: str, source_ref: str = "", candidate_ref: str = "", prior_item_id: str = "", evidence_id: str | None = None) -> ConfirmationEvidence:

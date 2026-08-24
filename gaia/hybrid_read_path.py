@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .context_chunking import ChunkLimitError, split_context
+from .operational_context import authority_scope_matches, normalize_authority_scope
 from .source_evidence import MaterialAvailability, SourceMaterial
 
 
@@ -268,33 +269,57 @@ class OperationalOverlaySelector:
         return tuple(selected)
 
 
+def select_applicable_current_authority(query: str, eligible_items: tuple[dict[str, Any], ...], *, max_items: int = 8, max_chars: int = 12_000) -> tuple[OperationalOverlayHit, ...]:
+    """Select only reviewed, query-scoped decision authority from the bounded OC input."""
+    if max_items < 1 or max_chars < 1:
+        raise ValueError("Current authority limits are invalid.")
+    selected: list[OperationalOverlayHit] = []
+    used = 0
+    for item in sorted(eligible_items, key=lambda value: (str(value.get("kind") or ""), str(value.get("subject_ref") or ""), str(value.get("id") or ""))):
+        if item.get("kind") != "decision" or item.get("lifecycle") != "active" or item.get("confirmation") != "confirmed":
+            continue
+        if normalize_authority_scope(item.get("authority_scope")) is None or not authority_scope_matches(item.get("authority_scope"), query):
+            continue
+        hit = OperationalOverlayHit(dict(item), 1.0)
+        cost = len(str(hit.as_dict()))
+        if used + cost > max_chars:
+            continue
+        selected.append(hit); used += cost
+        if len(selected) >= max_items:
+            break
+    return tuple(selected)
+
+
 @dataclass(frozen=True)
 class HybridEvidencePackage:
     query: str
     source_evidence: tuple[SourceEvidenceHit, ...]
     oc_overlay: tuple[OperationalOverlayHit, ...]
+    applicable_current_authority: tuple[OperationalOverlayHit, ...]
     observed_tensions: tuple[dict[str, str], ...]
     unresolved: tuple[str, ...]
     diagnostics: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "schema": "gaia.d3.hybrid-evidence-package.v1",
+            "schema": "gaia.d3.hybrid-evidence-package.v2",
             "query": self.query,
             "source_evidence": [item.as_dict() for item in self.source_evidence],
             "oc_overlay": [item.as_dict() for item in self.oc_overlay],
+            "applicable_current_authority": [item.as_dict() for item in self.applicable_current_authority],
             "observed_tensions": list(self.observed_tensions),
             "unresolved": list(self.unresolved),
             "diagnostics": dict(self.diagnostics),
         }
 
 
-def assemble_hybrid_package(query: str, source_result: SourceRetrievalResult, oc_overlay: tuple[OperationalOverlayHit, ...]) -> HybridEvidencePackage:
+def assemble_hybrid_package(query: str, source_result: SourceRetrievalResult, oc_overlay: tuple[OperationalOverlayHit, ...], applicable_current_authority: tuple[OperationalOverlayHit, ...] = ()) -> HybridEvidencePackage:
     unresolved = () if source_result.hits else ("no_matching_queryable_source_evidence",)
     tensions = _observed_tensions(source_result.hits, oc_overlay)
-    return HybridEvidencePackage(query, source_result.hits, oc_overlay, tensions, unresolved, {
+    return HybridEvidencePackage(query, source_result.hits, oc_overlay, applicable_current_authority, tensions, unresolved, {
         "source": source_result.as_dict(),
         "oc_selected": len(oc_overlay),
+        "applicable_current_authority_selected": len(applicable_current_authority),
         "oc_is_not_exhaustive_project_knowledge": True,
     })
 

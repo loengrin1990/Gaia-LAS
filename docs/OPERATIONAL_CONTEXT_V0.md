@@ -37,6 +37,7 @@ Operational Context (OC) — подтверждённое актуальное �
 | `scope_ref` | Безопасная ссылка на владельца scope: для `user` — пользователя, для `project` — проект/workspace, для `system` — локальное системное окружение. |
 | `kind` | Ограниченный прикладной тип, определяющий интерпретацию значения. OC-1 обязан задать закрытый начальный набор и не принимать произвольные типы. |
 | `subject_ref` | Обязательный стабильный безопасный идентификатор предмета состояния внутри `kind`; не содержит raw private content и не выводится из произвольного `value`. |
+| `authority_scope` | Необязательный review-confirmed контракт применимости только для `decision`: человекочитаемая label и небольшой список нормализованных точных query aliases. Он не меняет operational identity, provenance, lifecycle или общий retrieval; используется только для адресного включения current-authority decision в Hybrid Dialogue. |
 | `value` или `reference` | Небольшое подтверждённое состояние либо ссылка на canonical entity. Item обязан иметь хотя бы одно; оба допускаются, если значение необходимо для работы, а reference определяет его canonical authority. |
 | `provenance` | Ссылки на source/candidate и, при наличии, на canonical Memory entity; не содержит исходный приватный текст. |
 | `created_at`, `updated_at` | Время создания и последней контролируемой смены записи. |
@@ -46,7 +47,7 @@ Operational Context (OC) — подтверждённое актуальное �
 | `sensitivity` | Метка handling classification: минимум `standard` или `restricted`. Она сохраняется при authority resolution, composition и downstream disclosure; v0 не выполняет автоматическую declassification. |
 | `supersedes_id` | Необязательная ссылка на непосредственно заменённый item. |
 
-Operational identity — точное сочетание `scope + scope_ref + kind + subject_ref`. Оно применяется для applicability, conflict detection и replacement semantics; значение `value` не может неявно определять subject. Confidence не входит в operational item v0. Он может существовать у candidate как сигнал для человека, но после human confirmation не является источником authority. Произвольные графовые связи, оценка релевантности и поля «на будущее» не входят в модель v0.
+Operational identity — точное сочетание `scope + scope_ref + kind + subject_ref`. Оно применяется для applicability, conflict detection и replacement semantics; значение `value` не может неявно определять subject. `authority_scope` не является частью identity и не допускает in-place semantic update: изменение scope оформляется обычной confirmed replacement-редакцией. Confidence не входит в operational item v0. Он может существовать у candidate как сигнал для человека, но после human confirmation не является источником authority. Произвольные графовые связи, оценка релевантности и поля «на будущее» не входят в модель v0.
 
 ## Scope и изоляция
 
@@ -85,7 +86,7 @@ flowchart LR
   C --> R["Отклонение или закрытие candidate"]
 ```
 
-Candidate содержит proposed scope/kind/subject_ref/value/reference, безопасную provenance и при необходимости confidence. Он не участвует в retrieval и не меняет `active` item. Human confirmation одновременно проверяет scope, sensitivity, subject identity, содержание/reference и replacement semantics. Успешная promotion создаёт immutable audit/promotion event с candidate/source transition, opaque `actor_ref`, timestamp и action; его reference записывается в `confirmation_ref`. Только `confirmation=confirmed` вместе с валидным `confirmation_ref` делает item runtime-visible.
+Candidate содержит proposed scope/kind/subject_ref/value/reference, безопасную provenance и при необходимости confidence. Для `decision` reviewer также может явно задать `authority_scope`; label и каждый alias проверяются как часть semantic review. Runtime принимает только непустую структурированную label и bounded набор непустых aliases; решение о том, достаточны ли aliases для предметной области, остаётся за reviewer. Candidate не участвует в retrieval и не меняет `active` item. Human confirmation одновременно проверяет scope, sensitivity, subject identity, содержание/reference и replacement semantics. Успешная promotion создаёт immutable audit/promotion event с candidate/source transition, opaque `actor_ref`, timestamp и action; его reference записывается в `confirmation_ref`. Только `confirmation=confirmed` вместе с валидным `confirmation_ref` делает item runtime-visible.
 
 В v0 автоматические изменения запрещены для semantic content: Gaia не может самостоятельно повышать факт из чата, документа, транскрипции или другого материала в OC, заменять active item либо снимать confirmation. Допустимы только технические операции без изменения смысла: создание candidate, добавление безопасной provenance к тому же candidate, создание неизменяемого audit evidence для выполненного контролируемого действия и детерминированное исключение невалидной/устаревшей записи.
 
@@ -142,6 +143,12 @@ query/task + authority-eligible Operational Context + relevant Lore/Memory
 Assembler не читает raw private sources ради обхода OC, не вызывает Scribe, не создаёт candidates, не подтверждает/promote items, не меняет lifecycle и не разрешает конфликты. Он не заменяет query-scoped выбор выгрузкой «всего известного о проекте». Каждый включённый item остаётся атомарным с `id`, operational identity, sensitivity, provenance и confirmation evidence; невошедший по budget item не обрезается до потери этих связей.
 
 Assembler не ослабляет sensitivity. Если package materially зависит от restricted input, его handling classification не может автоматически стать standard; raw restricted item и раскрывающий его производный content не передаются неразрешённому consumer. Heart получает только package, прошедший соответствующую disclosure/egress boundary. Он не считается authority для обновления Memory или OC и не должен интерпретировать отсутствие OC как разрешение на утверждение непроверенного current state.
+
+Для Hybrid Dialogue адресная current-authority decision выбирается отдельно от обычного query-ranked OC overlay: reader просматривает только уже authority-eligible bounded inventory и включает decision лишь при точном совпадении одного reviewed `authority_scope.query_aliases` с нормализованной последовательностью слов запроса. Нет совпадения, невалидный scope или неоднозначная структура означают обычный OC/source-only путь, а не более широкий вывод по ключевым словам. Если такой слой включён, reasoning обязан сослаться на его OC item; без него source-only answer остаётся допустимым.
+
+Контролируемый scope v0 относится только к current/present operational authority. Historical вопрос, случайно содержащий reviewed alias, отдельно не классифицируется и не входит в acceptance этого slice.
+
+`authority_scope` v0 не содержит отдельной persisted schema для structured entity/slot ambiguity и не выводит её из текста. Поэтому runtime не пытается строить такой match эвристикой или LLM-классификатором: когда exact reviewed alias не покрывает запрос, authority не применяется. Расширение этого контракта потребует отдельного schema/review решения.
 
 ## Conflict semantics v0
 

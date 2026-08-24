@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .hybrid_read_path import DeterministicLexicalSourceRetriever, OperationalOverlaySelector, SourceRetrievalRequest, assemble_hybrid_package
-from .hybrid_reasoning import LOCAL_REASONING, run_hybrid_reasoning, serialize_reasoning_context
+from .hybrid_read_path import DeterministicLexicalSourceRetriever, OperationalOverlaySelector, SourceRetrievalRequest, assemble_hybrid_package, select_applicable_current_authority
+from .hybrid_reasoning import LOCAL_REASONING, USER_FACING_PROTOCOL_LEAKAGE, run_hybrid_reasoning, serialize_reasoning_context
 from .operational_context import KIND_REGISTRY, OperationalContextStore
 from .operational_context_retrieval import OperationalContextReader, RetrievalRequest, TrustedLocalProcessingPolicy
 from .source_evidence import MaterialAvailability, SourceEvidenceError, SourceEvidenceReader
@@ -63,15 +63,19 @@ class HybridAnswerService:
                 )).eligible_items
                 overlay = OperationalOverlaySelector().select(retrieval_query, eligible)
                 overlay = self._source_backed_overlay(overlay, materials)
+                authority = select_applicable_current_authority(retrieval_query, eligible)
+                authority = self._source_backed_overlay(authority, materials)
+                authority_ids = {str(hit.item.get("id") or "") for hit in authority}
+                overlay = tuple(hit for hit in overlay if str(hit.item.get("id") or "") not in authority_ids)
             except Exception as exc:
-                overlay = (); oc_diagnostics = {"oc_status": "unavailable", "oc_detail": str(exc)}
-            package = assemble_hybrid_package(query.strip(), source, overlay).as_dict()
+                overlay = (); authority = (); oc_diagnostics = {"oc_status": "unavailable", "oc_detail": str(exc)}
+            package = assemble_hybrid_package(query.strip(), source, overlay, authority).as_dict()
             package["diagnostics"]["oc_runtime"] = oc_diagnostics
         except Exception as exc:
             return HybridAnswerResult("PACKAGE_BUILD_FAILURE", diagnostics={"detail": str(exc)})
         digest = hashlib.sha256(serialize_reasoning_context(package).encode()).hexdigest()
         evidence_found = bool(package["source_evidence"])
-        if not package["source_evidence"] and not package["oc_overlay"]:
+        if not package["source_evidence"] and not package["oc_overlay"] and not package["applicable_current_authority"]:
             return HybridAnswerResult("INSUFFICIENT_EVIDENCE", package_digest=digest, unresolved=tuple(package["unresolved"]), diagnostics=package["diagnostics"], evidence_found=evidence_found)
         try:
             result = self.reasoner(package)
@@ -94,7 +98,9 @@ class HybridAnswerService:
         provenance = self._provenance(normalized, package)
         if provenance is None:
             return HybridAnswerResult("PROVENANCE_UNRESOLVED", package_digest=digest, diagnostics=package["diagnostics"], evidence_found=evidence_found)
-        oc_applied = any(item["evidence_layer"] == "oc_overlay" for item in provenance)
+        if package["applicable_current_authority"] and not any(item["evidence_layer"] == "applicable_current_authority" for item in provenance):
+            return HybridAnswerResult("CURRENT_AUTHORITY_NOT_USED", package_digest=digest, diagnostics=package["diagnostics"], evidence_found=evidence_found)
+        oc_applied = any(item["evidence_layer"] in {"oc_overlay", "applicable_current_authority"} for item in provenance)
         return HybridAnswerResult("SUCCESS", str(result.get("answer") or ""), provider=str(result.get("provider") or ""), model=str(result.get("model") or ""), done_reason=str(result.get("done_reason") or ""), elapsed_seconds=result.get("elapsed_seconds"), used_facts_raw=raw, used_facts_normalized=normalized, resolved_provenance=provenance, package_digest=digest, tensions=tuple(package["observed_tensions"]), unresolved=tuple(package["unresolved"]), diagnostics=package["diagnostics"], evidence_found=evidence_found, oc_applied=oc_applied, provenance_complete=True)
 
     @staticmethod
@@ -114,6 +120,7 @@ class HybridAnswerService:
     @staticmethod
     def _reasoning_status(result: dict[str, Any]) -> str:
         if result.get("status") == "PROVIDER_INCOMPLETE_RESPONSE": return "PROVIDER_INCOMPLETE_RESPONSE"
+        if result.get("status") == USER_FACING_PROTOCOL_LEAKAGE: return USER_FACING_PROTOCOL_LEAKAGE
         if not result.get("ok"):
             detail = str(result.get("detail") or result.get("error") or "")
             return "LOCAL_REASONING_ROUTE_MISSING" if "route" in detail.lower() else "LOCAL_PROVIDER_UNAVAILABLE"
@@ -125,7 +132,8 @@ class HybridAnswerService:
         for item in package["source_evidence"]:
             entry = {"evidence_layer": "source_evidence", "source_id": item["source_id"], "sanitized_id": item["sanitized_id"], "start_offset": item["start_offset"], "end_offset": item["end_offset"], "section": item.get("literal_annotations", {}).get("heading", "")}
             lookup[item["source_id"]] = entry; lookup[item["sanitized_id"]] = entry
-        for hit in package["oc_overlay"]:
-            item = hit["item"]; identifier = str(item.get("id") or "")
-            if identifier: lookup[identifier] = {"evidence_layer": "oc_overlay", "id": identifier, "provenance": item.get("provenance", {})}
+        for layer in ("oc_overlay", "applicable_current_authority"):
+            for hit in package.get(layer, []):
+                item = hit["item"]; identifier = str(item.get("id") or "")
+                if identifier: lookup[identifier] = {"evidence_layer": layer, "id": identifier, "provenance": item.get("provenance", {})}
         return tuple(lookup[x] for x in ids) if all(x in lookup for x in ids) else None

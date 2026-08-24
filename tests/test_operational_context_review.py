@@ -55,6 +55,13 @@ class OperationalContextReviewTests(unittest.TestCase):
         self.assertEqual(after["requires_decision"], [])
         self.assertEqual(after["current_context"][0]["content"], "Synthetic state")
 
+    def test_manual_scoped_decision_candidate_promotes_scope_without_compiler(self) -> None:
+        candidate = new_candidate(scope="project", scope_ref="project_a", kind="decision", subject_ref="extension", value="Продление только до истечения.", provenance=SafeProvenance(candidate_ref="candidate_scope"), candidate_id="candidate_scope", authority_scope={"label": "Продление пропуска", "query_aliases": ["продлить пропуск"]})
+        self.candidates.add(candidate)
+        self.service.confirm(candidate.id, actor_ref="actor_1")
+        item = self.store.list_scope(scope="project", scope_ref="project_a")[0]
+        self.assertEqual(item["authority_scope"]["label"], "Продление пропуска")
+
     def test_replacement_is_atomic_and_never_shows_two_current_items(self) -> None:
         old = self.add_candidate(candidate_id="candidate_old")
         old_card = self.service.confirm(old.id, actor_ref="actor_1")
