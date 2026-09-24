@@ -1,0 +1,50 @@
+name: Build standalone Veil
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/veil-desktop
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            artifact: Veil-macOS-Apple-Silicon
+          - os: macos-15-intel
+            artifact: Veil-macOS-Intel
+          - os: windows-2022
+            artifact: Veil-Windows
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: veil_desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Run focused tests
+        run: python -m unittest discover -s tests -v
+      - name: Build macOS application
+        if: runner.os == 'macOS'
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name Veil app.py
+          mkdir -p dist/${{ matrix.artifact }}
+          ditto dist/Veil.app dist/${{ matrix.artifact }}/Veil.app
+          cp README.md dist/${{ matrix.artifact }}/Инструкция.md
+          ditto -c -k --keepParent dist/${{ matrix.artifact }} dist/${{ matrix.artifact }}.zip
+      - name: Build Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Veil app.py
+          Copy-Item README.md dist\Инструкция.md
+          Compress-Archive -Path dist\Veil.exe, dist\Инструкция.md -DestinationPath dist\Veil-Windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: veil_desktop/dist/${{ matrix.artifact }}.zip
