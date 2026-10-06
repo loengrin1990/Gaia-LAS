@@ -86,13 +86,13 @@ Hearth/Lore/Veil/Scribe/Project Health выбирают provider через rout
       "model": "google/gemma-4-26b-a4b-qat",
       "enabled": false
     },
-    "ollama_qwen3_8b": {
+    "ollama_qwen3_5_9b": {
       "type": "ollama",
       "endpoint": "http://127.0.0.1:11434/api/chat",
-      "model": "qwen3:8b",
+      "model": "qwen3.5:9b",
       "thinking": false,
       "json_mode": true,
-      "context_length": 8192,
+      "context_length": 16384,
       "enabled": true
     },
     "ollama_qwen3_14b": {
@@ -107,12 +107,12 @@ Hearth/Lore/Veil/Scribe/Project Health выбирают provider через rout
   },
   "routes": {
     "hearth": {"provider": "ollama_qwen3_14b", "prompt_char_limit": 16000, "max_tokens": 900},
-    "lore_query_rewrite": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 5000, "max_tokens": 160},
-    "lore_rerank": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 8000, "max_tokens": 180},
-    "lore_gap_detector": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 6000, "max_tokens": 180},
-    "veil_review": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 7000, "max_tokens": 200},
-    "scribe_classifier": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 9000, "max_tokens": 400},
-    "project_health": {"provider": "ollama_qwen3_8b", "prompt_char_limit": 6000, "max_tokens": 300}
+    "lore_query_rewrite": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 5000, "max_tokens": 160},
+    "lore_rerank": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 8000, "max_tokens": 180},
+    "lore_gap_detector": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 6000, "max_tokens": 180},
+    "veil_review": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 7000, "max_tokens": 200},
+    "scribe_classifier": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 9000, "max_tokens": 400},
+    "project_health": {"provider": "ollama_qwen3_5_9b", "prompt_char_limit": 6000, "max_tokens": 300}
   }
 }
 ```
@@ -142,14 +142,14 @@ Gaia переводит job в `cancelled` и завершает активны�
 отдельно не подтвердит удаление ранее накопленных runs.
 
 Текущий рабочий профиль после контролируемого benchmark: `hearth` использует
-`ollama_qwen3_14b`; короткие assist-routes остаются на `ollama_qwen3_8b`.
+`ollama_qwen3_14b`; короткие assist-routes используют `ollama_qwen3_5_9b`.
 У каждого route можно указать `prompt_char_limit` и `max_tokens`: они имеют
 приоритет над общими значениями `local_llm` и позволяют не тратить бюджет
 Hearth на короткие классификаторы и проверочные JSON-ответы.
 
 Для Qwen в Ollama рекомендуется нативный тип `ollama` с `thinking: false`,
-`json_mode: true` и явным `context_length`. Для Qwen 8B/14B на машине с 24 GB
-unified memory исходная точка для benchmark - `8192`; фактическое значение
+`json_mode: true` и явным `context_length`. Для Qwen 9B на машине с 24 GB
+unified memory рабочее окно — `16384`, а для Qwen 14B исходная точка benchmark — `8192`; фактическое значение
 проверяется через `ollama ps`. В этом режиме Gaia получает JSON из
 `message.content`, не тратя лимит ответа на reasoning-канал. `GET /api/local-status` показывает
 не только доступность provider, но и наличие назначенной модели и готовность

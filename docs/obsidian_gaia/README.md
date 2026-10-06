@@ -66,7 +66,7 @@ Studio) и нативный Ollama endpoint `/api/chat`.
 
 Текущий проверенный локальный профиль: Hearth работает через
 `ollama_qwen3_14b` (`qwen3:14b`), а короткие операции Lore, Veil, Scribe и
-Project Health - через `ollama_qwen3_8b` (`qwen3:8b`). LM Studio сохранен как
+Project Health - через `ollama_qwen3_5_9b` (`qwen3.5:9b`). LM Studio сохранен как
 необязательный provider и может быть отключен. Этот профиль является исходной
 точкой для данной машины, а не обязательным набором моделей для каждой
 установки Gaia.

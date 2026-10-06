@@ -32,13 +32,13 @@
         "model": "local-model",
         "enabled": true
       },
-    "ollama_local": {
+    "ollama_qwen3_5_9b": {
         "type": "ollama",
         "endpoint": "http://127.0.0.1:11434/api/chat",
-        "model": "qwen3:8b",
+        "model": "qwen3.5:9b",
         "thinking": false,
         "json_mode": true,
-        "context_length": 8192,
+        "context_length": 16384,
       "enabled": false
     },
     "ollama_qwen3_14b": {

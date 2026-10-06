@@ -43,7 +43,7 @@ class LocalStatusTests(unittest.TestCase):
 
     def test_health_check_timeout_is_reported_as_busy_not_unavailable(self) -> None:
         with patch("gaia.local_llm.urllib.request.urlopen", side_effect=TimeoutError("timeout")) as urlopen:
-            status = check_local_provider("ollama_qwen3_8b", timeout=1.5)
+            status = check_local_provider("ollama_qwen3_5_9b", timeout=1.5)
 
         self.assertFalse(status["available"])
         self.assertEqual(status["status"], "timeout")
@@ -53,11 +53,11 @@ class LocalStatusTests(unittest.TestCase):
 
     def test_unavailable_status_is_fast_and_readable(self) -> None:
         with patch("gaia.local_llm.urllib.request.urlopen", side_effect=ConnectionRefusedError("refused")):
-            status = check_local_provider("ollama_qwen3_8b", timeout=1.5)
+            status = check_local_provider("ollama_qwen3_5_9b", timeout=1.5)
 
         self.assertFalse(status["available"])
         self.assertEqual(status["status"], "unavailable")
-        self.assertIn("ollama_qwen3_8b не отвечает", status["message"])
+        self.assertIn("ollama_qwen3_5_9b не отвечает", status["message"])
 
     def test_local_answer_timeout_is_not_reported_as_offline(self) -> None:
         with patch("gaia.local_llm.urllib.request.urlopen", side_effect=TimeoutError("timeout")):
@@ -88,14 +88,14 @@ class LocalStatusTests(unittest.TestCase):
 
         self.assertTrue(status["ok"])
         self.assertEqual(status["route"], "project_health")
-        self.assertEqual(status["provider"], "ollama_qwen3_8b")
-        self.assertEqual(status["model"], "qwen3:8b")
+        self.assertEqual(status["provider"], "ollama_qwen3_5_9b")
+        self.assertEqual(status["model"], "qwen3.5:9b")
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/chat")
         payload = json.loads(request.data.decode("utf-8"))
         self.assertFalse(payload["think"])
         self.assertEqual(payload["format"], "json")
-        self.assertEqual(payload["options"]["num_ctx"], 8192)
+        self.assertEqual(payload["options"]["num_ctx"], 16384)
         self.assertEqual(payload["options"]["num_predict"], 300)
 
     def test_oc5_can_disable_provider_json_mode_without_changing_other_routes(self) -> None:
@@ -137,24 +137,24 @@ class LocalStatusTests(unittest.TestCase):
         self.assertEqual(json.loads(urlopen.call_args.args[0].data.decode("utf-8"))["model"], "qwen3:14b")
 
     def test_local_status_exposes_providers_and_routes(self) -> None:
-        response = FakeResponse({"models": [{"name": "qwen3:8b"}, {"name": "qwen3:14b"}]})
+        response = FakeResponse({"models": [{"name": "qwen3.5:9b"}, {"name": "qwen3:14b"}]})
         with patch("gaia.local_llm.urllib.request.urlopen", return_value=response):
             status = check_local_llm(timeout=1.5)
 
         self.assertTrue(status["available"])
         self.assertIn("lm_studio", status["providers"])
-        self.assertIn("ollama_qwen3_8b", status["providers"])
-        self.assertEqual(status["routes"]["project_health"]["provider"], "ollama_qwen3_8b")
+        self.assertIn("ollama_qwen3_5_9b", status["providers"])
+        self.assertEqual(status["routes"]["project_health"]["provider"], "ollama_qwen3_5_9b")
         self.assertEqual(status["routes"]["hearth"]["max_tokens"], 900)
         self.assertEqual(status["routes"]["project_health"]["max_tokens"], 300)
         self.assertIn("ready", status["routes"]["project_health"])
 
     def test_ollama_health_checks_the_configured_model(self) -> None:
-        response = FakeResponse({"models": [{"name": "qwen3:8b"}, {"name": "qwen3:14b"}]})
+        response = FakeResponse({"models": [{"name": "qwen3.5:9b"}, {"name": "qwen3:14b"}]})
         with patch("gaia.local_llm.urllib.request.urlopen", return_value=response):
             status = check_local_llm(timeout=1.5)
 
-        provider = status["providers"]["ollama_qwen3_8b"]
+        provider = status["providers"]["ollama_qwen3_5_9b"]
         self.assertTrue(provider["available"])
         self.assertTrue(provider["configured_model_available"])
         self.assertTrue(status["routes"]["project_health"]["ready"])
