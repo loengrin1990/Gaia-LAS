@@ -36,3 +36,7 @@ PB-0 возвращает `eligible_for_external=true` только если в�
 External call не входит в PB-0. Поздний OC-5 обязан использовать этот результат как fail-closed input, а не как самостоятельное разрешение раскрытия.
 
 Hybrid multi-turn continuity остаётся локальной: в conversation сохраняются только machine provenance pointers accepted Hybrid output, без assistant prose, prompt, excerpts или raw user text. Для следующего turn используются не более двух уже masked user turns; они маркируются untrusted и не становятся factual evidence. Telemetry этого механизма, если включена отдельно, остаётся content-free и не содержит conversation text, source/OC identifiers или offsets.
+
+## Ограниченное ручное действие пилота (05.10.2026)
+
+По явному решению владельца `context_desk` поддерживает [ручное копирование просмотренного пакета](PROTECTION_PIPELINE.md#исключение-пилота-ручное-копирование-проверенного-пакета). Это отдельный контролируемый процесс разрешения конкретного раскрытия пользователем, включая проверку всех contributing sources прежней памяти и выбранных материалов. Он не вызывает PB-0 и не подделывает runtime attestation; `unknown` не становится `standard`, `restricted` остаётся запрещённым. Непроверенное право передачи блокирует копирование. Разрешение относится только к хешу конкретного пакета, не переносится на новые материалы и не открывает внешний runtime/API-маршрут. Все правила PB-0 выше сохраняются для автоматических consumers.
