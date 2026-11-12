@@ -54,7 +54,7 @@
           box.append(block('Источник ' + origin + ' — контекст цитаты (фрагмент; полный текст выше)\n' +
             (left ? '…' : '') + source.slice(left, right) + (right < source.length ? '…' : '')));
         }
-        box.append(block('Проверьте: цитата подтверждает именно эту замену, а не только упоминает тему? Не превращены ли предложение, вопрос или неясное «у неё» в утверждённый факт?'));
+        box.append(block('Проверьте: цитата подтверждает именно эту замену, а не только упоминает тему? Не превращены ли предложение, вопрос или неясное «у неё» в утверждённый факт? Не подменена ли постоянная обязанность сообщением о разовом событии? Если основание не подтверждает замену, оставьте её невыбранной; остальные изменения можно принять отдельно.'));
         const editLabel = document.createElement('label'), editor = document.createElement('textarea');
         editLabel.textContent = 'Уточнить текст изменения ' + (editors.length + 1); editor.value = change.after; editor.rows = 3; editor.disabled = proposal.stale;
         editor.oninput = () => { reviewEpoch += 1; preview = null; accept.disabled = true; review.disabled = true; display.replaceChildren(); };

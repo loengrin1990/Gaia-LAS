@@ -86,6 +86,7 @@ test('a restored proposal shows its task, source number and semantic review cue'
   assert.ok(state.tree().some(n => n.textContent.includes('дословная цитата, источник 1')));
   assert.ok(state.tree().some(n => n.textContent.includes('контекст цитаты') && n.textContent.includes('Условия запуска не изменены.')));
   assert.ok(state.tree().some(n => n.textContent.includes('именно эту замену')));
+  assert.ok(state.tree().some(n => n.textContent.includes('постоянная обязанность') && n.textContent.includes('оставьте её невыбранной')));
 });
 
 test('partial acceptance explicitly explains that unselected operations are not accepted', async () => {

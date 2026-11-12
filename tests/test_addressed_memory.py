@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import unittest
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -322,3 +323,47 @@ class AddressedMemoryTests(unittest.TestCase):
             connection.close()
         finally:
             for server in servers: server.shutdown(); server.server_close()
+
+    def test_partial_batch_then_remaining_change_preserves_previously_accepted_facts(self):
+        case = next(c for c in json.loads((Path(__file__).parent / 'fixtures/addressed_memory_scenarios.json').read_text()) if c['id'] == 'beacon')
+        desk = ContextDesk(self.profile, self.root / 'remainder-cycle')
+        upload = lambda text: desk.upload({'name': 'synthetic.txt', 'data': base64.b64encode(text.encode()).decode()})
+        seed = desk.prepare_memory({'version': 0, 'task': 'Основа', 'selected': [upload(case['before'])]})
+        desk.propose_memory({'id': seed['id'], 'text': case['before']}); desk.decide_memory({'id': seed['id'], 'decision': 'accept'})
+        sources = [upload(doc['text']) for doc in case['documents']]
+        pilot = AddressedMemoryPilot(desk)
+        operations = [dict(action='replace', old_text='Бюджет проекта пока не подтверждён.', new_text='Бюджет проекта подтверждён.', quote='Бюджет проекта подтверждён.'),
+                      dict(action='replace', old_text='Приёмка ожидает отчёт о тестировании.', new_text='Приёмка ожидает подписания отчёта о тестировании.', quote='Отчёт о тестировании подготовлен, но ещё не подписан.')]
+        for version, batch in [(1, operations), (2, operations[1:])]:
+            view = pilot.prepare({'version': version, 'task': case['task'], 'selected': sources})
+            before = desk.working_memory()['text']
+            pilot.propose({'id': view['id'], 'reply': {'request_id': view['id'], 'base_version': version, 'operations': batch}})
+            self.assertEqual(desk.working_memory()['text'], before)
+            preview = pilot.selection({'id': view['id'], 'selected': [0]})
+            pilot.decide({**preview, 'decision': 'accept'})
+        restarted = ContextDesk(self.profile, self.root / 'remainder-cycle')
+        expected = case['before']
+        for operation in operations: expected = expected.replace(operation['old_text'], operation['new_text'])
+        self.assertEqual(restarted.working_memory()['text'], expected)
+        self.assertEqual(restarted.working_memory()['version'], 3)
+        self.assertEqual(expected.count('Бюджет проекта подтверждён.'), 1)
+        self.assertTrue(all(upload(doc['text'])['duplicate'] for doc in case['documents']))
+
+    def test_human_can_exclude_role_event_error_without_losing_supported_proposal(self):
+        # Exact quotes cannot by themselves reject a semantic model error.
+        old = 'Тестовый запуск назначен на 10 января 2027 года.\nРуководитель проекта подтверждает дату запуска.'
+        quote = 'Подрядчик предлагает перенести тестовый запуск на 17 января 2027 года.'
+        desk = ContextDesk(self.profile, self.root / 'role-review')
+        source = desk.upload({'name': 'synthetic.txt', 'data': base64.b64encode(quote.encode()).decode()})
+        seed = desk.prepare_memory({'version': 0, 'task': 'Основа', 'selected': [source]})
+        desk.propose_memory({'id': seed['id'], 'text': old}); desk.decide_memory({'id': seed['id'], 'decision': 'accept'})
+        pilot = AddressedMemoryPilot(desk)
+        view = pilot.prepare({'version': 1, 'task': 'Обновить сведения', 'selected': [source]})
+        incorrect = dict(action='replace', old_text='Руководитель проекта подтверждает дату запуска.', new_text='Руководитель проекта не подтверждал перенос.', quote=quote)
+        supported = dict(action='append', old_text='', new_text='Предложение подрядчика: перенести запуск на 17 января; решение ещё не принято.', quote=quote)
+        pilot.propose({'id': view['id'], 'reply': {'request_id': view['id'], 'base_version': 1, 'operations': [incorrect, supported]}})
+        self.assertEqual(desk.working_memory()['text'], old)
+        preview = pilot.selection({'id': view['id'], 'selected': [1]})
+        self.assertEqual(preview['after'], old + '\n' + supported['new_text'])
+        pilot.decide({**preview, 'decision': 'accept'})
+        self.assertEqual(desk.working_memory()['text'], preview['after'])
