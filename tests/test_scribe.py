@@ -257,7 +257,8 @@ class ScribeTests(unittest.TestCase):
         self.assertIn("GLiNER + regex", item.body)
         self.assertIn("defects.json", item.body)
 
-    def test_source_summary_uses_short_memory_title_not_file_slug(self) -> None:
+    @patch("gaia.scribe.project_code_for_package", return_value="АПР")
+    def test_source_summary_uses_short_memory_title_not_file_slug(self, _project_code) -> None:
         package = package_fixture()
         package["files"] = [{
             "name": "АПР - Баг-лист и бэклог ФСК Экспертизы 2026-07-02.xlsx",
@@ -277,7 +278,8 @@ class ScribeTests(unittest.TestCase):
         self.assertIn("50_Sources/АПР - Баги бэклог.md", source.target_path)
         self.assertIn("АПР - Баг-лист и бэклог ФСК Экспертизы", source.body)
 
-    def test_code_findings_source_summary_gets_contextual_body(self) -> None:
+    @patch("gaia.scribe.project_code_for_package", return_value="АПР")
+    def test_code_findings_source_summary_gets_contextual_body(self, _project_code) -> None:
         package = package_fixture()
         package["files"] = [{
             "name": "avtopretenzii_zamechaniya_3.docx",

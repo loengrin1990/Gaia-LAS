@@ -159,6 +159,7 @@ class ConversationTests(unittest.TestCase):
 
             with (
                 patch("gaia.conversations.SETTINGS", settings),
+                patch("gaia.dialogue_answer_dispatcher.SETTINGS", SimpleNamespace(dialogue_read_path="legacy")),
                 patch("gaia.projects.SETTINGS", settings),
                 patch("gaia.conversations.project_names", return_value=["Автопретензии"]),
                 patch("gaia.conversations.create_package", return_value=fake_package),

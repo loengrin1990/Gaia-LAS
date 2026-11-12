@@ -5,6 +5,7 @@ import json
 import unittest
 import urllib.error
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from gaia.local_llm import (
     TASK_CONTEXT_COMPILER,
@@ -38,6 +39,27 @@ class FakeResponse:
 
 
 class LocalStatusTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Route assertions describe this fixture, independent of the host profile.
+        endpoint = "http://127.0.0.1:1234/v1/chat/completions"
+        settings = SimpleNamespace(
+            lm_studio_endpoint=endpoint,
+            local_llm_default_provider="ollama_qwen3_14b",
+            local_llm_prompt_char_limit=16000, local_llm_max_tokens=1200,
+            local_llm_providers={
+                "lm_studio": {"type": "openai_compatible", "endpoint": endpoint, "model": "local-model", "enabled": True},
+                "ollama_qwen3_14b": {"type": "ollama", "endpoint": "http://127.0.0.1:11434/api/chat", "model": "qwen3:14b", "enabled": True},
+                "ollama_qwen3_8b": {"type": "ollama", "endpoint": "http://127.0.0.1:11434/api/chat", "model": "qwen3:8b", "thinking": False, "json_mode": True, "context_length": 8192, "enabled": True},
+            },
+            local_llm_routes={
+                "hearth": {"provider": "ollama_qwen3_14b", "max_tokens": 900},
+                "project_health": {"provider": "ollama_qwen3_8b", "max_tokens": 300},
+            },
+        )
+        fixture = patch("gaia.local_llm.SETTINGS", settings)
+        fixture.start()
+        self.addCleanup(fixture.stop)
+
     def test_models_endpoint_is_derived_from_chat_completions_endpoint(self) -> None:
         self.assertTrue(lm_studio_models_endpoint().endswith("/v1/models"))
 

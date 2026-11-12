@@ -541,7 +541,9 @@ class ContextDesk:
             return self.working_memory()
 
 
-def make_handler(desk: ContextDesk):
+def make_handler(desk: ContextDesk, *, addressed=False):
+    from .addressed_memory import AddressedMemoryError, AddressedMemoryPilot
+    pilot = AddressedMemoryPilot(desk) if addressed else None
     class DeskHandler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass  # No filenames, task text, queries or source content in access logs.
@@ -554,6 +556,11 @@ def make_handler(desk: ContextDesk):
                 json_response(self, {'error': 'Откройте локальный адрес Gaia.'}, 403); return
             if self.path == '/':
                 html = (Path(__file__).with_name('static') / 'context_desk.html').read_text()
+                if pilot is not None:
+                    static = Path(__file__).with_name('static')
+                    html = html.replace('Для внешнего чата используйте раздел «Передать контекст в сильный чат» в рабочей памяти. Локальная модель доступна в разделе рабочей памяти. Автоматической отправки наружу нет.', 'Для изменения памяти используйте блок «Изменить отдельные фрагменты памяти». Заметки и локальные пакеты не становятся принятой памятью автоматически. Внешняя передача в адресном режиме не включается.')
+                    html = html.replace('<div id="status"', (static / 'addressed_memory.html').read_text() + '<div id="status"', 1)
+                    html = html.replace('</body>', '<script>' + (static / 'addressed_memory.js').read_text() + '</script></body>')
                 text_response(self, html, set_cookie=session_cookie()); return
             json_response(self, {'error': 'Страница не найдена.'}, 404)
 
@@ -566,7 +573,11 @@ def make_handler(desk: ContextDesk):
                 if not 0 < size <= limit: raise DeskError('Запрос слишком большой или пустой.')
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict): raise DeskError('Недействительный запрос.')
-                if self.path == '/api/desk/catalog': result = desk.inventory(str(payload.get('query', ''))[:1000])
+                if self.path.startswith('/api/desk/addressed/'):
+                    if pilot is None:
+                        raise DeskError('Адресный пилот не включён в этом профиле.')
+                    result = pilot.dispatch(self.path.removeprefix('/api/desk/addressed/'), payload)
+                elif self.path == '/api/desk/catalog': result = desk.inventory(str(payload.get('query', ''))[:1000])
                 elif self.path == '/api/desk/preview': result = desk.preview(str(payload.get('id', '')))
                 elif self.path == '/api/desk/packet': result = desk.packet(payload)
                 elif self.path == '/api/desk/sync': result = desk.sync_router()
@@ -585,7 +596,7 @@ def make_handler(desk: ContextDesk):
                 else:
                     json_response(self, {'error': 'Действие недоступно.'}, 404); return
                 json_response(self, result)
-            except (DeskError, RouterIndexError) as exc:
+            except (DeskError, RouterIndexError, AddressedMemoryError) as exc:
                 json_response(self, {'error': str(exc)}, 400)
             except Exception:
                 json_response(self, {'error': 'Не удалось прочитать или сохранить данные. Проверьте доступность материала и повторите действие.'}, 400)
@@ -598,8 +609,9 @@ def main():
     parser.add_argument('--data-dir', type=Path, required=True)
     parser.add_argument('--port', type=int, default=8788)
     args = parser.parse_args()
-    desk = ContextDesk(json.loads(args.profile.read_text()), args.data_dir)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(desk))
+    profile = json.loads(args.profile.read_text())
+    desk = ContextDesk(profile, args.data_dir)
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(desk, addressed=profile.get('addressed_memory_pilot') is True))
     print(f'Контекст Gaia: http://127.0.0.1:{args.port}', flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
