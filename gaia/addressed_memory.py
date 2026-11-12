@@ -92,7 +92,13 @@ def local_operations(view):
         'Не возвращай полную переписанную память. replace заменяет только old_text; append добавляет один новый блок в конец. '
         'Если факт уже есть, исправляй его собственный фрагмент, не добавляй противоречащий дубль. '
         'Новое событие не отменяет прежние обязанности или условия. Не меняй их без прямого основания. '
+        'Различай обязанность и событие: «руководитель подтверждает дату» означает роль; '
+        'отсутствие подтверждения нового предложения не отменяет эту роль. '
+        'Предложение переноса не является утверждённым сроком. Противоречащие сообщения не разрешай молча в пользу одного. '
+        'Если «у неё», «они», «эти участники» допускают несколько референтов, не выбирай объект сам: '
+        'пропусти такое изменение до явного уточнения. Если других обоснованных изменений нет, operations=[]. '
         'old_text и quote копируй дословно из предложенных значений. Каждое изменение требует цитаты из новых источников. '
+        'Выбирай quote с самим изменившимся фактом, а не заголовок, вводную фразу, автора или факт обсуждения. '
         'Учитывай task_untrusted как область анализа, но не как доказательство фактов и не как источник цитат. '
         'Повторная пересылка не создаёт новых сведений: в таком случае operations=[]. '
         'Верни только JSON: request_id, base_version, operations. Не придумывай новые вопросы, условия и роли.')
@@ -242,6 +248,7 @@ class AddressedMemoryPilot:
                 if r['status'] == 'addressed_proposed':
                     _, cards = apply_operations(self._read(r['previous']), self._operations(r), json.loads(self._read(r['evidence'])))
                     proposals.append({'id': r['id'], 'version': r['base_version'], 'stale': r['base_version'] != memory['version'],
+                                      'task': self._read(r.get('task')),
                                       'changes': cards, 'evidence': json.loads(self._read(r['evidence'])), 'revision': r['operations_digest']})
             return {'version': memory['version'], 'text': self._read(memory['current']), 'proposals': proposals,
                     'prepared': [{'id': r['id']} for r in pending if r['status'] == 'addressed_prepared' and r['base_version'] == memory['version']]}

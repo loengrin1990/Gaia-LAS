@@ -276,3 +276,49 @@ class AddressedMemoryTests(unittest.TestCase):
         with self.assertRaises(AddressedMemoryError): self.pilot.decide({**preview, 'decision': 'accept'})
         with self.assertRaises(AddressedMemoryError):
             self.pilot.revise({'id': view['id'], 'revision': proposal['revision'], 'texts': ['Другая правка.']})
+
+    def test_proposal_restores_frozen_task_after_restart(self):
+        view = self.prepare(); self.propose(view)
+        restarted = AddressedMemoryPilot(ContextDesk(self.profile, self.data))
+        self.assertEqual(restarted.overview({})['proposals'][0]['task'], view['task'])
+        self.assertEqual(restarted.desk.working_memory()['text'], OLD)
+
+    def test_source_changed_after_preview_cannot_be_confirmed(self):
+        row = next(r for r in self.desk.inventory()['items'] if not r['id'].startswith('upload:'))
+        self.source.write_text(NEW)
+        source = self.desk.preview(row['id'])
+        view = self.pilot.prepare({'version': 1, 'task': 'Проверить письмо', 'selected': [source]})
+        self.propose(view)
+        preview = self.pilot.selection({'id': view['id'], 'selected': [0]})
+        self.source.write_text('Письмо отозвано, факт не подтверждён.')
+        before = self.desk.state_path.read_bytes()
+        with self.assertRaises(ValueError): self.pilot.decide({**preview, 'decision': 'accept'})
+        self.assertEqual(self.desk.state_path.read_bytes(), before)
+        self.assertEqual(self.desk.working_memory()['text'], OLD)
+
+    def test_two_desk_ports_keep_distinct_cookies_and_reject_foreign_cookie(self):
+        import http.cookiejar
+        import urllib.request
+        servers = [ThreadingHTTPServer(('127.0.0.1', 0), make_handler(self.desk, addressed=True)) for _ in range(2)]
+        for server in servers: threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(jar))
+            bases = [f'http://127.0.0.1:{s.server_port}' for s in servers]
+            cookies = []
+            for base in bases:
+                with opener.open(base) as response:
+                    cookies.append(response.headers['Set-Cookie']); response.read()
+            self.assertNotEqual(cookies[0].split('=', 1)[0], cookies[1].split('=', 1)[0])
+            for cookie in cookies:
+                self.assertIn('HttpOnly', cookie); self.assertIn('SameSite=Strict', cookie)
+            for base in bases:
+                request = urllib.request.Request(base + '/api/desk/addressed/overview', data=b'{}', headers={'Content-Type': 'application/json', 'Origin': base})
+                with opener.open(request) as response: self.assertEqual(response.status, 200)
+            connection = http.client.HTTPConnection('127.0.0.1', servers[0].server_port)
+            for origin, cookie in [(bases[0], cookies[1].split(';', 1)[0]), (bases[1], cookies[0].split(';', 1)[0])]:
+                connection.request('POST', '/api/desk/addressed/overview', '{}', {'Content-Type': 'application/json', 'Origin': origin, 'Cookie': cookie})
+                response = connection.getresponse(); response.read(); self.assertEqual(response.status, 403)
+            connection.close()
+        finally:
+            for server in servers: server.shutdown(); server.server_close()

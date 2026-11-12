@@ -561,11 +561,11 @@ def make_handler(desk: ContextDesk, *, addressed=False):
                     html = html.replace('Для внешнего чата используйте раздел «Передать контекст в сильный чат» в рабочей памяти. Локальная модель доступна в разделе рабочей памяти. Автоматической отправки наружу нет.', 'Для изменения памяти используйте блок «Изменить отдельные фрагменты памяти». Заметки и локальные пакеты не становятся принятой памятью автоматически. Внешняя передача в адресном режиме не включается.')
                     html = html.replace('<div id="status"', (static / 'addressed_memory.html').read_text() + '<div id="status"', 1)
                     html = html.replace('</body>', '<script>' + (static / 'addressed_memory.js').read_text() + '</script></body>')
-                text_response(self, html, set_cookie=session_cookie()); return
+                text_response(self, html, set_cookie=session_cookie(cookie_name=f'gaia_desk_{self.server.server_port}')); return
             json_response(self, {'error': 'Страница не найдена.'}, 404)
 
         def do_POST(self):
-            if not self._host_valid() or not mutation_is_authorized(self):
+            if not self._host_valid() or not mutation_is_authorized(self, cookie_name=f'gaia_desk_{self.server.server_port}'):
                 json_response(self, {'error': 'Откройте Gaia в локальном браузере и повторите действие.'}, 403); return
             try:
                 size = int(self.headers.get('Content-Length', '0'))

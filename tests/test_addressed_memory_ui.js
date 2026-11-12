@@ -10,10 +10,10 @@ class Element {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
-async function fixture(selection, prepared = false) {
+async function fixture(selection, prepared = false, extraChanges = []) {
   const nodes = {};
   const get = id => nodes[id] || (nodes[id] = Object.assign(new Element(), {parentElement: new Element()}));
-  let proposal = {id: 'request', version: 1, revision: 'v1', changes: [{action: 'Заменить фрагмент', before: 'Бюджет не подтверждён.', after: 'Бюджет подтверждён.', quote: 'Бюджет проекта подтверждён.'}]};
+  let proposal = {id: 'request', version: 1, revision: 'v1', task: 'Проверить только бюджет.', evidence: ['Бюджет проекта подтверждён. Условия запуска не изменены.'], changes: [{action: 'Заменить фрагмент', before: 'Бюджет не подтверждён.', after: 'Бюджет подтверждён.', quote: 'Бюджет проекта подтверждён.'}, ...extraChanges]};
   if (prepared) proposal = null;
   const decisions = [], revisions = [];
   const api = async (action, payload) => {
@@ -78,4 +78,21 @@ test('a restored prepared request displays its frozen task and sources', async (
   assert.ok(state.nodes.addressedInputs.textContent.includes('Исходный факт.'));
   assert.equal(state.nodes.addressedAnalyze.disabled, false);
   assert.equal(state.nodes.addressedCancel.disabled, false);
+});
+
+test('a restored proposal shows its task, source number and semantic review cue', async () => {
+  const state = await fixture(async () => {});
+  assert.ok(state.tree().some(n => n.textContent.includes('Задача этого прохода\nПроверить только бюджет.')));
+  assert.ok(state.tree().some(n => n.textContent.includes('дословная цитата, источник 1')));
+  assert.ok(state.tree().some(n => n.textContent.includes('контекст цитаты') && n.textContent.includes('Условия запуска не изменены.')));
+  assert.ok(state.tree().some(n => n.textContent.includes('именно эту замену')));
+});
+
+test('partial acceptance explicitly explains that unselected operations are not accepted', async () => {
+  const state = await fixture(async payload => ({...payload, digest: 'one-of-two', after: 'Бюджет подтверждён.'}), false,
+    [{action: 'Заменить фрагмент', before: 'Ждём отчёт.', after: 'Ждём подпись.', quote: 'Отчёт пока не подписан.'}]);
+  state.checkbox.checked = true; state.checkbox.onchange(); await state.review.onclick(); await state.accept.onclick();
+  assert.deepEqual([...state.decisions[0].selected], [0]);
+  assert.ok(state.nodes.addressedProgress.textContent.includes('Сохранено изменений: 1 из 2'));
+  assert.ok(state.nodes.addressedProgress.textContent.includes('Невыбранные изменения не приняты'));
 });

@@ -29,6 +29,7 @@
       const heading = document.createElement('h3');
       heading.textContent = proposal.stale ? 'Предложение устарело' : 'Выберите изменения для проверки';
       box.append(heading);
+      if (proposal.task) box.append(block('Задача этого прохода\n' + proposal.task));
       const sources = document.createElement('details'), sourceTitle = document.createElement('summary');
       sourceTitle.textContent = 'Полные основания этого прохода';
       sources.append(sourceTitle, block((proposal.evidence || []).map((text, i) => 'Источник ' + (i + 1) + '\n' + text).join('\n\n')));
@@ -45,7 +46,15 @@
         input.onchange = () => { reviewEpoch += 1; preview = null; accept.disabled = true; display.replaceChildren(); };
         checks.push(input);
         label.append(input, document.createTextNode(' Включить: ' + change.action));
-        box.append(label, block('Было\n' + (change.before || 'Добавление в конец') + '\n\nПредлагается\n' + change.after + '\n\nОснование — дословная цитата\n' + change.quote));
+        const origins = (proposal.evidence || []).flatMap((text, i) => text.includes(change.quote) ? [i + 1] : []);
+        box.append(label, block('Было\n' + (change.before || 'Добавление в конец') + '\n\nПредлагается\n' + change.after + '\n\nОснование — дословная цитата, источник ' + origins.join(', ') + '\n' + change.quote));
+        for (const origin of origins) {
+          const source = proposal.evidence[origin - 1], start = source.indexOf(change.quote);
+          const left = Math.max(0, start - 240), right = Math.min(source.length, start + change.quote.length + 480);
+          box.append(block('Источник ' + origin + ' — контекст цитаты (фрагмент; полный текст выше)\n' +
+            (left ? '…' : '') + source.slice(left, right) + (right < source.length ? '…' : '')));
+        }
+        box.append(block('Проверьте: цитата подтверждает именно эту замену, а не только упоминает тему? Не превращены ли предложение, вопрос или неясное «у неё» в утверждённый факт?'));
         const editLabel = document.createElement('label'), editor = document.createElement('textarea');
         editLabel.textContent = 'Уточнить текст изменения ' + (editors.length + 1); editor.value = change.after; editor.rows = 3; editor.disabled = proposal.stale;
         editor.oninput = () => { reviewEpoch += 1; preview = null; accept.disabled = true; review.disabled = true; display.replaceChildren(); };
@@ -70,7 +79,12 @@
       accept.onclick = async () => {
         if (!preview) return;
         accept.disabled = true;
-        try { await call('decide', {...preview, decision: 'accept'}); progress('Выбранные изменения сохранены. Остальной текст не переписан.'); await reload(); }
+        try {
+          await call('decide', {...preview, decision: 'accept'});
+          progress('Сохранено изменений: ' + preview.selected.length + ' из ' + proposal.changes.length + '. Остальной текст не переписан.' +
+            (preview.selected.length < proposal.changes.length ? ' Невыбранные изменения не приняты. Для их пересмотра подготовьте новый проход.' : ''));
+          await reload();
+        }
         catch (error) { preview = null; display.replaceChildren(); progress(error.message); }
       };
       cancel.onclick = async () => {

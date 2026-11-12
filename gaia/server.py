@@ -195,11 +195,11 @@ def text_response(
     handler.wfile.write(data)
 
 
-def session_cookie() -> str:
-    return f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
+def session_cookie(*, cookie_name: str = SESSION_COOKIE_NAME) -> str:
+    return f"{cookie_name}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
 
 
-def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+def mutation_is_authorized(handler: BaseHTTPRequestHandler, *, cookie_name: str = SESSION_COOKIE_NAME) -> bool:
     try:
         is_loopback = ip_address(str(handler.client_address[0])).is_loopback
     except (AttributeError, ValueError):
@@ -215,7 +215,7 @@ def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
         cookie.load(handler.headers.get("Cookie", ""))
     except (TypeError, ValueError):
         return False
-    token = cookie.get(SESSION_COOKIE_NAME)
+    token = cookie.get(cookie_name)
     return bool(token and secrets.compare_digest(token.value, SESSION_TOKEN))
 
 
