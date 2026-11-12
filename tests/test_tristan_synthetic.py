@@ -61,7 +61,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('\x1b',b.human_review(view))
 
     def test_closed_synthetic_registry_and_pinned_corpus(self):
-        for case in ('unknown', '../role', 'real'): 
+        for case in ('unknown', '../role', 'real'):
             with self.assertRaises(b.BridgeError): b.packet(case, '0'*32)
         with patch.object(b, 'CORPUS_SHA', '0'*64), self.assertRaises(b.BridgeError): b.fixture('partial')
         for key in ('before', 'task', 'documents', 'case_id', 'packet_digest', 'base_version'):
