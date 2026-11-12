@@ -141,6 +141,107 @@ class AddressedMemoryTests(unittest.TestCase):
         self.assertEqual(self.pilot.overview({})['proposals'], [])
         self.assertEqual(self.desk.working_memory()['text'], OLD)
 
+    def test_cancel_holds_compute_slot_until_worker_exits(self):
+        for late_result in ['proposal', 'exception']:
+            with self.subTest(late_result=late_result):
+                first, second = self.prepare(), self.prepare()
+                entered, release = threading.Event(), threading.Event()
+                calls, workers = [], []
+                original_thread = threading.Thread
+                def thread(*args, **kwargs):
+                    worker = original_thread(*args, **kwargs); workers.append(worker); return worker
+                def model(view):
+                    calls.append(view['id'])
+                    if view['id'] == first['id']:
+                        entered.set()
+                        self.assertTrue(release.wait(3), 'test must release the blocked model')
+                        if late_result == 'exception': raise RuntimeError('unsafe synthetic detail')
+                    return {'request_id': view['id'], 'base_version': view['version'], 'operations': [self.operation()] if view['id'] == first['id'] else []}
+                with patch('gaia.addressed_memory.local_operations', side_effect=model), patch('gaia.addressed_memory.threading.Thread', side_effect=thread):
+                    try:
+                        self.pilot.analyze({'id': first['id']}); self.assertTrue(entered.wait(1))
+                        self.pilot.decide({'id': first['id'], 'decision': 'cancel'})
+                        with self.assertRaises(AddressedMemoryError): self.pilot.analyze({'id': second['id']})
+                        self.assertEqual(calls, [first['id']])
+                    finally:
+                        release.set()
+                        for worker in workers: worker.join(2); self.assertFalse(worker.is_alive())
+                    self.pilot.analyze({'id': second['id']}); workers[-1].join(2)
+                    self.assertFalse(workers[-1].is_alive())
+                self.assertEqual(calls, [first['id'], second['id']])
+                self.assertEqual(self.pilot.dispatch('job', {'id': first['id']})['state'], 'cancelled')
+                self.assertNotIn('unsafe synthetic detail', self.pilot.dispatch('job', {'id': first['id']})['message'])
+                self.assertEqual(self.pilot.dispatch('job', {'id': second['id']})['state'], 'done')
+                self.assertEqual(self.desk.working_memory()['text'], OLD)
+                self.assertEqual(self.pilot.overview({})['proposals'], [])
+
+    def test_cancel_before_worker_start_and_repeated_cancel_keep_slot_owned(self):
+        first, second = self.prepare(), self.prepare()
+        targets = []
+        class Deferred:
+            def __init__(self, target, **_): targets.append(target)
+            def start(self): pass
+        with patch('gaia.addressed_memory.threading.Thread', Deferred), patch('gaia.addressed_memory.local_operations') as model:
+            self.pilot.analyze({'id': first['id']})
+            self.pilot.decide({'id': first['id'], 'decision': 'cancel'})
+            with self.assertRaises(AddressedMemoryError): self.pilot.decide({'id': first['id'], 'decision': 'cancel'})
+            self.assertTrue(self.pilot.overview({})['analysis_busy'])
+            self.assertTrue(self.pilot.dispatch('job', {'id': first['id']})['analysis_busy'])
+            with self.assertRaises(AddressedMemoryError): self.pilot.analyze({'id': second['id']})
+            targets[0](); model.assert_not_called()
+            self.assertFalse(self.pilot.overview({})['analysis_busy'])
+            model.side_effect = lambda view: {'request_id': view['id'], 'base_version': view['version'], 'operations': []}
+            self.pilot.analyze({'id': second['id']}); targets[1]()
+            model.assert_called_once()
+        self.assertFalse(self.pilot.overview({})['analysis_busy'])
+        self.assertEqual(self.pilot.dispatch('job', {'id': first['id']})['state'], 'cancelled')
+
+    def test_worker_terminal_paths_release_compute_slot(self):
+        from contextlib import nullcontext
+        for outcome in ['model-error', 'proposal-error', 'no-changes', 'proposal']:
+            with self.subTest(outcome=outcome):
+                pilot = AddressedMemoryPilot(self.desk)
+                first, second = self.prepare(), self.prepare()
+                workers, original_thread = [], threading.Thread
+                def thread(*args, **kwargs):
+                    worker = original_thread(*args, **kwargs); workers.append(worker); return worker
+                def model(view):
+                    if outcome == 'model-error': raise RuntimeError('unsafe synthetic detail')
+                    return {'request_id': view['id'], 'base_version': view['version'], 'operations': [self.operation()] if outcome == 'proposal' else []}
+                failure = patch.object(pilot, 'propose', side_effect=OSError('unsafe synthetic detail')) if outcome == 'proposal-error' else nullcontext()
+                with patch('gaia.addressed_memory.threading.Thread', side_effect=thread), patch('gaia.addressed_memory.local_operations', side_effect=model), failure:
+                    pilot.analyze({'id': first['id']}); workers[-1].join(2); self.assertFalse(workers[-1].is_alive())
+                self.assertFalse(pilot.overview({})['analysis_busy'])
+                status = pilot.dispatch('job', {'id': first['id']})
+                self.assertEqual(status['state'], 'failed' if outcome.endswith('error') else 'done')
+                self.assertNotIn('unsafe synthetic detail', status['message'])
+                with patch('gaia.addressed_memory.threading.Thread', side_effect=thread), patch('gaia.addressed_memory.local_operations', side_effect=lambda view: {'request_id': view['id'], 'base_version': view['version'], 'operations': []}):
+                    pilot.analyze({'id': second['id']}); workers[-1].join(2); self.assertFalse(workers[-1].is_alive())
+                self.assertFalse(pilot.overview({})['analysis_busy'])
+                self.assertEqual(pilot.dispatch('job', {'id': second['id']})['state'], 'done')
+                self.assertEqual(self.desk.working_memory()['text'], OLD)
+
+    def test_thread_creation_or_start_failure_releases_compute_slot(self):
+        for phase in ['create', 'start']:
+            with self.subTest(phase=phase):
+                first, second = self.prepare(), self.prepare()
+                factory = patch('gaia.addressed_memory.threading.Thread')
+                with factory as thread:
+                    if phase == 'create': thread.side_effect = RuntimeError('unsafe synthetic detail')
+                    else: thread.return_value.start.side_effect = RuntimeError('unsafe synthetic detail')
+                    with self.assertRaises(AddressedMemoryError): self.pilot.analyze({'id': first['id']})
+                self.assertFalse(self.pilot.overview({})['analysis_busy'])
+                status = self.pilot.dispatch('job', {'id': first['id']})
+                self.assertEqual(status['state'], 'failed'); self.assertNotIn('unsafe synthetic detail', status['message'])
+                targets = []
+                class Deferred:
+                    def __init__(self, target, **_): targets.append(target)
+                    def start(self): pass
+                with patch('gaia.addressed_memory.threading.Thread', Deferred), patch('gaia.addressed_memory.local_operations', side_effect=lambda view: {'request_id': view['id'], 'base_version': view['version'], 'operations': []}):
+                    self.pilot.analyze({'id': second['id']}); targets[0]()
+                self.assertFalse(self.pilot.overview({})['analysis_busy'])
+                self.assertEqual(self.pilot.dispatch('job', {'id': second['id']})['state'], 'done')
+
     def test_no_changes_closes_request_without_new_version(self):
         view = self.prepare(); result = self.propose(view, [])
         self.assertTrue(result['no_changes']); self.assertEqual(result['version'], 1)

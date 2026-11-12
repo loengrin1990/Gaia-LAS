@@ -1,5 +1,5 @@
 (() => {
-  let requestId = null, busy = false;
+  let requestId = null, busy = false, slotBusy = false, refreshTimer = null;
   const progress = text => { $('addressedProgress').textContent = text; };
   const call = (action, payload = {}) => api('addressed/' + action, payload);
   function hideLegacyActions() {
@@ -13,12 +13,25 @@
   function block(value) {
     const pre = document.createElement('div'); pre.className = 'pre'; pre.textContent = value; return pre;
   }
+  function renderCompute(data) {
+    const wasSlotBusy = slotBusy; slotBusy = Boolean(data.analysis_busy);
+    const prepared = data.prepared.some(item => item.id === requestId);
+    $('addressedAnalyze').disabled = !prepared || busy || slotBusy;
+    $('addressedCancel').disabled = !prepared;
+    const computeMessage = slotBusy ? 'Локальный запрос ещё выполняется. Отмена защищает память сразу; новый анализ пока недоступен.' :
+      (wasSlotBusy ? 'Локальный запрос завершён. Обновите предложения или подготовьте новый проход.' : $('addressedCompute').textContent);
+    if ($('addressedCompute').textContent !== computeMessage) $('addressedCompute').textContent = computeMessage;
+    if (slotBusy && !busy) {
+      if (refreshTimer === null) refreshTimer = setTimeout(() => {
+        refreshTimer = null; call('overview').then(renderCompute).catch(error => progress(error.message));
+      }, 1000);
+    }
+  }
   async function reload() {
     const data = await call('overview');
     await refreshMemory(); hideLegacyActions();
     requestId = data.prepared.at(-1)?.id || null;
-    $('addressedAnalyze').disabled = !requestId || busy;
-    $('addressedCancel').disabled = !requestId || busy;
+    renderCompute(data);
     if (requestId && !busy) {
       const view = await call('inputs', {id: requestId});
       $('addressedInputs').textContent = 'ЗАДАЧА\n' + (view.task || '') + '\n\nПРЕЖНЯЯ ПАМЯТЬ\n' + view.before + '\n\nИСТОЧНИКИ\n' + view.evidence.join('\n\n');
@@ -101,23 +114,27 @@
       const view = await call('prepare', {version: current.version, task: $('task').value.trim() || 'Предложить изменения по новым источникам.', selected: [...selected.values()]});
       requestId = view.id;
       $('addressedInputs').textContent = 'ЗАДАЧА\n' + (view.task || '') + '\n\nПРЕЖНЯЯ ПАМЯТЬ\n' + view.before + '\n\nИСТОЧНИКИ\n' + view.evidence.join('\n\n');
-      $('addressedAnalyze').disabled = false; $('addressedCancel').disabled = false;
-      progress('Версия памяти и источники зафиксированы. Изменения ещё не приняты.');
+      $('addressedAnalyze').disabled = Boolean(current.analysis_busy); $('addressedCancel').disabled = false;
+      progress('Версия памяти и источники зафиксированы. Изменения ещё не приняты.' +
+        (current.analysis_busy ? ' Локальный запрос ещё выполняется; новый анализ пока недоступен.' : ''));
+      if (current.analysis_busy) await reload();
     } catch (error) { progress(error.message); }
   };
   $('addressedAnalyze').onclick = async () => {
     if (!requestId || busy) return;
     const id = requestId; busy = true; $('addressedAnalyze').disabled = true; $('addressedPrepare').disabled = true;
     try {
-      await call('analyze', {id}); let job;
-      do { await new Promise(resolve => setTimeout(resolve, 1000)); job = await call('job', {id}); progress(job.message); } while (job.state === 'running');
+      const started = await call('analyze', {id}); let job;
+      slotBusy = Boolean(started.analysis_busy);
+      $('addressedCompute').textContent = slotBusy ? 'Локальный запрос выполняется; новый анализ пока недоступен.' : 'Локальный запрос завершён.';
+      do { await new Promise(resolve => setTimeout(resolve, 1000)); job = await call('job', {id}); progress(job.message); } while (job.state === 'running' || job.analysis_busy);
       await reload();
     } catch (error) { progress(error.message); }
     finally { busy = false; $('addressedPrepare').disabled = false; await reload(); }
   };
   $('addressedCancel').onclick = async () => {
     if (!requestId) return;
-    try { await call('decide', {id: requestId, decision: 'cancel'}); progress('Проход отменён. Принятая память не изменена; расчёт может завершиться в фоне.'); await reload(); }
+    try { await call('decide', {id: requestId, decision: 'cancel'}); progress('Проход отменён. Принятая память не изменена. Остановка вычисления не гарантируется.'); await reload(); }
     catch (error) { progress(error.message); }
   };
   $('addressedRefresh').onclick = () => reload().catch(error => progress(error.message));

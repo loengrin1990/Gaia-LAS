@@ -10,21 +10,25 @@ class Element {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function descendants(node) { return [node, ...node.children.flatMap(descendants)]; }
-async function fixture(selection, prepared = false, extraChanges = []) {
+async function fixture(selection, prepared = false, extraChanges = [], lifecycle = {}) {
   const nodes = {};
   const get = id => nodes[id] || (nodes[id] = Object.assign(new Element(), {parentElement: new Element()}));
   let proposal = {id: 'request', version: 1, revision: 'v1', task: 'Проверить только бюджет.', evidence: ['Бюджет проекта подтверждён. Условия запуска не изменены.'], changes: [{action: 'Заменить фрагмент', before: 'Бюджет не подтверждён.', after: 'Бюджет подтверждён.', quote: 'Бюджет проекта подтверждён.'}, ...extraChanges]};
   if (prepared) proposal = null;
+  let pending = prepared;
   const decisions = [], revisions = [];
   const api = async (action, payload) => {
-    if (action === 'addressed/overview') return {version: 1, prepared: prepared ? [{id: 'prepared'}] : [], proposals: proposal ? [proposal] : []};
+    if (action === 'addressed/overview') return {version: 1, analysis_busy: Boolean(lifecycle.busy), prepared: pending ? [{id: 'prepared'}] : [], proposals: proposal ? [proposal] : []};
     if (action === 'addressed/inputs') return {id: 'prepared', task: 'Проверить бюджет.', before: 'Прежняя память.', evidence: ['Исходный факт.']};
+    if (action === 'addressed/prepare') { pending = true; return {id: 'prepared', before: 'Прежняя память.', evidence: ['Исходный факт.']}; }
+    if (action === 'addressed/analyze') { lifecycle.busy = true; return {state: 'running', analysis_busy: true}; }
+    if (action === 'addressed/job') return {state: lifecycle.cancelled ? 'cancelled' : (lifecycle.busy ? 'running' : 'done'), analysis_busy: Boolean(lifecycle.busy), message: (lifecycle.cancelled ? 'Проход отменён. ' : '') + (lifecycle.busy ? 'Локальный запрос ещё выполняется, новый анализ пока недоступен.' : 'Локальный запрос завершён; можно подготовить новый проход.')};
     if (action === 'addressed/selection') return selection(payload);
     if (action === 'addressed/revise') { revisions.push(payload); proposal.changes[0].after = payload.texts[0]; proposal.revision = 'v2'; return {}; }
-    if (action === 'addressed/decide') { decisions.push(payload); proposal = null; return {}; }
+    if (action === 'addressed/decide') { decisions.push(payload); proposal = null; pending = false; if (payload.decision === 'cancel') lifecycle.cancelled = true; return {}; }
     throw Error('Unexpected request');
   };
-  const context = {document: {createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element(), {textContent: text}), querySelector: () => null}, $: get, api, refreshMemory: async () => {}, selected: new Map(), setTimeout};
+  const context = {document: {createElement: tag => new Element(tag), createTextNode: text => Object.assign(new Element(), {textContent: text}), querySelector: () => null}, $: get, api, refreshMemory: async () => {}, selected: new Map(), setTimeout: lifecycle.timer || setTimeout};
   vm.runInNewContext(fs.readFileSync(require.resolve('../gaia/static/addressed_memory.js'), 'utf8'), context);
   await tick();
   const tree = () => descendants(get('addressedProposals'));
@@ -96,4 +100,56 @@ test('partial acceptance explicitly explains that unselected operations are not 
   assert.deepEqual([...state.decisions[0].selected], [0]);
   assert.ok(state.nodes.addressedProgress.textContent.includes('Сохранено изменений: 1 из 2'));
   assert.ok(state.nodes.addressedProgress.textContent.includes('Невыбранные изменения не приняты'));
+});
+
+test('logical cancellation keeps analysis disabled until the worker actually releases its slot', async () => {
+  const timers = [], lifecycle = {busy: false, timer: callback => timers.push(callback)};
+  const state = await fixture(async () => {}, true, [], lifecycle);
+  const analyzing = state.nodes.addressedAnalyze.onclick(); await tick();
+  await state.nodes.addressedRefresh.onclick(); // Refresh must not disable cancellation.
+  assert.equal(state.nodes.addressedCancel.disabled, false);
+  await state.nodes.addressedCancel.onclick();
+  timers.shift()(); await tick();
+  assert.equal(state.nodes.addressedAnalyze.disabled, true);
+  assert.equal(state.nodes.addressedPrepare.disabled, true);
+  assert.ok(state.nodes.addressedCompute.textContent.includes('новый анализ пока недоступен'));
+  assert.ok(state.nodes.addressedProgress.textContent.includes('Проход отменён'));
+  lifecycle.busy = false; timers.shift()(); await analyzing;
+  assert.equal(state.nodes.addressedPrepare.disabled, false);
+  assert.ok(state.nodes.addressedCompute.textContent.includes('завершён'));
+  await state.nodes.addressedPrepare.onclick();
+  assert.equal(state.nodes.addressedAnalyze.disabled, false);
+});
+
+test('a restored page polls a busy compute slot and enables the prepared analysis after release', async () => {
+  const timers = [], lifecycle = {busy: true, timer: callback => timers.push(callback)};
+  const state = await fixture(async () => {}, true, [], lifecycle);
+  assert.equal(state.nodes.addressedAnalyze.disabled, true);
+  assert.ok(state.nodes.addressedCompute.textContent.includes('новый анализ пока недоступен'));
+  lifecycle.busy = false; timers.shift()(); await tick();
+  assert.equal(state.nodes.addressedAnalyze.disabled, false);
+  assert.ok(state.nodes.addressedCompute.textContent.includes('завершён'));
+});
+
+test('normal completion clears the compute indicator when the worker finishes before the first refresh', async () => {
+  const timers = [], lifecycle = {busy: false, timer: callback => timers.push(callback)};
+  const state = await fixture(async () => {}, true, [], lifecycle);
+  const analyzing = state.nodes.addressedAnalyze.onclick(); await tick();
+  lifecycle.busy = false; timers.shift()(); await analyzing;
+  assert.equal(state.nodes.addressedPrepare.disabled, false);
+  assert.ok(state.nodes.addressedCompute.textContent.includes('завершён'));
+  assert.ok(!state.nodes.addressedCompute.textContent.includes('пока недоступен'));
+});
+
+test('automatic compute polling preserves an unsaved proposal edit', async () => {
+  const timers = [], lifecycle = {busy: true, timer: callback => timers.push(callback)};
+  const state = await fixture(async () => {}, false, [], lifecycle);
+  const editor = state.tree().find(n => n.tag === 'textarea');
+  editor.value = 'Ещё не сохранённая правка.'; editor.oninput();
+  lifecycle.busy = false; timers.shift()(); await tick();
+  assert.equal(state.tree().find(n => n.tag === 'textarea'), editor);
+  assert.equal(editor.value, 'Ещё не сохранённая правка.');
+  assert.equal(state.accept.disabled, true);
+  assert.equal(state.review.disabled, true);
+  assert.equal(state.revisions.length, 0);
 });

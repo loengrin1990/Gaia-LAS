@@ -138,6 +138,8 @@ def local_operations(view):
 class AddressedMemoryPilot:
     def __init__(self, desk):
         self.desk, self.jobs = desk, {}
+        # Protected by desk.lock; logical cancellation must not release this slot.
+        self._analysis_id = None
 
     def _request(self, identifier, status):
         memory = self.desk._memory_state()
@@ -251,6 +253,7 @@ class AddressedMemoryPilot:
                                       'task': self._read(r.get('task')),
                                       'changes': cards, 'evidence': json.loads(self._read(r['evidence'])), 'revision': r['operations_digest']})
             return {'version': memory['version'], 'text': self._read(memory['current']), 'proposals': proposals,
+                    'analysis_busy': self._analysis_id is not None,
                     'prepared': [{'id': r['id']} for r in pending if r['status'] == 'addressed_prepared' and r['base_version'] == memory['version']]}
 
     def selection(self, payload):
@@ -277,7 +280,7 @@ class AddressedMemoryPilot:
             if decision == 'cancel':
                 self._update(memory, {**request, 'status': 'cancelled'})
                 if request['id'] in self.jobs:
-                    self.jobs[request['id']] = {'state': 'cancelled', 'message': 'Проход отменён. Принятая память не изменена; расчёт может завершиться в фоне.'}
+                    self.jobs[request['id']] = {'state': 'cancelled', 'message': 'Проход отменён. Принятая память не изменена.'}
                 return self.overview({})
             if decision != 'accept':
                 fail('Выберите подтверждение или отмену.')
@@ -297,6 +300,8 @@ class AddressedMemoryPilot:
         view = self.inputs(payload)
         with self.desk.lock:
             memory, request = self._request(view['id'], 'addressed_prepared')
+            if self._analysis_id is not None:
+                fail('Дождитесь завершения локального запроса. Отмена защищает память сразу, но не прерывает расчёт.')
             # Exact replay of the last fully confirmed batch is idempotent, not a
             # claim that a source is semantically complete or never needs review.
             last = memory['history'][-1] if memory['history'] else None
@@ -311,8 +316,7 @@ class AddressedMemoryPilot:
                 self._update(memory, {**request, 'status': 'addressed_no_changes'})
                 self.jobs[view['id']] = {'state': 'done', 'message': 'Этот проход с теми же задачей и источниками уже полностью подтверждён. Принятая память не изменена.'}
                 return {'id': view['id'], **self.jobs[view['id']]}
-            if any(j['state'] == 'running' for j in self.jobs.values()):
-                fail('Дождитесь завершения локального анализа.')
+            self._analysis_id = view['id']
             self.jobs[view['id']] = {'state': 'running', 'message': 'Локальная модель предлагает адресные изменения…'}
         def run():
             try:
@@ -328,15 +332,33 @@ class AddressedMemoryPilot:
                 with self.desk.lock:
                     if self.jobs[view['id']]['state'] == 'running':
                         self.jobs[view['id']] = {'state': 'failed', 'message': str(exc) if isinstance(exc, AddressedMemoryError) else 'Не удалось завершить анализ. Принятая память не изменена. Повторите проход.'}
-        threading.Thread(target=run, daemon=True).start()
-        return {'id': view['id'], **self.jobs[view['id']]}
+            finally:
+                with self.desk.lock:
+                    if self._analysis_id == view['id']:
+                        self._analysis_id = None
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception:
+            with self.desk.lock:
+                if self._analysis_id == view['id']:
+                    self._analysis_id = None
+                if self.jobs[view['id']]['state'] == 'running':
+                    self.jobs[view['id']] = {'state': 'failed', 'message': 'Не удалось запустить локальный анализ. Принятая память не изменена.'}
+            fail('Не удалось запустить локальный анализ. Повторите проход.')
+        return {'id': view['id'], **self.dispatch('job', {'id': view['id']})}
 
     def dispatch(self, action, payload):
         methods = {'prepare': self.prepare, 'inputs': self.inputs, 'reply': self.propose, 'overview': self.overview,
                    'selection': self.selection, 'decide': self.decide, 'analyze': self.analyze, 'revise': self.revise}
         if action == 'job':
             with self.desk.lock:
-                return dict(self.jobs.get(payload.get('id'), {'state': 'failed', 'message': 'Расчёт недоступен после перезапуска. Подготовленный проход можно открыть заново.'}))
+                status = dict(self.jobs.get(payload.get('id'), {'state': 'failed', 'message': 'Расчёт недоступен после перезапуска. Подготовленный проход можно открыть заново.'}))
+                status['analysis_busy'] = self._analysis_id is not None
+                if status['state'] == 'cancelled':
+                    status['message'] = ('Проход отменён. Принятая память не изменена. ' +
+                        ('Локальный запрос ещё выполняется; новый анализ пока недоступен.' if status['analysis_busy'] else
+                         'Локальный запрос завершён; можно подготовить новый проход.'))
+                return status
         if action not in methods:
             fail('Такое действие адресного пилота недоступно.')
         return methods[action](payload)
