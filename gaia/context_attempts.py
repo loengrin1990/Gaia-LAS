@@ -10,8 +10,8 @@ TERMINAL = {"done", "complete_empty", "failed", "cancelled", "interrupted"}
 SAFE_FIELDS = ("status","phase","error_code","diagnostic_code","created_at","started_at","updated_at","last_activity_at","finished_at","current_chunk","completed_chunks","total_chunks","progress","model_attempts","model_call_count","last_unit_attempts","candidate_count","cancellation_requested")
 def safe_message(status: str, error_code: str = "") -> str:
     code=error_code.upper()
-    if status=="complete_empty": return "Сборка завершена успешно, но элементов проектного контекста не найдено."
-    if status=="done": return "Контекст собран. Проверьте кандидатов."
+    if status=="complete_empty": return "Модель не предложила элементов контекста. Это не гарантирует отсутствия важных фактов в материале."
+    if status=="done": return "Сборка завершена. Проверьте предложения контекста проекта."
     if status=="cancelled": return "Сборка отменена. Контекст не изменён."
     if status=="interrupted": return "Предыдущая сборка была прервана. Контекст не изменён."
     if "EVIDENCE" in code: return "Не удалось однозначно подтвердить фрагмент материала. Контекст не создан."

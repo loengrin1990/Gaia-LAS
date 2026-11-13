@@ -29,5 +29,6 @@
   {"path": "docs/dev/STAGE_7_CONTEXT_COMPILER_RELIABILITY_PLAN.md", "genre": "decision_analysis", "authority": "historical", "purpose": "План надёжной сборки контекста Stage 7."},
   {"path": "docs/TRISTAN_SYNTHETIC_BRIDGE.md", "genre": "runbook", "authority": "operational", "purpose": "Изолированный synthetic-only API bridge, ручной review и общий лимит эксперимента."},
   {"path": "docs/dev/2026-11-13-integration-audit.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Проверенный состав feature, расхождение checkout и предложенный безопасный план integration; не решение rollout."},
-  {"path": "docs/dev/2026-11-13-isolated-integration.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Разрешённая isolated Qwen/feature integration, сохранение dirty работ и совместные проверки; не production rollout."}
+  {"path": "docs/dev/2026-11-13-isolated-integration.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Разрешённая isolated Qwen/feature integration, сохранение dirty работ и совместные проверки; не production rollout."},
+  {"path": "docs/dev/2026-11-13-local-model-qualification.md", "genre": "decision_analysis", "authority": "historical", "purpose": "Замороженный real-local holdout, смысловые ограничения и исправление честности результата OC/legacy; не stable."}
 ]

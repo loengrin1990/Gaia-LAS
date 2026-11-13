@@ -20,7 +20,7 @@ const response = (body, ok=true, status=ok ? 202 : 500) => ({ok, status, json: a
   await failureCase(()=>response({},true,202), 'invalid_job_contract', 'Не удалось начать сборку проектного контекста. Данные не изменены.');
   assert.ok(states.filter(state=>state==='error').length>=5);
   assert.strictEqual(contextCompileUserMessage({status:'failed',user_message:'internal'}), 'Не удалось завершить сборку проектного контекста. Контекст не изменён.');
-  assert.strictEqual(contextCompileUserMessage({status:'complete_empty'}), 'Сборка завершена успешно, но элементов проектного контекста не найдено.');
+  assert.strictEqual(contextCompileUserMessage({status:'complete_empty'}), 'Модель не предложила элементов контекста. Это не гарантирует отсутствия важных фактов в материале.');
   const reviewSet=[{id:'confirmed',status:'confirmed'},{id:'pending-a',status:'pending'},{id:'rejected',status:'rejected'},{id:'pending-b',status:'duplicate'},{id:'old',status:'pending',current:false}];
   assert.deepStrictEqual(reviewProgress(reviewSet),{total:4,processed:2,pending:2});
   assert.strictEqual(nextPendingCandidate(reviewSet).id,'pending-a');

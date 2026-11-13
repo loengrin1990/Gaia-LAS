@@ -52,7 +52,7 @@ class ContextCompileController {
       let response, job; try { response=await this.fetch(url); job=await response.json(); if(!response.ok) throw new Error('poll_failed'); } catch (_) { this.jobId=''; this.message('Не удалось получить статус сборки контекста. Повторите попытку.', true); this.state('error'); return; }
       if (!this.active(generation, project)) return;
       this.phase=job.phase || ''; this.message(contextCompileUserMessage(job), ['failed','interrupted','cancelled'].includes(job.status)); this.state(job.status, job);
-      if (job.status === 'done') { this.jobId=''; this.phase=''; const candidates=job.result?.candidates || []; this.render(candidates); if (!candidates.length) this.message('В материале не найдено элементов проектного контекста. Данные не изменены.', false); return; }
+      if (job.status === 'done') { this.jobId=''; this.phase=''; this.render(job.result?.candidates || []); return; }
       if (job.status === 'cancelled') { this.jobId=''; this.phase=''; return; }
       if (job.status === 'failed') { this.jobId=''; this.phase=''; return; }
       if (job.status === 'interrupted') { this.jobId=''; this.phase=''; return; }
@@ -72,8 +72,8 @@ class ContextCompileController {
 function isContextCompileActive(job) { return ['created','running'].includes(job?.status); }
 function contextCompileUserMessage(job) {
   const status=job?.status || 'not_started';
-  if (status === 'done') return 'Контекст собран. Проверьте кандидатов.';
-  if (status === 'complete_empty') return 'Сборка завершена успешно, но элементов проектного контекста не найдено.';
+  if (status === 'done') return 'Сборка завершена. Проверьте предложения контекста проекта.';
+  if (status === 'complete_empty') return 'Модель не предложила элементов контекста. Это не гарантирует отсутствия важных фактов в материале.';
   if (status === 'failed') return 'Не удалось завершить сборку проектного контекста. Контекст не изменён.';
   if (status === 'interrupted') return 'Сборка была прервана. Контекст не изменён.';
   if (status === 'cancelled') return 'Сборка контекста отменена. Данные не изменены.';

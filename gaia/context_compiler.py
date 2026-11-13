@@ -36,6 +36,19 @@ MAX_TOTAL_CANDIDATES = 512
 MAX_RESULT_SIZE = 48_000
 MAX_INPUT_SIZE = 250_000
 
+def context_compile_outcome(receipt: dict[str, Any] | None) -> dict[str, Any]:
+    """Content-free completion projection; legacy receipt counts exclude OC routing.
+
+    The OC count describes routed proposals (including idempotent no-ops), not
+    currently pending or accepted authority. Missing historical diagnostics are unknown.
+    """
+    receipt = receipt or {}
+    legacy_count = receipt.get("candidate_count", 0)
+    diagnostics = receipt.get("producer_diagnostics")
+    oc_count = sum(item.get("bridge", {}).get("stage") == "bridge_accepted" for item in diagnostics) if isinstance(diagnostics, list) else None
+    return {"status": "complete_empty" if legacy_count == 0 and oc_count == 0 else "done",
+            "candidate_count": legacy_count + (oc_count or 0), "operational_context_count": oc_count}
+
 class ContextCompileError(ProvenanceError):
     def __init__(self, code: str, message: str, diagnostic_code: str = "") -> None:
         super().__init__(message); self.code, self.diagnostic_code = code, diagnostic_code

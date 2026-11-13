@@ -739,7 +739,8 @@ class Handler(BaseHTTPRequestHandler):
                 if active:
                     payload=job_to_dict(active)
                 elif receipt and receipt.get("status") == "complete":
-                    payload={"status":"complete_empty" if receipt.get("candidate_count") == 0 else "done","candidate_count":receipt.get("candidate_count",0),"completed_at":receipt.get("completed_at","")}
+                    from .context_compiler import context_compile_outcome
+                    payload={**context_compile_outcome(receipt),"completed_at":receipt.get("completed_at","")}
                 else:
                     payload=ContextAttemptStore(intake.store).get(workspace,parts[3]) or {"status":"not_started","candidate_count":0}
                 payload["user_message"]=safe_message(str(payload.get("status") or ""),str(payload.get("error_code") or "")) if payload.get("status") != "not_started" else ""

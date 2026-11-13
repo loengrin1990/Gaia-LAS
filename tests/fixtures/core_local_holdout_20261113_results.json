@@ -1,0 +1,688 @@
+{
+  "method": "One real local batch; OC routing/provenance inspected by offline replay of identical responses. No additional generation. Legacy status in original collector omitted the OC queue.",
+  "corpus_sha256": "6da2d0d7cea162c98b3c33a203659dc985218fae16d0cbb0d74b09ff9492a7d0",
+  "ollama_version": {
+    "version": "0.40.5"
+  },
+  "models": {
+    "veil_review": {
+      "route": {
+        "provider": "ollama_qwen3_5_9b",
+        "prompt_char_limit": 7000,
+        "max_tokens": 200
+      },
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "9.7B",
+        "quantization_level": "Q4_K_M"
+      },
+      "model": "qwen3.5:9b"
+    },
+    "context_compiler": {
+      "route": {
+        "provider": "ollama_ministral_3_14b",
+        "model": "ministral-3:14b",
+        "prompt_char_limit": 9000,
+        "max_tokens": 2400,
+        "context_length": 16384,
+        "temperature": 0,
+        "thinking": false,
+        "structured_output": "schema",
+        "timeout_seconds": 120,
+        "model_load_timeout_seconds": 300,
+        "model_call_timeout_seconds": 240,
+        "model_keep_alive": "30m",
+        "unload_model_after_job": true,
+        "chunk_char_limit": 4000,
+        "chunk_max_units": 1,
+        "chunk_overlap_chars": 0,
+        "max_candidates_per_chunk": 1,
+        "max_total_candidates": 512,
+        "max_input_chars": 250000,
+        "max_chunks": 80,
+        "retry_count": 1,
+        "job_timeout_seconds": 1800
+      },
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "mistral3",
+        "families": [
+          "mistral3"
+        ],
+        "parameter_size": "13.9B",
+        "quantization_level": "Q4_K_M"
+      },
+      "model": "ministral-3:14b"
+    }
+  },
+  "accepted_context_confirmation": false,
+  "cases": [
+    {
+      "id": "accepted_decision",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 4.004
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": [\n    {\n      \"type\": \"decision\",\n      \"title\": \"Утверждение места хранения контрольной копии протокола\",\n      \"statement\": \"Окончательно утверждено хранение контрольной копии протокола в локальном архиве.\",\n      \"evidence_id\": \"E1\",\n      \"confidence\": \"high\",\n      \"requires_review\": true,\n      \"oc_subject\": {\n        \"label\": \"Место хранения контрольной копии протокола\",\n        \"evidence_id\": \"E1\",\n        \"slot_anchor\": \"утвердили хранение контрольной копии протокола в\",\n        \"value_anchor\": \"локальном архиве\"\n      }\n    }\n  ]\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 791,
+          "eval_count": 165,
+          "load_duration": 4138478333,
+          "eval_duration": 16377647000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 24.049
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.098
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 6.855
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "На встрече проекта «Атлас» окончательно утвердили хранение контрольной копии протокола в локальном архиве; других мест хранения не согласовывали.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 6.862,
+      "candidates": [],
+      "evidence": [],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 28.159,
+      "original_collector_legacy_status": "complete_empty",
+      "offline_replay": {
+        "legacy_count": 0,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [
+          {
+            "diagnostic_version": "oc-subject-diagnostic-v1",
+            "candidate_index": 1,
+            "candidate_type": "decision",
+            "evidence_id": "E1",
+            "parser_oc_subject": "object_received",
+            "oc_subject": {
+              "diagnostic_version": "oc-subject-diagnostic-v1",
+              "model_field": "object_received",
+              "stage": "grounded_valid",
+              "reason": "grounded",
+              "flags": {
+                "field_present": true,
+                "subject_present": true,
+                "label_present": true,
+                "evidence_id_present": true,
+                "slot_anchor_present": true,
+                "value_anchor_present": true
+              },
+              "slot_anchor_length": 48,
+              "value_anchor_length": 16
+            },
+            "bridge": {
+              "stage": "bridge_accepted",
+              "reason": "proposal_created"
+            },
+            "fingerprint": {
+              "compiler_version": "context-v5",
+              "prompt_schema_version": "context-schema-v5-oc-subject-required",
+              "parser_contract_version": "context-parser-v2-oc-subject-required",
+              "producer_bridge_version": "material-oc-bridge-v1",
+              "route": "context_compiler",
+              "provider": "ollama_ministral_3_14b",
+              "model": "ministral-3:14b"
+            }
+          }
+        ],
+        "oc_pending_count": 1,
+        "oc_pending_values": [
+          "Окончательно утверждено хранение контрольной копии протокола в локальном архиве."
+        ]
+      }
+    },
+    {
+      "id": "intention_without_decision",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 3.403
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": [\n    {\n      \"type\": \"open_question\",\n      \"title\": \"Перенос еженедельного обзора с пятницы на понедельник\",\n      \"statement\": \"Команда рассматривает возможность переноса еженедельного обзора с пятницы на понедельник, однако решение по этому вопросу ещё не принято.\",\n      \"evidence_id\": \"E1\",\n      \"confidence\": \"medium\",\n      \"requires_review\": true,\n      \"oc_subject\": null\n    }\n  ]\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 801,
+          "eval_count": 121,
+          "load_duration": 3609323292,
+          "eval_duration": 12202724000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 19.317
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.099
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 1.569
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "Команда лишь рассматривает перенос еженедельного обзора с пятницы на понедельник; решение ещё не принято и никаких поручений по переносу пока не выдавали.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 1.574,
+      "candidates": [
+        {
+          "item_type": "open_question",
+          "title": "Перенос еженедельного обзора с пятницы на понедельник",
+          "statement": "Команда рассматривает возможность переноса еженедельного обзора с пятницы на понедельник, однако решение по этому вопросу ещё не принято.",
+          "actor_ref": null,
+          "deadline": null,
+          "explicit_status": null,
+          "priority": null,
+          "status": "requires_review",
+          "current": true
+        }
+      ],
+      "evidence": [
+        [
+          {
+            "start": 0,
+            "end": 154,
+            "quote": "Команда лишь рассматривает перенос еженедельного обзора с пятницы на понедельник; решение ещё не принято и никаких поручений по переносу пока не выдавали."
+          }
+        ]
+      ],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 22.825,
+      "original_collector_legacy_status": "complete",
+      "offline_replay": {
+        "legacy_count": 1,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [
+          {
+            "diagnostic_version": "oc-subject-diagnostic-v1",
+            "candidate_index": 1,
+            "candidate_type": "open_question",
+            "evidence_id": "E1",
+            "parser_oc_subject": "explicit_null",
+            "oc_subject": {
+              "diagnostic_version": "oc-subject-diagnostic-v1",
+              "model_field": "explicit_null",
+              "stage": "explicit_null",
+              "reason": "oc_subject_explicit_null",
+              "flags": {
+                "field_present": true,
+                "subject_present": false,
+                "label_present": false,
+                "evidence_id_present": false,
+                "slot_anchor_present": false,
+                "value_anchor_present": false
+              },
+              "slot_anchor_length": 0,
+              "value_anchor_length": 0
+            },
+            "bridge": {
+              "stage": "bridge_rejected",
+              "reason": "subject_not_grounded"
+            },
+            "fingerprint": {
+              "compiler_version": "context-v5",
+              "prompt_schema_version": "context-schema-v5-oc-subject-required",
+              "parser_contract_version": "context-parser-v2-oc-subject-required",
+              "producer_bridge_version": "material-oc-bridge-v1",
+              "route": "context_compiler",
+              "provider": "ollama_ministral_3_14b",
+              "model": "ministral-3:14b"
+            }
+          }
+        ],
+        "oc_pending_count": 0,
+        "oc_pending_values": []
+      }
+    },
+    {
+      "id": "cancelled_event",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 2.929
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": [\n    {\n      \"type\": \"decision\",\n      \"title\": \"Отмена демонстрации прототипа «Такт»\",\n      \"statement\": \"Демонстрация прототипа «Такт», запланированная на 18 ноября, отменена без назначения новой даты.\",\n      \"evidence_id\": \"E1\",\n      \"confidence\": \"high\",\n      \"requires_review\": true,\n      \"oc_subject\": null\n    }\n  ]\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 798,
+          "eval_count": 113,
+          "load_duration": 3894306709,
+          "eval_duration": 11721987000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 19.088
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.106
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 1.522
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "Демонстрацию прототипа «Такт», намеченную на 18 ноября, отменили; приглашения рассылать не требуется, новую дату не назначили.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 1.527,
+      "candidates": [
+        {
+          "item_type": "decision",
+          "title": "Отмена демонстрации прототипа «Такт»",
+          "statement": "Демонстрация прототипа «Такт», запланированная на 18 ноября, отменена без назначения новой даты.",
+          "actor_ref": null,
+          "deadline": null,
+          "explicit_status": null,
+          "priority": null,
+          "status": "requires_review",
+          "current": true
+        }
+      ],
+      "evidence": [
+        [
+          {
+            "start": 0,
+            "end": 126,
+            "quote": "Демонстрацию прототипа «Такт», намеченную на 18 ноября, отменили; приглашения рассылать не требуется, новую дату не назначили."
+          }
+        ]
+      ],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 22.131,
+      "original_collector_legacy_status": "complete",
+      "offline_replay": {
+        "legacy_count": 1,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [
+          {
+            "diagnostic_version": "oc-subject-diagnostic-v1",
+            "candidate_index": 1,
+            "candidate_type": "decision",
+            "evidence_id": "E1",
+            "parser_oc_subject": "explicit_null",
+            "oc_subject": {
+              "diagnostic_version": "oc-subject-diagnostic-v1",
+              "model_field": "explicit_null",
+              "stage": "explicit_null",
+              "reason": "oc_subject_explicit_null",
+              "flags": {
+                "field_present": true,
+                "subject_present": false,
+                "label_present": false,
+                "evidence_id_present": false,
+                "slot_anchor_present": false,
+                "value_anchor_present": false
+              },
+              "slot_anchor_length": 0,
+              "value_anchor_length": 0
+            },
+            "bridge": {
+              "stage": "bridge_rejected",
+              "reason": "subject_not_grounded"
+            },
+            "fingerprint": {
+              "compiler_version": "context-v5",
+              "prompt_schema_version": "context-schema-v5-oc-subject-required",
+              "parser_contract_version": "context-parser-v2-oc-subject-required",
+              "producer_bridge_version": "material-oc-bridge-v1",
+              "route": "context_compiler",
+              "provider": "ollama_ministral_3_14b",
+              "model": "ministral-3:14b"
+            }
+          }
+        ],
+        "oc_pending_count": 0,
+        "oc_pending_values": []
+      }
+    },
+    {
+      "id": "ambiguous_responsibility",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 3.448
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": [\n    {\n      \"type\": \"open_question\",\n      \"title\": \"Отсутствие назначенного ответственного за подготовку витрины\",\n      \"statement\": \"В материале не указан ответственный за подготовку витрины, что может привести к задержкам или неясности в процессе.\",\n      \"evidence_id\": \"E1\",\n      \"confidence\": \"high\",\n      \"requires_review\": true,\n      \"oc_subject\": null\n    }\n  ]\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 777,
+          "eval_count": 111,
+          "load_duration": 3622829625,
+          "eval_duration": 11766104000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 18.888
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.097
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 1.548
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "Для подготовки витрины обсуждают аналитика и инженера, но ответственный ещё не выбран; срок назначения также не определён.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 1.554,
+      "candidates": [
+        {
+          "item_type": "open_question",
+          "title": "Отсутствие назначенного ответственного за подготовку витрины",
+          "statement": "В материале не указан ответственный за подготовку витрины, что может привести к задержкам или неясности в процессе.",
+          "actor_ref": null,
+          "deadline": null,
+          "explicit_status": null,
+          "priority": null,
+          "status": "requires_review",
+          "current": true
+        }
+      ],
+      "evidence": [
+        [
+          {
+            "start": 0,
+            "end": 122,
+            "quote": "Для подготовки витрины обсуждают аналитика и инженера, но ответственный ещё не выбран; срок назначения также не определён."
+          }
+        ]
+      ],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 22.438,
+      "original_collector_legacy_status": "complete",
+      "offline_replay": {
+        "legacy_count": 1,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [
+          {
+            "diagnostic_version": "oc-subject-diagnostic-v1",
+            "candidate_index": 1,
+            "candidate_type": "open_question",
+            "evidence_id": "E1",
+            "parser_oc_subject": "explicit_null",
+            "oc_subject": {
+              "diagnostic_version": "oc-subject-diagnostic-v1",
+              "model_field": "explicit_null",
+              "stage": "explicit_null",
+              "reason": "oc_subject_explicit_null",
+              "flags": {
+                "field_present": true,
+                "subject_present": false,
+                "label_present": false,
+                "evidence_id_present": false,
+                "slot_anchor_present": false,
+                "value_anchor_present": false
+              },
+              "slot_anchor_length": 0,
+              "value_anchor_length": 0
+            },
+            "bridge": {
+              "stage": "bridge_rejected",
+              "reason": "subject_not_grounded"
+            },
+            "fingerprint": {
+              "compiler_version": "context-v5",
+              "prompt_schema_version": "context-schema-v5-oc-subject-required",
+              "parser_contract_version": "context-parser-v2-oc-subject-required",
+              "producer_bridge_version": "material-oc-bridge-v1",
+              "route": "context_compiler",
+              "provider": "ollama_ministral_3_14b",
+              "model": "ministral-3:14b"
+            }
+          }
+        ],
+        "oc_pending_count": 0,
+        "oc_pending_values": []
+      }
+    },
+    {
+      "id": "conflicting_dates",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 3.411
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": [\n    {\n      \"type\": \"open_question\",\n      \"title\": \"Расхождение дат в протоколе и письме по приёмке пилотного стенда\",\n      \"statement\": \"Необходимо уточнить, какая из дат (21 ноября или 25 ноября) является корректной для приёмки пилотного стенда, так как ни один из источников не объясняет причину замены.\",\n      \"evidence_id\": \"E1\",\n      \"confidence\": \"high\",\n      \"requires_review\": true,\n      \"oc_subject\": null\n    }\n  ]\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 815,
+          "eval_count": 144,
+          "load_duration": 3635674000,
+          "eval_duration": 14834369000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 22.042
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.103
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 1.551
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "В протоколе приёмки пилотного стенда стоит 21 ноября, в согласованном письме по той же приёмке — 25 ноября; ни один источник не объясняет, какой срок заменён.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 1.557,
+      "candidates": [
+        {
+          "item_type": "open_question",
+          "title": "Расхождение дат в протоколе и письме по приёмке пилотного стенда",
+          "statement": "Необходимо уточнить, какая из дат (21 ноября или 25 ноября) является корректной для приёмки пилотного стенда, так как ни один из источников не объясняет причину замены.",
+          "actor_ref": null,
+          "deadline": null,
+          "explicit_status": null,
+          "priority": null,
+          "status": "requires_review",
+          "current": true
+        }
+      ],
+      "evidence": [
+        [
+          {
+            "start": 0,
+            "end": 158,
+            "quote": "В протоколе приёмки пилотного стенда стоит 21 ноября, в согласованном письме по той же приёмке — 25 ноября; ни один источник не объясняет, какой срок заменён."
+          }
+        ]
+      ],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 25.563,
+      "original_collector_legacy_status": "complete",
+      "offline_replay": {
+        "legacy_count": 1,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [
+          {
+            "diagnostic_version": "oc-subject-diagnostic-v1",
+            "candidate_index": 1,
+            "candidate_type": "open_question",
+            "evidence_id": "E1",
+            "parser_oc_subject": "explicit_null",
+            "oc_subject": {
+              "diagnostic_version": "oc-subject-diagnostic-v1",
+              "model_field": "explicit_null",
+              "stage": "explicit_null",
+              "reason": "oc_subject_explicit_null",
+              "flags": {
+                "field_present": true,
+                "subject_present": false,
+                "label_present": false,
+                "evidence_id_present": false,
+                "slot_anchor_present": false,
+                "value_anchor_present": false
+              },
+              "slot_anchor_length": 0,
+              "value_anchor_length": 0
+            },
+            "bridge": {
+              "stage": "bridge_rejected",
+              "reason": "subject_not_grounded"
+            },
+            "fingerprint": {
+              "compiler_version": "context-v5",
+              "prompt_schema_version": "context-schema-v5-oc-subject-required",
+              "parser_contract_version": "context-parser-v2-oc-subject-required",
+              "producer_bridge_version": "material-oc-bridge-v1",
+              "route": "context_compiler",
+              "provider": "ollama_ministral_3_14b",
+              "model": "ministral-3:14b"
+            }
+          }
+        ],
+        "oc_pending_count": 0,
+        "oc_pending_values": []
+      }
+    },
+    {
+      "id": "no_new_fact",
+      "compiler_calls": [
+        {
+          "operation": "preload",
+          "ok": true,
+          "done_reason": "load",
+          "load_duration": null,
+          "latency_seconds": 2.952
+        },
+        {
+          "operation": "generate",
+          "ok": true,
+          "answer": "{\n  \"candidates\": []\n}",
+          "model": "ministral-3:14b",
+          "provider": "ollama_ministral_3_14b",
+          "done_reason": "stop",
+          "prompt_eval_count": 785,
+          "eval_count": 9,
+          "load_duration": 3611047292,
+          "eval_duration": 817219000,
+          "num_ctx": 16384,
+          "num_predict": 2400,
+          "latency_seconds": 7.914
+        },
+        {
+          "operation": "unload",
+          "ok": true,
+          "latency_seconds": 0.099
+        }
+      ],
+      "veil_response": {
+        "ok": true,
+        "answer": "{\"status\":\"completed\",\"findings\":[]}",
+        "model": "qwen3.5:9b",
+        "provider": "ollama_qwen3_5_9b",
+        "latency_seconds": 1.526
+      },
+      "veil_state": "ready_for_confirmation",
+      "veil_findings": [],
+      "veil_error_code": "",
+      "sanitized_text": "Спасибо за сводку. Подтверждаю, что прочитал сообщение; новых решений, поручений и изменений по проекту нет.",
+      "sanitized_confirmation_method": "veil_review",
+      "veil_total_seconds": 1.534,
+      "candidates": [],
+      "evidence": [],
+      "native_source_links_valid": true,
+      "compiler_total_seconds": 10.973,
+      "original_collector_legacy_status": "complete_empty",
+      "offline_replay": {
+        "legacy_count": 0,
+        "oc_confirmed_count": 0,
+        "legacy_confirmed_count": 0,
+        "source_link_valid": true,
+        "producer_diagnostics": [],
+        "oc_pending_count": 0,
+        "oc_pending_values": []
+      }
+    }
+  ]
+}

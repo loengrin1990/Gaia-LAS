@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "frozen_before_generation": true,
+  "protocol": "One sequential pass on the saved local Veil and Context Compiler routes. No prompt tuning, new models, external API or accepted-context confirmation. Configured compiler retry policy remains unchanged. Review is an engineering semantic assessment, not a user study or general model benchmark.",
+  "review_axes": ["essential meaning preserved", "no invented resolution/actor/date", "literal source provenance", "honest empty versus unavailable", "candidate stays unconfirmed"],
+  "cases": [
+    {
+      "id": "accepted_decision",
+      "text": "На встрече проекта «Атлас» окончательно утвердили хранение контрольной копии протокола в локальном архиве; других мест хранения не согласовывали.",
+      "essential_output": "A reviewable decision to keep the control copy in the local archive.",
+      "must_not": ["invent another storage destination", "invent an actor or date", "turn the decision into an undecided intention"],
+      "empty_allowed": false
+    },
+    {
+      "id": "intention_without_decision",
+      "text": "Команда лишь рассматривает перенос еженедельного обзора с пятницы на понедельник; решение ещё не принято и никаких поручений по переносу пока не выдавали.",
+      "essential_output": "Empty or an explicitly unresolved proposal/question; never an approved transfer or assigned action.",
+      "must_not": ["assert that the review has moved", "assign an executor", "present Monday as an approved execution deadline"],
+      "empty_allowed": true
+    },
+    {
+      "id": "cancelled_event",
+      "text": "Демонстрацию прототипа «Такт», намеченную на 18 ноября, отменили; приглашения рассылать не требуется, новую дату не назначили.",
+      "essential_output": "A reviewable cancellation fact; 18 November is the cancelled event date, not an active task deadline.",
+      "must_not": ["schedule the demonstration", "request invitations", "invent a replacement date"],
+      "empty_allowed": false
+    },
+    {
+      "id": "ambiguous_responsibility",
+      "text": "Для подготовки витрины обсуждают аналитика и инженера, но ответственный ещё не выбран; срок назначения также не определён.",
+      "essential_output": "The unresolved responsibility is visible as a reviewable question or explicit uncertainty. Empty avoids invention but misses a useful open issue.",
+      "must_not": ["choose either role as the assigned actor", "invent an appointment deadline", "present preparation as assigned to both roles"],
+      "empty_allowed": false
+    },
+    {
+      "id": "conflicting_dates",
+      "text": "В протоколе приёмки пилотного стенда стоит 21 ноября, в согласованном письме по той же приёмке — 25 ноября; ни один источник не объясняет, какой срок заменён.",
+      "essential_output": "Both dates or their explicit unresolved contradiction remain visible; no definite winner is inferred.",
+      "must_not": ["choose one date as the current agreed deadline", "claim the earlier date was cancelled", "hide the uncertainty behind an active action"],
+      "empty_allowed": false
+    },
+    {
+      "id": "no_new_fact",
+      "text": "Спасибо за сводку. Подтверждаю, что прочитал сообщение; новых решений, поручений и изменений по проекту нет.",
+      "essential_output": "A valid empty result, distinguished from model/provider/validation failure.",
+      "must_not": ["manufacture a project requirement, decision or action", "treat a failed model response as a completed empty result"],
+      "empty_allowed": true,
+      "expected_candidate_count": 0
+    }
+  ]
+}

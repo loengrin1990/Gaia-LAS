@@ -14,7 +14,7 @@
 
 `max_chunks=80` — compatibility name для resource guard: в single-unit route это максимум 80 смысловых единиц и 80 model calls на одну job. При превышении Gaia не обрезает материал и сообщает пользователю, что его нужно разделить по главам или разделам.
 
-Отдельно действуют `max_input_chars`, `max_candidates_per_chunk=1`, `max_total_candidates` и предел попыток модели. Все ответы проверяются, дедуплицируются и готовятся в памяти; запись в provenance registry и receipt происходит только после успеха всех смысловых единиц. Повторная ошибка модели, schema или evidence завершает job без partial context. Пустой валидный список кандидатов сохраняется как `complete_empty`.
+Отдельно действуют `max_input_chars`, `max_candidates_per_chunk=1`, `max_total_candidates` и предел попыток модели. Все ответы проверяются, дедуплицируются и готовятся в памяти; запись в provenance registry и receipt происходит только после успеха всех смысловых единиц. Повторная ошибка модели, schema или evidence завершает job без partial context. Receipt сохраняет прежний `candidate_count` только для legacy Context: grounded OC-предложения идут в отдельную очередь. Итог job и восстановленный статус материала используют общую content-free проекцию `context_compile_outcome`: legacy count плюс число `bridge_accepted` из producer diagnostics. `operational_context_count` — число маршрутизированных предложений, включая idempotent no-op, а не число ожидающих или принятых фактов. `complete_empty` допустим только при известном нуле в обоих маршрутах; у исторического receipt без диагностики OC count равен `null`, статус нейтральный `done`. Формат receipt и правила записи не меняются. Пустой ответ модели не доказывает отсутствие важных фактов в источнике.
 
 ## Runtime и диагностика
 

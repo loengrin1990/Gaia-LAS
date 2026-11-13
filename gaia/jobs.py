@@ -10,7 +10,7 @@ from typing import Any
 from .models import JobRecord
 from .orchestrator import PackageCancelledError, create_package
 from .controlled_intake import ControlledIntake
-from .context_compiler import ContextCompileError
+from .context_compiler import ContextCompileError, context_compile_outcome
 from .local_llm import TASK_CONTEXT_COMPILER, resolve_route
 from .context_attempts import ContextAttemptStore
 
@@ -105,11 +105,17 @@ def _run_context_compile_job(job_id: str, project: str, artifact_id: str) -> Non
                     prior.append({"unit": unit, "call": call, "category": category})
                 update_job(job_id,current_chunk=unit,model_call_count=model_call_count,last_unit_attempts=prior[-2:],last_activity_at=local_now())
             try:
-                candidates=ControlledIntake().compiler(project).compile(artifact_id,cancel_event=event,progress=progress,activity=activity,retry_telemetry=retry_telemetry)
+                compiler = ControlledIntake().compiler(project)
+                candidates=compiler.compile(artifact_id,cancel_event=event,progress=progress,activity=activity,retry_telemetry=retry_telemetry)
             finally:
                 timeout_timer.cancel()
             if event.is_set(): cancel_job(job_id); return
-            update_job(job_id,status="complete_empty" if not candidates else "done",message="Сборка контекста завершена: проектный контекст не найден." if not candidates else "Контекст собран. Проверьте кандидатов.",progress=100,result={"candidates":candidates,"context_status":"complete_empty" if not candidates else "ready"},candidate_count=len(candidates),finished_at=local_now())
+            # OC proposals use their own review queue, never the legacy candidates list.
+            # Historical receipts without diagnostics cannot prove that queue is empty.
+            receipt = {**(compiler._receipt(artifact_id) or {}), "candidate_count": len(candidates)}
+            outcome = context_compile_outcome(receipt)
+            empty = outcome["status"] == "complete_empty"
+            update_job(job_id,status=outcome["status"],message="Модель не предложила элементов контекста. Это не гарантирует отсутствия важных фактов в материале." if empty else "Сборка завершена. Проверьте предложения контекста проекта.",progress=100,result={"candidates":candidates,"operational_context_count":outcome["operational_context_count"],"context_status":"complete_empty" if empty else "ready"},candidate_count=outcome["candidate_count"],finished_at=local_now())
     except ContextCompileError as exc:
         if exc.code=="cancelled": cancel_job(job_id)
         else:
