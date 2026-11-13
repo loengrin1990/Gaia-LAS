@@ -145,7 +145,7 @@ class ReviewHttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/confirm',payload)[0],409)
 
     def test_no_send_upload_config_files_or_general_provider_routes(self):
-        for path in ['/api/send','/api/upload','/config.json','/../../session.json','/api/providers']:
+        for path in ['/api/send','/api/upload','/config.json','/../../session.json','/api/providers','/workspace','/workspace.js','/api/workspace','/api/prepare']:
             self.assertEqual(self.request('GET',path)[0],404)
             self.assertEqual(self.request('POST',path,{})[0],404)
         self.assertEqual(self.request('POST','/api/preview',{},headers={'Content-Type':'text/plain'})[0],415)

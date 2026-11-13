@@ -125,7 +125,7 @@ class Review:
                 raise
 
 
-def make_server(review, port=0):
+def make_server(review, port=0, *, workspace=False):
     bridge.require(type(port) is int and port != 8796 and (port == 0 or 1024 <= port <= 65535), 'isolated_port_required')
     token = secrets.token_urlsafe(32)
     static = Path(__file__).parent
@@ -166,17 +166,21 @@ def make_server(review, port=0):
             if not self._host(): self._error('unauthorized',403);return
             routes={'/':('html','text/html; charset=utf-8'),'/review.js':('js','text/javascript; charset=utf-8'),
                     '/review.css':('css','text/css; charset=utf-8')}
+            if workspace and self.path in ('/workspace','/workspace.js'):
+                suffix='html' if self.path=='/workspace' else 'js'
+                self._send(200,(static/('tristan_gaia_workspace.'+suffix)).read_bytes(),
+                           ('text/html' if suffix=='html' else 'text/javascript')+'; charset=utf-8',cookie=suffix=='html');return
             if self.path in routes:
                 suffix,kind=routes[self.path]
                 self._send(200,(static/('tristan_synthetic_review.'+suffix)).read_bytes(),kind,cookie=self.path=='/');return
-            if self.path != '/api/state': self._error('unknown_route',404);return
+            if self.path not in (('/api/state','/api/workspace') if workspace else ('/api/state',)): self._error('unknown_route',404);return
             if not self._authorized(): self._error('unauthorized',403);return
-            try: self._send(200,review.state())
+            try: self._send(200,review.workspace() if self.path=='/api/workspace' else review.state())
             except (ValueError,OSError,KeyError,TypeError): self._error('invalid_state')
 
         def do_POST(self):
             if not self._authorized(True): self._error('unauthorized',403);return
-            if self.path not in ('/api/preview','/api/confirm','/api/cancel'):self._error('unknown_route',404);return
+            if self.path not in (('/api/preview','/api/confirm','/api/cancel','/api/prepare') if workspace else ('/api/preview','/api/confirm','/api/cancel')):self._error('unknown_route',404);return
             if self.headers.get('Content-Type') != 'application/json':self._error('invalid_request',415);return
             try:
                 size=int(self.headers.get('Content-Length','0'))
@@ -185,7 +189,11 @@ def make_server(review, port=0):
                 self._send(200,review.action(self.path.rsplit('/',1)[1],body))
             except bridge.BridgeError as exc:self._error(str(exc))
             except (ValueError,OSError,KeyError,TypeError):self._error('invalid_request')
-    return ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    if workspace:
+        # Drain active mutations before the launcher releases the one-writer store lease.
+        server.daemon_threads=False
+    return server
 
 
 def main():
