@@ -1162,6 +1162,8 @@
     .context-advanced summary { cursor:pointer; color:#fff7df; font-weight:700; }
     .context-advanced[open] { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; }
     .context-advanced[open] > summary, .context-advanced[open] > p { grid-column:1 / -1; }
+    .journey-evidence { white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;min-height:0;max-height:340px;overflow:auto; }
+    #materialFindQuery { display:block;width:100%;margin:8px 0 12px;padding:12px;border:1px solid rgba(175,205,241,.3);border-radius:6px;background:var(--surface-input);color:var(--text);font:inherit; }
     .summary-overview { display:grid; gap:12px; margin:0 0 16px; }
     .summary-overview-metrics, .summary-overview-types { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
     .summary-overview-card { text-align:left; border:1px solid rgba(175,205,241,.22); border-radius:8px; padding:12px; color:var(--text); background:rgba(6,15,34,.42); }
@@ -1221,6 +1223,7 @@
         <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить выбранные материалы</button></div>
         <div id="journeyMaterialsNotice" class="journey-notice" hidden role="status" aria-live="polite"></div>
       </section>
+      <section aria-labelledby="materialFindTitle"><h3 id="materialFindTitle">Найти материал и проверить, что принято</h3><p class="journey-meta">Локальный поиск по очищенному тексту и связанному контексту. Подтверждение очищенной версии не означает принятия её сведений в память.</p><form id="materialFindForm"><label for="materialFindQuery">Что найти в материалах<input id="materialFindQuery" type="search" maxlength="200" placeholder="Например, бюджет или доступ"></label><div class="journey-actions"><button id="materialFindButton" type="submit">Найти в очищенных материалах</button><button id="materialFindClear" type="button" class="secondary">Очистить поиск</button></div></form><p id="materialFindStatus" role="status" aria-live="polite"></p><div id="materialFindResults" class="journey-grid"></div><button id="materialFindMore" type="button" hidden>Проверить следующие 50 материалов</button></section>
       <div id="journeyMaterials" class="journey-grid" aria-live="polite"></div>
     </section>
 
@@ -1513,7 +1516,8 @@
       </div>
     </section>
   </main>
-  <!-- context-compile-controller -->
+  <!-- material-finder-controller -->
+<!-- context-compile-controller -->
   <script>
     let lastPrompt = "";
     let lastPackage = null;
@@ -1625,11 +1629,14 @@
       resetContextSearch(false, true);
       loadJourneyMaterials();
     }
+    let journeyMaterialGeneration=0, journeyReviewGeneration=0;
     async function loadJourneyMaterials() {
-      const root = document.getElementById('journeyMaterials'); const project = journeyProject();
+      const root = document.getElementById('journeyMaterials'); const project = journeyProject(); const generation=++journeyMaterialGeneration;
+      materialFinder.reset();journeyReviewGeneration++;
       if (!root || !project) return;
       root.innerHTML = '<div class="journey-empty">Загружаем материалы рабочего пространства…</div>';
       const response = await fetch(`/api/materials?project=${encodeURIComponent(project)}`); const data = await response.json();
+      if(generation!==journeyMaterialGeneration||project!==journeyProject())return;
       if (!response.ok) { root.innerHTML = `<div class="journey-empty">${journeyError(data, 'Не удалось загрузить материалы.')}</div>`; return; }
       journeyMaterials = data.materials || []; root.innerHTML = '';
       if (!journeyMaterials.length) {
@@ -1681,8 +1688,10 @@
       uploadJourneyMaterials();
     });
     async function openJourneyReview(artifactId) {
+      const project=journeyProject(),generation=++journeyReviewGeneration;
       showScreen('review'); const root = document.getElementById('journeyReview'); root.className='journey-empty'; root.textContent='Загружаем очищенную версию…';
-      const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(journeyProject())}`); const data = await response.json();
+      const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(project)}`); const data = await response.json();
+      if(generation!==journeyReviewGeneration||project!==journeyProject())return;
       if (!response.ok) { root.textContent=journeyError(data, 'Не удалось открыть проверку.'); return; }
       journeyReview = data; renderJourneyReview(data);
     }
@@ -2101,6 +2110,7 @@
       renderProjectDetails();
       loadConversations();
       loadScribeInbox();
+      await loadJourneyMaterials();
     }
 
     async function loadConversations() {
@@ -4184,6 +4194,7 @@
       return result;
     }
 
+    const materialFinder=createMaterialFinder({document,fetch,getProject:journeyProject,onOpen:openJourneyReview});
     bindFormDirtyHandlers();
     Promise.all([loadProjects(), loadProfiles(), checkLocalStatus()]);
   </script>
