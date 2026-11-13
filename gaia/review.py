@@ -303,3 +303,30 @@ def _overlaps_pseudonym(text: str, start: int, end: int) -> bool:
 def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 def now() -> str: return datetime.now().isoformat(timespec="seconds")
+
+
+def readonly_review(store: ProvenanceStore, workspace_id: str, artifact_id: str) -> dict[str, Any]:
+    """Existing local review projection without restoring state or starting a model."""
+    item = store.object_metadata(workspace_id, artifact_id)
+    if item.get("kind") != "sanitized" or not item.get("current") or not item.get("parents"):
+        raise ProvenanceError("Актуальная очищенная версия недоступна.")
+    extraction = store.object_metadata(workspace_id, item["parents"][0])
+    if extraction.get("kind") != "extraction" or not extraction.get("current") or not extraction.get("parents"):
+        raise ProvenanceError("Основание очищенной версии недоступно.")
+    source = store.source_metadata(workspace_id, extraction["parents"][0])
+    if not source.get("current", True):
+        raise ProvenanceError("Исходный материал больше не актуален.")
+    path = store.root / "metadata" / "review_state.json"
+    record = json.loads(path.read_text(encoding="utf-8")).get(artifact_id) if path.exists() else None
+    if record is not None and record.get("workspace_id") != workspace_id:
+        raise ProvenanceError("Проверка недоступна в этом пространстве.")
+    record = record or dict(artifact_id=artifact_id, state="not_started", findings=[], decisions=[], confirmed=False)
+    raw = (store.root / "sanitized" / workspace_id / (artifact_id + ".txt")).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != item["checksum"]:
+        raise ProvenanceError("Очищенный текст повреждён.")
+    result = {key: record[key] for key in ("artifact_id", "state", "findings", "decisions", "confirmed")}
+    for key in ("error_code", "trace_id", "confirmation_method"):
+        result[key] = record.get(key, "")
+    result["carried_decisions"] = list(record.get("carried_decisions") or [])
+    result["cleaned_text"] = raw.decode("utf-8")
+    return result

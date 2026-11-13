@@ -140,6 +140,10 @@ def create_package(
     elif prompt_review.manual_confirmation_required:
         policy_notes.append("Итоговый prompt тематически связан с ПД; требуется ручной просмотр очищенного пакета перед внешним анализом.")
 
+    if strict_dialog_privacy or dialogue_context is not None:
+        # A local Dialogue package does not acquire disclosure permission from PII masking.
+        local_fallback_required = True
+        policy_notes.append("Контекст диалога подготовлен для локальной работы. Разрешение внешней передачи не установлено.")
     safe_for_codex = not local_fallback_required
     route = "Codex/ChatGPT после ручного подтверждения" if safe_for_codex else "Локально через LM Studio или ручная проверка"
     package = AnalysisPackage(

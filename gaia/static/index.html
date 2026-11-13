@@ -1162,6 +1162,8 @@
     .context-advanced summary { cursor:pointer; color:#fff7df; font-weight:700; }
     .context-advanced[open] { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; align-items:end; }
     .context-advanced[open] > summary, .context-advanced[open] > p { grid-column:1 / -1; }
+    .journey-evidence { white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;min-height:0;max-height:340px;overflow:auto; }
+    #materialFindQuery { display:block;width:100%;margin:8px 0 12px;padding:12px;border:1px solid rgba(175,205,241,.3);border-radius:6px;background:var(--surface-input);color:var(--text);font:inherit; }
     .summary-overview { display:grid; gap:12px; margin:0 0 16px; }
     .summary-overview-metrics, .summary-overview-types { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
     .summary-overview-card { text-align:left; border:1px solid rgba(175,205,241,.22); border-radius:8px; padding:12px; color:var(--text); background:rgba(6,15,34,.42); }
@@ -1221,6 +1223,7 @@
         <div class="journey-actions"><button id="journeyUploadButton" type="button" onclick="uploadJourneyMaterials()">Добавить выбранные материалы</button></div>
         <div id="journeyMaterialsNotice" class="journey-notice" hidden role="status" aria-live="polite"></div>
       </section>
+      <section aria-labelledby="materialFindTitle"><h3 id="materialFindTitle">Найти материал и проверить, что принято</h3><p class="journey-meta">Локальный поиск по очищенному тексту и связанному контексту. Подтверждение очищенной версии не означает принятия её сведений в память.</p><form id="materialFindForm"><label for="materialFindQuery">Что найти в материалах<input id="materialFindQuery" type="search" maxlength="200" placeholder="Например, бюджет или доступ"></label><div class="journey-actions"><button id="materialFindButton" type="submit">Найти в очищенных материалах</button><button id="materialFindClear" type="button" class="secondary">Очистить поиск</button></div></form><p id="materialFindStatus" role="status" aria-live="polite"></p><div id="materialFindResults" class="journey-grid"></div><button id="materialFindMore" type="button" hidden>Проверить следующие 50 материалов</button></section>
       <div id="journeyMaterials" class="journey-grid" aria-live="polite"></div>
     </section>
 
@@ -1324,6 +1327,7 @@
               <p>Выбери проект, задай вопрос или приложи файл. Подробности проверки останутся в разделе Проверка.</p>
             </div>
           </div>
+          <section id="dialogueContextPreview" hidden aria-live="polite"></section>
           <div class="conversation-compose dialogue-composer">
             <label for="query">Сообщение</label>
             <textarea id="query" placeholder="Напиши вопрос или задачу по проекту. Если в тексте есть чувствительные данные, Gaia проверит их перед ответом."></textarea>
@@ -1332,6 +1336,7 @@
             <div id="analysisWarning" class="inline-warning" hidden></div>
             <div class="row dialogue-actions">
               <button class="local" id="sendMessageBtn" type="button" onclick="sendConversationMessage(true)">Получить ответ</button>
+              <button class="secondary" id="prepareContextBtn" type="button" onclick="prepareConversationContext()">Подготовить контекст без ответа</button>
               <button class="secondary" id="prepareMaterialsBtn" type="button" onclick="analyze()">Подготовить материалы</button>
               <button class="secondary" id="cancelJobBtn" type="button" onclick="cancelAnalysisJob()" disabled>Остановить подготовку</button>
               <button class="secondary" id="cancelLocalBtn" onclick="cancelLocalAnswer()" disabled>Остановить</button>
@@ -1351,7 +1356,7 @@
           <div class="panel-head">
             <div>
               <h2>Проекты</h2>
-              <p>Контексты памяти, группы и состояние структуры.</p>
+              <p>Контексты памяти, группы и состояние структуры. Проверка структуры не оценивает готовность локальной модели.</p>
             </div>
           </div>
           <div id="projectList" class="project-list"></div>
@@ -1513,7 +1518,9 @@
       </div>
     </section>
   </main>
-  <!-- context-compile-controller -->
+  <!-- material-finder-controller -->
+  <!-- dialogue-context-preview -->
+<!-- context-compile-controller -->
   <script>
     let lastPrompt = "";
     let lastPackage = null;
@@ -1625,11 +1632,14 @@
       resetContextSearch(false, true);
       loadJourneyMaterials();
     }
+    let journeyMaterialGeneration=0, journeyReviewGeneration=0;
     async function loadJourneyMaterials() {
-      const root = document.getElementById('journeyMaterials'); const project = journeyProject();
+      const root = document.getElementById('journeyMaterials'); const project = journeyProject(); const generation=++journeyMaterialGeneration;
+      materialFinder.reset();journeyReviewGeneration++;
       if (!root || !project) return;
       root.innerHTML = '<div class="journey-empty">Загружаем материалы рабочего пространства…</div>';
       const response = await fetch(`/api/materials?project=${encodeURIComponent(project)}`); const data = await response.json();
+      if(generation!==journeyMaterialGeneration||project!==journeyProject())return;
       if (!response.ok) { root.innerHTML = `<div class="journey-empty">${journeyError(data, 'Не удалось загрузить материалы.')}</div>`; return; }
       journeyMaterials = data.materials || []; root.innerHTML = '';
       if (!journeyMaterials.length) {
@@ -1681,8 +1691,10 @@
       uploadJourneyMaterials();
     });
     async function openJourneyReview(artifactId) {
+      const project=journeyProject(),generation=++journeyReviewGeneration;
       showScreen('review'); const root = document.getElementById('journeyReview'); root.className='journey-empty'; root.textContent='Загружаем очищенную версию…';
-      const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(journeyProject())}`); const data = await response.json();
+      const response = await fetch(`/api/reviews/${encodeURIComponent(artifactId)}?project=${encodeURIComponent(project)}`); const data = await response.json();
+      if(generation!==journeyReviewGeneration||project!==journeyProject())return;
       if (!response.ok) { root.textContent=journeyError(data, 'Не удалось открыть проверку.'); return; }
       journeyReview = data; renderJourneyReview(data);
     }
@@ -2000,7 +2012,7 @@
         `Проект: ${data.project || '-'}`,
         `Группа: ${data.group_title || 'без группы'}`,
         `Профиль: ${data.profile_title || data.profile_id || '-'}`,
-        loreCoverageLabel(data),
+        data.dialogue_context ? `Принятых фактов в пакете: ${data.dialogue_context.current_authority.length}. Разделов памяти Lore: ${(data.memory_sources||[]).length}.` : loreCoverageLabel(data),
         `Проверка данных: ${data.query_mask_status || '-'}, замен ${data.query_mask_replacements || 0}`,
         data.local_fallback_required ? 'Внешний маршрут: заблокирован' : externalRouteReadyText()
       ];
@@ -2101,6 +2113,7 @@
       renderProjectDetails();
       loadConversations();
       loadScribeInbox();
+      await loadJourneyMaterials();
     }
 
     async function loadConversations() {
@@ -2231,6 +2244,7 @@
     }
 
     function renderCurrentConversation() {
+      if(lastPackage?.run_id!==currentConversation?.last_job_id)dialogueContextPreview.reset();
       resetDialogTimeline();
       if (!currentConversation) {
         addDialogCard('gaia', 'Разговор проекта', 'Создай новый разговор или подготовь материалы для ответа.');
@@ -2302,11 +2316,25 @@
         conversationMessage('Новый разговор создан.', true);
     }
 
+    async function prepareConversationContext() {
+      if(document.getElementById('prepareContextBtn').disabled)return;
+      if(document.getElementById('files').files.length){conversationMessage('Сначала добавьте новые файлы в разделе «Материалы» и проверьте их. Здесь подготовьте вопрос по принятому контексту.',false);return;}
+      if(!document.getElementById('query').value.trim()){conversationMessage('Напишите вопрос или задачу, чтобы отобрать релевантный принятый контекст.',false);return;}
+      const project=document.getElementById('project').value;
+      setConversationBusy(true,false);
+      try{await sendConversationMessage(false);}
+      catch(error){if(project===document.getElementById('project').value)conversationMessage('Подготовку не удалось завершить. Проверьте историю разговора перед повтором; память проекта не подтверждалась.',false);}
+      finally{setConversationBusy(false);}
+    }
+
     async function sendConversationMessage(runLocal) {
+      const project=document.getElementById('project').value;
+      if(currentConversation&&currentConversation.project!==project)currentConversation=null;
       if (!currentConversation) {
         conversationMessage('Разговор не выбран. Gaia создаёт новый разговор для этого сообщения...', true);
         await createConversation();
       }
+      if(project!==document.getElementById('project').value||(currentConversation&&currentConversation.project!==project))return;
       if (!currentConversation) {
         conversationMessage('Не удалось создать разговор. Выбери разговор из списка слева или проверь проект.', false);
         return;
@@ -2314,6 +2342,7 @@
       const input = document.getElementById('query');
       const filesInput = document.getElementById('files');
       const text = input.value.trim();
+      const conversationId=currentConversation.id;
       if (!text && !filesInput.files.length) {
         conversationMessage('Добавь сообщение или материал.', false);
         return;
@@ -2322,7 +2351,8 @@
       setConversationBusy(true, runLocal);
       const form = new FormData();
       form.append('text', text);
-      form.append('profile', document.getElementById('profile').value);
+      const preparedProfile=document.getElementById('profile').value;
+      form.append('profile', preparedProfile);
       form.append('run_local', runLocal ? 'true' : 'false');
       for (const file of filesInput.files) form.append('files', file);
       try {
@@ -2331,6 +2361,10 @@
           body: form
         });
         const data = await res.json();
+        if(project!==document.getElementById('project').value||currentConversation?.id!==conversationId)return;
+        if(!runLocal&&(input.value.trim()!==text||document.getElementById('profile').value!==preparedProfile||filesInput.files.length)){
+          conversationMessage('Форма изменилась во время подготовки. Прежний пакет не открыт; проверьте историю разговора перед повтором.',false);return;
+        }
         if (!res.ok) {
           conversationMessage(errorMessage(data.error, 'Не удалось отправить сообщение.'), false);
           setOutput(JSON.stringify(data, null, 2));
@@ -2375,6 +2409,7 @@
         : 'Gaia готовит материалы. Это может занять некоторое время.';
       answerButton.disabled = active;
       prepareButton.disabled = active;
+      document.getElementById('prepareContextBtn').disabled=active;
     }
 
     async function archiveCurrentConversation() {
@@ -2418,6 +2453,23 @@
       return projectRecords.find((project) => project.name === name) || null;
     }
 
+    function projectStatusLabel(status) {
+      switch (status) {
+        case 'active': return 'Активный';
+        case 'draft': return 'Черновик';
+        case 'archived': return 'Архив';
+        default: return 'Статус не указан';
+      }
+    }
+
+    function projectHealthLabel(health) {
+      switch (health) {
+        case 'ok': return 'Структура в порядке';
+        case 'needs_attention': return 'Нужна проверка структуры';
+        default: return 'Структура не проверена';
+      }
+    }
+
     function syncProjectManagementForm() {
       const project = selectedProjectRecord();
       const meta = document.getElementById('projectMeta');
@@ -2432,7 +2484,7 @@
       document.getElementById('projectGroup').value = project.group_code || "";
       document.getElementById('projectStatus').value = project.status || "active";
       const group = project.group_title ? `; группа: ${project.group_title}` : '; без группы';
-      meta.textContent = `Код: ${project.code || '-'}${group}; состояние: ${project.health || 'ok'}`;
+      meta.textContent = `Код: ${project.code || '-'}${group}; ${projectHealthLabel(project.health)}`;
     }
 
     function syncProjectState() {
@@ -2458,7 +2510,7 @@
         title.textContent = project.title || project.name;
         const meta = document.createElement('span');
         const group = project.group_title ? `${project.group_title}; ` : 'без группы; ';
-        meta.textContent = `${group}код: ${project.code || '-'}; статус: ${project.status || 'active'}; health: ${project.health || 'ok'}`;
+        meta.textContent = `${group}код: ${project.code || '-'}; ${projectStatusLabel(project.status)}; ${projectHealthLabel(project.health)}`;
         button.appendChild(title);
         button.appendChild(meta);
         button.onclick = () => {
@@ -2482,13 +2534,13 @@
         ['Название', project.title || project.name || '-'],
         ['Код', project.code || '-'],
         ['Группа', project.group_title || 'без группы'],
-        ['Статус', project.status || 'active'],
-        ['Health', project.health || 'ok'],
+        ['Статус', projectStatusLabel(project.status)],
+        ['Структура', projectHealthLabel(project.health)],
         ['Папка', project.path || '-'],
         ['Память', project.memory_path || '-'],
         ['Источники', project.sources_path || '-'],
         ['Журнал', project.journal_path || '-'],
-        ['Graph index', project.graph_index_path || '-']
+        ['Индекс памяти', project.graph_index_path || '-']
       ];
       for (const [label, value] of details) {
         const item = document.createElement('div');
@@ -2815,6 +2867,7 @@
 
     function renderPackage(data) {
       lastPackage = data;
+      dialogueContextPreview.render(data);
       loreAvailableSources = data.memory_sources || [];
       lastPrompt = data.prompt || "";
       showTab('summary');
@@ -2852,6 +2905,7 @@
     }
 
     function resetReviewPanel() {
+      dialogueContextPreview.reset();
       lastPackage = null;
       lastPrompt = "";
       const panel = document.getElementById('reviewPanel');
@@ -3101,7 +3155,7 @@
         'Lore',
         sources.length
           ? `выбрано ${sources.length} из ${data.memory_total_sections || 0} разделов; группа: ${data.group_title || 'нет'}`
-          : `подтвержденный контекст по запросу не найден (${sources.length} из ${data.memory_total_sections || 0} разделов). ${loreCoverageNextStep(data)}`,
+          : data.dialogue_context ? 'Lore не выбрал разделы знаний и истории. Принятые факты показаны отдельно в подготовленном пакете.' : `подтвержденный контекст по запросу не найден (${sources.length} из ${data.memory_total_sections || 0} разделов). ${loreCoverageNextStep(data)}`,
         sources.length ? 'ok' : ''
       ));
       renderEvidencePlan(root, data.evidence_plan || []);
@@ -3127,6 +3181,7 @@
         list.appendChild(row);
       }
       button.disabled = !currentJobId || availableSources.length === 0;
+      if(data.dialogue_context){button.disabled=true;state.textContent='Для изменения состава этого пакета уточните вопрос и подготовьте контекст заново. Пересборка только Lore не сохраняет слой принятых фактов.';}
     }
 
     function renderEvidencePlan(root, items) {
@@ -3448,6 +3503,7 @@
 
     async function rebuildPromptWithSelectedLore() {
       if (!lastPackage || !currentJobId) return;
+      if(lastPackage.dialogue_context){document.getElementById('loreRebuildState').textContent='Уточните вопрос и подготовьте контекст заново, чтобы сохранить принятые факты и их основания.';return;}
       const selected = Array.from(document.querySelectorAll('.lore-source-checkbox'))
         .filter((item) => item.checked && item.value)
         .map((item) => item.value);
@@ -4184,6 +4240,8 @@
       return result;
     }
 
+    const materialFinder=createMaterialFinder({document,fetch,getProject:journeyProject,onOpen:openJourneyReview});
+    const dialogueContextPreview=createDialogueContextPreview({document,fetch,getProject:()=>document.getElementById('project').value});
     bindFormDirtyHandlers();
     Promise.all([loadProjects(), loadProfiles(), checkLocalStatus()]);
   </script>

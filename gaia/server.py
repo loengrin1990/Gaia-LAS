@@ -195,11 +195,11 @@ def text_response(
     handler.wfile.write(data)
 
 
-def session_cookie() -> str:
-    return f"{SESSION_COOKIE_NAME}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
+def session_cookie(*, cookie_name: str = SESSION_COOKIE_NAME) -> str:
+    return f"{cookie_name}={SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/"
 
 
-def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
+def mutation_is_authorized(handler: BaseHTTPRequestHandler, *, cookie_name: str = SESSION_COOKIE_NAME) -> bool:
     try:
         is_loopback = ip_address(str(handler.client_address[0])).is_loopback
     except (AttributeError, ValueError):
@@ -215,7 +215,7 @@ def mutation_is_authorized(handler: BaseHTTPRequestHandler) -> bool:
         cookie.load(handler.headers.get("Cookie", ""))
     except (TypeError, ValueError):
         return False
-    token = cookie.get(SESSION_COOKIE_NAME)
+    token = cookie.get(cookie_name)
     return bool(token and secrets.compare_digest(token.value, SESSION_TOKEN))
 
 
@@ -561,7 +561,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_review_get(self) -> None:
         route = urlparse(self.path); parts = route.path.split("/"); artifact_id = parts[3] if len(parts) >= 4 else ""; project = parse_qs(route.query).get("project", [""])[0]
-        intake = ControlledIntake()
+        read_only = parse_qs(route.query).get("read_only", [""])[0] == "1"
+        intake = ControlledIntake(create_metadata=not read_only)
+        if read_only:
+            from .review import readonly_review
+            try:
+                workspace = intake.existing_workspace(project)
+                if not workspace:
+                    raise ProvenanceError("Недоступное пространство")
+                json_response(self, readonly_review(intake.store, workspace, artifact_id))
+            except (ProvenanceError, OSError, KeyError, ValueError):
+                error_response(self, "material_not_available", "Материал недоступен в выбранном пространстве. Данные не изменены.", 404)
+            return
         try:
             json_response(self, intake.review(project).get_or_start(artifact_id, include_text=True))
         except ProvenanceError:

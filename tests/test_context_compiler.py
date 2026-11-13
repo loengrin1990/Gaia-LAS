@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from contextlib import nullcontext
 import tempfile
 import unittest
 import http.client
@@ -7,6 +9,7 @@ import json
 import threading
 import time
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
@@ -597,7 +600,8 @@ class ContextCompilerTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
-    def test_context_model_uses_dedicated_route_and_classifies_bad_response(self):
+    @patch("gaia.context_compiler.resolve_route", return_value={"model_call_timeout_seconds": 240})
+    def test_context_model_uses_dedicated_route_and_classifies_bad_response(self, _route):
         with patch("gaia.context_compiler.execute_context_model_call", return_value={"ok":False}):
             with self.assertRaises(ContextCompileError) as unavailable: local_context_model("[Сотрудник-01]")
         self.assertEqual(unavailable.exception.code, "local_model_unavailable")
@@ -713,8 +717,11 @@ class ContextCompilerTests(unittest.TestCase):
                 tmp,s,w,san=self.setup()
                 try:
                     compiler=ContextCompiler(s,w); compiler.model=lambda text, cancel_event=None: {"candidates":[]}
-                    with operation(compiler), patch.object(compiler,"_unload") as unload:
-                        with self.assertRaises(Exception): compiler.compile(san["artifact_id"])
+                    with operation(compiler) as failure, patch.object(compiler,"_unload") as unload:
+                        preload = patch.object(compiler,"_preload") if name != "preload" else nullcontext()
+                        with preload:
+                            with self.assertRaises(Exception): compiler.compile(san["artifact_id"])
+                        failure.assert_called_once()
                     unload.assert_called_once()
                 finally: tmp.cleanup()
 
@@ -727,9 +734,9 @@ class ContextCompilerTests(unittest.TestCase):
                 return {"candidates":[]}
             compiler.model=model
             chunks=[__import__("gaia.context_chunking",fromlist=["ContextChunk"]).ContextChunk(0,"first",0,5,"test"), __import__("gaia.context_chunking",fromlist=["ContextChunk"]).ContextChunk(1,"second",5,11,"test")]
-            with patch("gaia.context_compiler.split_context",return_value=chunks), patch.object(compiler,"_persist_all") as persist, patch.object(compiler,"_unload") as unload:
+            with patch.object(compiler,"_preload") as preload, patch("gaia.context_compiler.split_context",return_value=chunks), patch.object(compiler,"_persist_all") as persist, patch.object(compiler,"_unload") as unload:
                 with self.assertRaises(ContextCompileError) as stopped: compiler.compile(san["artifact_id"],cancel_event=cancelled)
-            self.assertEqual(stopped.exception.code,"cancelled"); self.assertEqual(len(calls),1); persist.assert_not_called(); unload.assert_called_once()
+            self.assertEqual(stopped.exception.code,"cancelled"); self.assertEqual(len(calls),1); persist.assert_not_called(); preload.assert_called_once(); unload.assert_called_once()
         finally: tmp.cleanup()
 
     def test_receipt_fast_path_skips_local_model_lifecycle(self):
