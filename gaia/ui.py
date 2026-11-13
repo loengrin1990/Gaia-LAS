@@ -9,6 +9,8 @@ def load_index_html() -> str:
     html = html.replace("<!-- material-finder-controller -->", f"<script>{finder}</script>")
     preview = (static / "dialogue_context_preview.js").read_text(encoding="utf-8")
     html = html.replace("<!-- dialogue-context-preview -->", f"<script>{preview}</script>")
+    evidence = (static / "operational_evidence.js").read_text(encoding="utf-8")
+    html = html.replace("<!-- operational-evidence-viewer -->", f"<script>{evidence}</script>")
     return html.replace("<!-- context-compile-controller -->", f"<script>{controller}</script>")
 
 

@@ -19,7 +19,10 @@ from unittest.mock import patch
 def main() -> int:
     parser = argparse.ArgumentParser(description="Основной Gaia: временная синтетическая проверка без моделей")
     parser.add_argument("--serve", action="store_true", help="После smoke оставить временный UI до Ctrl+C")
+    parser.add_argument("--oc-evidence", action="store_true", help="В --serve показать искусственную OC-карточку для просмотра основания")
     args = parser.parse_args()
+    if args.oc_evidence and not args.serve:
+        parser.error("--oc-evidence используется только вместе с --serve")
     if "gaia.config" in sys.modules:
         parser.error("Запустите команду в отдельном процессе, до импорта Gaia.")
     # Reserve an available loopback address without touching a running service.
@@ -72,7 +75,7 @@ def main() -> int:
         (folder / "Память.md").write_text("# Учебная проба\nТолько искусственные данные.\n", encoding="utf-8")
         intake = ControlledIntake()
         # Reuse the two existing preparation fixtures; no new model scenario.
-        for index, text in enumerate(("Использовать резервный маршрут.", "Резервный бюджет пока не согласован.")):
+        for index, text in enumerate(() if args.oc_evidence else ("Использовать резервный маршрут.", "Резервный бюджет пока не согласован.")):
             admitted = intake.admit(project, [(f"synthetic-{index}.txt", text.encode())])
             workspace = admitted["workspace_id"]
             artifact = admitted["materials"][0]["sanitized_id"]
@@ -86,7 +89,25 @@ def main() -> int:
                 for item in candidates:
                     ContextService(intake.store, workspace).decide(item["id"], "confirm")
 
-        runtime.INDEX_HTML = runtime.INDEX_HTML.replace("<body>", '<body><aside role="note" style="padding:16px;color:white;background:#543400">Учебная проба: только искусственные данные. Модели отключены. Один факт подтверждён тестом, второй ожидает решения. После остановки профиль удалится. Рабочая Gaia не подключена.</aside>')
+        if args.oc_evidence:
+            from gaia.operational_context import SafeProvenance
+            from gaia.operational_context_review import OperationalContextCandidateStore, new_candidate
+            fixtures = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+            text = json.loads((fixtures / "core_local_holdout_20261113.json").read_text())["cases"][0]["text"]
+            answer = json.loads((fixtures / "core_local_holdout_20261113_results.json").read_text())["cases"][0]
+            statement = answer["offline_replay"]["oc_pending_values"][0]
+            admitted = intake.admit(project, [("synthetic-archive.txt", text.encode())])
+            workspace = admitted["workspace_id"]; artifact = admitted["materials"][0]["sanitized_id"]
+            review = ReviewService(intake.store, workspace, lambda _: {"status": "completed", "findings": []})
+            review.start(artifact); review.confirm(artifact)
+            # Explicit display fixture, not a model call or accepted OC authority.
+            OperationalContextCandidateStore(intake.store.root).add(new_candidate(
+                scope="project", scope_ref=workspace, kind="decision", subject_ref="synthetic_archive",
+                value=statement, provenance=SafeProvenance(source_ref=artifact, candidate_ref="synthetic_archive"),
+                sensitivity="unknown", reason="Учебное предложение из сохранённого синтетического ответа.",
+            ))
+        detail = "OC-предложение из сохранённой синтетической фикстуры ожидает решения." if args.oc_evidence else "Один факт подтверждён тестом, второй ожидает решения."
+        runtime.INDEX_HTML = runtime.INDEX_HTML.replace("<body>", '<body><aside role="note" style="padding:16px;color:white;background:#543400">Учебная проба: только искусственные данные. Модели отключены. ' + detail + ' После остановки профиль удалится. Рабочая Gaia не подключена.</aside>')
         class QuietHandler(runtime.Handler):
             def log_message(self, *_):
                 pass

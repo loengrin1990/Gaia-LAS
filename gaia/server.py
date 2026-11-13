@@ -646,6 +646,10 @@ class Handler(BaseHTTPRequestHandler):
     def handle_operational_context_review_get(self) -> None:
         route = urlparse(self.path)
         project = parse_qs(route.query).get("project", [""])[0]
+        parts = route.path.split("/")
+        if len(parts) == 7 and parts[3] == "review" and parts[4] in {"pending", "current"} and parts[6] == "evidence":
+            self.handle_operational_context_evidence_get(project, parts[4], parts[5])
+            return
         if route.path != "/api/operational-context/review" or not project.strip():
             error_response(self, "operational_context_review_invalid", "Выберите рабочее пространство для просмотра текущего контекста.", 400)
             return
@@ -658,6 +662,48 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, self._operational_context_review_payload(service, str(workspace)))
         except (OperationalContextError, OperationalContextReviewError):
             error_response(self, "operational_context_review_failed", "Не удалось загрузить Operational Context. Данные не изменены.", 400)
+
+    def handle_operational_context_evidence_get(self, project: str, category: str, item_id: str) -> None:
+        """Resolve the exact local OC pointer through the existing read-only review.
+
+        SafeProvenance has no persisted offsets. Never infer a quote from the
+        statement, hash reference or a newer source; return the whole cleaned version.
+        """
+        from .review import readonly_review
+        try:
+            intake = ControlledIntake(create_metadata=False)
+            workspace = intake.existing_workspace(project)
+            if not workspace:
+                raise ProvenanceError("unavailable")
+            if category == "pending":
+                candidate = OperationalContextCandidateStore(intake.store.root).get(item_id)
+                if candidate.scope != "project" or candidate.scope_ref != workspace or candidate.state != "pending":
+                    raise ProvenanceError("unavailable")
+                provenance = candidate.provenance
+                statement = candidate.value or candidate.reference
+                source_ref = provenance.source_ref if provenance else ""
+            else:
+                item = OperationalContextStore(intake.store.root).get(scope="project", scope_ref=workspace, item_id=item_id)
+                if item["lifecycle"] != "active" or item["confirmation"] != "confirmed":
+                    raise ProvenanceError("unavailable")
+                source_ref = item["provenance"].get("source_ref", "")
+                statement = item["value"] or item["reference"]
+            review = readonly_review(intake.store, workspace, source_ref)
+            if review.get("confirmed") is not True:
+                raise ProvenanceError("unavailable")
+            sanitized = intake.store.object_metadata(workspace, source_ref)
+            extraction = intake.store.object_metadata(workspace, sanitized["parents"][0])
+            source = intake.store.source_metadata(workspace, extraction["parents"][0])
+            # Read-only integrity checks: verify_source() would mutate the registry.
+            if source.get("integrity_status") != "intact":
+                raise ProvenanceError("unavailable")
+            for record, path in ((source, intake.store.source_path(workspace, source["id"])),
+                                 (extraction, intake.store.root / "artifacts" / workspace / (extraction["id"] + ".txt"))):
+                if hashlib.sha256(path.read_bytes()).hexdigest() != record["checksum"]:
+                    raise ProvenanceError("unavailable")
+            json_response(self, {"statement": statement, "cleaned_text": review["cleaned_text"], "precision": "whole_material", "export_allowed": False})
+        except (ProvenanceError, OperationalContextError, OperationalContextReviewError, OSError, KeyError, ValueError):
+            error_response(self, "operational_evidence_unavailable", "Основание недоступно: оно могло устареть, измениться или не иметь доступной очищенной версии. Другой материал не подставлен.", 404)
 
     def handle_operational_context_review_action(self) -> None:
         route = urlparse(self.path).path.split("/")

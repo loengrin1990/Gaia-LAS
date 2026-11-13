@@ -14,6 +14,16 @@ OC-4 добавляет отдельный локальный review слой `g
 
 Restricted значение видно только в локальном интерфейсе Gaia. Карточка не выводит internal IDs, partition names, raw source refs, provenance JSON или diagnostics.
 
+## Локальное очищенное основание
+
+У pending и active+confirmed project-карточек есть «Открыть очищенное основание». Модальное окно отдельно показывает «Утверждение предложения» / «Принятое утверждение» и полный очищенный материал. В OC v0 offsets/quote не сохранены: окно явно сообщает «Точный фрагмент для этой карточки не сохранён» и не называет полный текст точной цитатой. Наличие доступного материала не доказывает истинность, полноту или entailment утверждения.
+
+Точечный `GET /api/operational-context/review/{pending|current}/<id>/evidence?project=…` разрешает ID только в exact выбранном project scope, проверяет pending либо active+confirmed состояние, затем использует существующую `readonly_review` по **тому же** `SafeProvenance.source_ref`. Дополнительно требует подтверждённую очищенную версию и read-only checksum/integrity проверку её исходной source/extraction цепочки. Ответ содержит только `statement`, `cleaned_text`, `precision=whole_material`, `export_allowed=false`, с `no-store`; raw bytes, пути и provenance IDs не выдаются. Ни `verify_source()` с побочной записью, ни модель, ни восстановление review-state при чтении не вызываются. Нового хранилища/receipt и миграции нет.
+
+Старый, изменённый, отозванный, отсутствующий, чужой или неподтверждённый source получает одинаковый безопасный отказ. Актуальный похожий текст вместо него не подставляется. Candidate-only/Memory references, ссылки только на raw source/extraction и historical/unresolved items этим просмотром не поддержаны. PDF доступен лишь как существующий очищенный текст, без raw pages/изображений и обещания точной страницы.
+
+Каждое открытие заново проверяет источник; результат — снимок на момент чтения, не непрерывный мониторинг отзывов. Закрытие/Escape немедленно очищает окно и отменяет клиентский запрос; поздний ответ не применяется. Смена проекта закрывает просмотр, повторный клик во время чтения не создаёт второго GET. Просмотр не меняет OC/Memory, не подтверждает предложение и не выдаёт права экспорта или внешней передачи. Принятие остаётся отдельной кнопкой карточки.
+
 ## Controlled actions
 
 `OperationalContextReviewService.confirm()` строит OC-1 promotion либо replacement evidence строго из provenance выбранного candidate. Replacement-карточка до действия показывает «Было» и «Стало». Если `replaces_id` указан, вызывается атомарный `OperationalContextStore.replace()`: до human confirmation старый active item остаётся единственным current; после него старый становится `superseded`, а новый active появляется одной операцией. `reject()` меняет только candidate state и не создаёт runtime-visible item. `retire()` вызывает OC-1 retirement, не удаляя historical record. Каждый successful action возвращает обновлённые «Требует решения» и «Текущий контекст»; интерфейс применяет этот view сразу, без reload.
