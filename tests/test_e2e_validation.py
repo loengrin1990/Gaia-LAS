@@ -218,6 +218,39 @@ class EndToEndValidationTests(unittest.TestCase):
                 self.assertEqual(len(summary["action"]), 1)
                 self.assertFalse(summary["risk"])
 
+                # The same accepted source reaches the existing no-model Dialogue package.
+                settings = SimpleNamespace(service_docs=Path(temporary.name) / "service", storage_dir=store.root)
+                with (
+                    patch("gaia.conversations.SETTINGS", settings),
+                    patch("gaia.conversations.project_names", return_value=[project, other]),
+                    patch("gaia.orchestrator.SETTINGS", SimpleNamespace(runs_dir=Path(temporary.name) / "runs")),
+                    patch("gaia.orchestrator.select_project_memory", return_value=None),
+                    patch("gaia.orchestrator.write_run_journal"),
+                    patch("gaia.orchestrator.journal_path", return_value=""),
+                    patch("gaia.orchestrator.safety_audit_path", return_value=""),
+                    patch("gaia.conversations.dispatch_dialogue_answer", side_effect=AssertionError("No model during preparation")),
+                ):
+                    status, conversation = request("POST", "/api/conversations", {"project": project})
+                    self.assertEqual(status, 201)
+                    status, prepared = request("POST", f"/api/conversations/{conversation['id']}/messages", {"text": "локальный", "run_local": False})
+                    self.assertEqual(status, 201)
+                    self.assertIsNone(prepared["local_result"])
+                    package = prepared["package"]
+                    authority = package["dialogue_context"]["current_authority"]
+                    self.assertEqual([item["id"] for item in authority], [by_type["decision"]["id"]])
+                    self.assertEqual(authority[0]["source_links"], [new_sanitized])
+                    self.assertTrue(authority[0]["block_links"])
+                    self.assertIn(authority[0]["statement"], package["prompt"])
+                    self.assertNotIn(by_type["risk"]["statement"], package["prompt"])
+                    self.assertNotIn(by_type["open_question"]["statement"], package["prompt"])
+                    self.assertFalse(package["safe_for_codex_after_confirmation"])
+                    before = {str(p.relative_to(store.root)): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
+                    status, evidence = request("GET", f"/api/reviews/{new_sanitized}?project={project}&read_only=1")
+                    self.assertEqual(status, 200)
+                    self.assertEqual(evidence["artifact_id"], authority[0]["source_links"][0])
+                    self.assertIn("Использовать локальный маршрут.", evidence["cleaned_text"])
+                    self.assertEqual(before, {str(p.relative_to(store.root)): p.read_bytes() for p in store.root.rglob("*") if p.is_file()})
+
                 second_review = upload(second_text)["review"]
                 second_sanitized = str(second_review["artifact_id"])
                 self.assertEqual(request("POST", f"/api/reviews/{second_sanitized}/check", {"project": project})[0], 200)
