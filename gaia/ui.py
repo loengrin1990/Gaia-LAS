@@ -7,6 +7,8 @@ def load_index_html() -> str:
     controller = (static / "context_compile_controller.js").read_text(encoding="utf-8")
     finder = (static / "material_finder.js").read_text(encoding="utf-8")
     html = html.replace("<!-- material-finder-controller -->", f"<script>{finder}</script>")
+    preview = (static / "dialogue_context_preview.js").read_text(encoding="utf-8")
+    html = html.replace("<!-- dialogue-context-preview -->", f"<script>{preview}</script>")
     return html.replace("<!-- context-compile-controller -->", f"<script>{controller}</script>")
 
 

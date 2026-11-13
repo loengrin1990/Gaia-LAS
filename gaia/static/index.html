@@ -1327,6 +1327,7 @@
               <p>Выбери проект, задай вопрос или приложи файл. Подробности проверки останутся в разделе Проверка.</p>
             </div>
           </div>
+          <section id="dialogueContextPreview" hidden aria-live="polite"></section>
           <div class="conversation-compose dialogue-composer">
             <label for="query">Сообщение</label>
             <textarea id="query" placeholder="Напиши вопрос или задачу по проекту. Если в тексте есть чувствительные данные, Gaia проверит их перед ответом."></textarea>
@@ -1335,6 +1336,7 @@
             <div id="analysisWarning" class="inline-warning" hidden></div>
             <div class="row dialogue-actions">
               <button class="local" id="sendMessageBtn" type="button" onclick="sendConversationMessage(true)">Получить ответ</button>
+              <button class="secondary" id="prepareContextBtn" type="button" onclick="prepareConversationContext()">Подготовить контекст без ответа</button>
               <button class="secondary" id="prepareMaterialsBtn" type="button" onclick="analyze()">Подготовить материалы</button>
               <button class="secondary" id="cancelJobBtn" type="button" onclick="cancelAnalysisJob()" disabled>Остановить подготовку</button>
               <button class="secondary" id="cancelLocalBtn" onclick="cancelLocalAnswer()" disabled>Остановить</button>
@@ -1517,6 +1519,7 @@
     </section>
   </main>
   <!-- material-finder-controller -->
+  <!-- dialogue-context-preview -->
 <!-- context-compile-controller -->
   <script>
     let lastPrompt = "";
@@ -2009,7 +2012,7 @@
         `Проект: ${data.project || '-'}`,
         `Группа: ${data.group_title || 'без группы'}`,
         `Профиль: ${data.profile_title || data.profile_id || '-'}`,
-        loreCoverageLabel(data),
+        data.dialogue_context ? `Принятых фактов в пакете: ${data.dialogue_context.current_authority.length}. Разделов памяти Lore: ${(data.memory_sources||[]).length}.` : loreCoverageLabel(data),
         `Проверка данных: ${data.query_mask_status || '-'}, замен ${data.query_mask_replacements || 0}`,
         data.local_fallback_required ? 'Внешний маршрут: заблокирован' : externalRouteReadyText()
       ];
@@ -2241,6 +2244,7 @@
     }
 
     function renderCurrentConversation() {
+      if(lastPackage?.run_id!==currentConversation?.last_job_id)dialogueContextPreview.reset();
       resetDialogTimeline();
       if (!currentConversation) {
         addDialogCard('gaia', 'Разговор проекта', 'Создай новый разговор или подготовь материалы для ответа.');
@@ -2312,11 +2316,25 @@
         conversationMessage('Новый разговор создан.', true);
     }
 
+    async function prepareConversationContext() {
+      if(document.getElementById('prepareContextBtn').disabled)return;
+      if(document.getElementById('files').files.length){conversationMessage('Сначала добавьте новые файлы в разделе «Материалы» и проверьте их. Здесь подготовьте вопрос по принятому контексту.',false);return;}
+      if(!document.getElementById('query').value.trim()){conversationMessage('Напишите вопрос или задачу, чтобы отобрать релевантный принятый контекст.',false);return;}
+      const project=document.getElementById('project').value;
+      setConversationBusy(true,false);
+      try{await sendConversationMessage(false);}
+      catch(error){if(project===document.getElementById('project').value)conversationMessage('Подготовку не удалось завершить. Проверьте историю разговора перед повтором; память проекта не подтверждалась.',false);}
+      finally{setConversationBusy(false);}
+    }
+
     async function sendConversationMessage(runLocal) {
+      const project=document.getElementById('project').value;
+      if(currentConversation&&currentConversation.project!==project)currentConversation=null;
       if (!currentConversation) {
         conversationMessage('Разговор не выбран. Gaia создаёт новый разговор для этого сообщения...', true);
         await createConversation();
       }
+      if(project!==document.getElementById('project').value||(currentConversation&&currentConversation.project!==project))return;
       if (!currentConversation) {
         conversationMessage('Не удалось создать разговор. Выбери разговор из списка слева или проверь проект.', false);
         return;
@@ -2324,6 +2342,7 @@
       const input = document.getElementById('query');
       const filesInput = document.getElementById('files');
       const text = input.value.trim();
+      const conversationId=currentConversation.id;
       if (!text && !filesInput.files.length) {
         conversationMessage('Добавь сообщение или материал.', false);
         return;
@@ -2332,7 +2351,8 @@
       setConversationBusy(true, runLocal);
       const form = new FormData();
       form.append('text', text);
-      form.append('profile', document.getElementById('profile').value);
+      const preparedProfile=document.getElementById('profile').value;
+      form.append('profile', preparedProfile);
       form.append('run_local', runLocal ? 'true' : 'false');
       for (const file of filesInput.files) form.append('files', file);
       try {
@@ -2341,6 +2361,10 @@
           body: form
         });
         const data = await res.json();
+        if(project!==document.getElementById('project').value||currentConversation?.id!==conversationId)return;
+        if(!runLocal&&(input.value.trim()!==text||document.getElementById('profile').value!==preparedProfile||filesInput.files.length)){
+          conversationMessage('Форма изменилась во время подготовки. Прежний пакет не открыт; проверьте историю разговора перед повтором.',false);return;
+        }
         if (!res.ok) {
           conversationMessage(errorMessage(data.error, 'Не удалось отправить сообщение.'), false);
           setOutput(JSON.stringify(data, null, 2));
@@ -2385,6 +2409,7 @@
         : 'Gaia готовит материалы. Это может занять некоторое время.';
       answerButton.disabled = active;
       prepareButton.disabled = active;
+      document.getElementById('prepareContextBtn').disabled=active;
     }
 
     async function archiveCurrentConversation() {
@@ -2825,6 +2850,7 @@
 
     function renderPackage(data) {
       lastPackage = data;
+      dialogueContextPreview.render(data);
       loreAvailableSources = data.memory_sources || [];
       lastPrompt = data.prompt || "";
       showTab('summary');
@@ -2862,6 +2888,7 @@
     }
 
     function resetReviewPanel() {
+      dialogueContextPreview.reset();
       lastPackage = null;
       lastPrompt = "";
       const panel = document.getElementById('reviewPanel');
@@ -3111,7 +3138,7 @@
         'Lore',
         sources.length
           ? `выбрано ${sources.length} из ${data.memory_total_sections || 0} разделов; группа: ${data.group_title || 'нет'}`
-          : `подтвержденный контекст по запросу не найден (${sources.length} из ${data.memory_total_sections || 0} разделов). ${loreCoverageNextStep(data)}`,
+          : data.dialogue_context ? 'Lore не выбрал разделы знаний и истории. Принятые факты показаны отдельно в подготовленном пакете.' : `подтвержденный контекст по запросу не найден (${sources.length} из ${data.memory_total_sections || 0} разделов). ${loreCoverageNextStep(data)}`,
         sources.length ? 'ok' : ''
       ));
       renderEvidencePlan(root, data.evidence_plan || []);
@@ -3137,6 +3164,7 @@
         list.appendChild(row);
       }
       button.disabled = !currentJobId || availableSources.length === 0;
+      if(data.dialogue_context){button.disabled=true;state.textContent='Для изменения состава этого пакета уточните вопрос и подготовьте контекст заново. Пересборка только Lore не сохраняет слой принятых фактов.';}
     }
 
     function renderEvidencePlan(root, items) {
@@ -3458,6 +3486,7 @@
 
     async function rebuildPromptWithSelectedLore() {
       if (!lastPackage || !currentJobId) return;
+      if(lastPackage.dialogue_context){document.getElementById('loreRebuildState').textContent='Уточните вопрос и подготовьте контекст заново, чтобы сохранить принятые факты и их основания.';return;}
       const selected = Array.from(document.querySelectorAll('.lore-source-checkbox'))
         .filter((item) => item.checked && item.value)
         .map((item) => item.value);
@@ -4195,6 +4224,7 @@
     }
 
     const materialFinder=createMaterialFinder({document,fetch,getProject:journeyProject,onOpen:openJourneyReview});
+    const dialogueContextPreview=createDialogueContextPreview({document,fetch,getProject:()=>document.getElementById('project').value});
     bindFormDirtyHandlers();
     Promise.all([loadProjects(), loadProfiles(), checkLocalStatus()]);
   </script>
