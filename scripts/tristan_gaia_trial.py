@@ -10,11 +10,32 @@ from pathlib import Path
 import secrets
 import tempfile
 import threading
+import uuid
+import re
 
 from scripts import tristan_synthetic as b
 from scripts import tristan_synthetic_review as review_ui
 
 PREFIX = 'gaia-tristan-workspace-'
+
+
+def followup(before, request_id):
+    """Closed OFFLINE teaching fixture at v2; never an imported model reply."""
+    b.require(isinstance(request_id,str) and re.fullmatch('[0-9a-f]{32}',request_id),'invalid_request_id')
+    old=next((text for text in ('Инструкция проверки ещё не подготовлена.','Инструкция проверки подготовлена.') if text in before),None)
+    b.require(old is not None and 'Работа разрешена после проверки пользовательских прав.' in before,'unsupported_followup')
+    instruction='Инструкция проверки подготовлена и опубликована.'
+    rights='Проверка пользовательских прав завершена.'
+    text=rights+' '+instruction+' Координатор продолжает собирать замечания. Проверка прав остаётся обязательным условием работы.'
+    operations=[dict(action='replace',old_text=old,new_text=instruction,quote=instruction)]
+    pending='Проверка пользовательских прав ещё не выполнена.'
+    operations.append(dict(action='replace' if pending in before else 'append',old_text=pending if pending in before else '',new_text=rights,quote=rights))
+    packet=dict(protocol='gaia-tristan-offline-followup-v1',case_id='partial_followup',request_id=request_id,base_version=2,
+                before=before,documents=[dict(name='Новое письмо — проверка прав.txt',text=text)],
+                task='Обновить готовность инструкции и результат проверки прав по новому письму. Сохранить обязанности и условие работы.')
+    packet['packet_digest']=b.digest(packet)
+    b.apply_operations(before,operations,[text])
+    return dict(packet=packet,response=review_ui.envelope(packet,operations),mode='offline_followup')
 
 
 def desk_at(root):
@@ -71,7 +92,8 @@ class Trial:
             fcntl.flock(self.file,fcntl.LOCK_EX|fcntl.LOCK_NB)
             self.root=root;self.record=b.parse((root/'trial.json').read_bytes())
             b.require(self.record.get('protocol')=='gaia-tristan-workspace-v1','invalid_trial')
-            self.packet=self.record['packet'];self.candidate=b.reply(self.packet,self.record['response'])
+            self.first_packet=self.record['packet'];self.first_candidate=b.reply(self.first_packet,self.record['response'])
+            self.packet=self.first_packet;self.candidate=self.first_candidate
             self.desk=desk_at(root)
             from gaia.addressed_memory import AddressedMemoryPilot
             self.pilot=AddressedMemoryPilot(self.desk);self.lock=self.desk.lock;self.ticket=None
@@ -85,34 +107,57 @@ class Trial:
     def _request(self):
         b.require(b.parse((self.root/'trial.json').read_bytes())==self.record,'trial_changed')
         b.require(b.parse(self.desk.state_path.read_bytes())==self.desk.state,'stale_version')
-        b.validate_packet(self.packet)
-        for ref,source in zip(self.record['refs'],self.packet['documents']):
-            view=self.desk.preview(ref['id'])
-            b.require(view['digest']==ref['digest'] and view['text']==source['text'],'trial_sources_changed')
-        b.require(len(self.record['refs'])==len(self.packet['documents']),'trial_sources_changed')
+        b.validate_packet(self.first_packet)
         memory=self.desk._memory_state()
-        b.require(len(memory['history'])==memory['version'] and memory['history'][-1]['artifact']==memory['current'],'invalid_trial_history')
+        b.require(type(memory['version'])is int and 1<=len(memory['history'])<=3 and len(memory['history'])==memory['version'] and memory['history'][-1]['artifact']==memory['current'],'invalid_trial_history')
         requests=[r for r in memory['requests'] if r.get('mode')=='addressed_v1']
-        b.require(len(requests)<=1 and len(memory['history']) in (1,2),'invalid_trial_history')
-        b.require(self.desk._memory_text(memory['history'][0]['artifact'])==self.packet['before'],'trial_memory_changed')
-        r=requests[0] if requests else None
-        if r:
-            b.require(r['base_version']==self.packet['base_version'] and r['materials']==self.record['refs'],'local_binding_mismatch')
-            for key in ['previous','task','evidence','packet']:
-                text=self.pilot._read(r[key]);b.require(hashlib.sha256(text.encode()).hexdigest()==r[key+'_digest'],'local_packet_changed')
-            b.require(self.pilot._read(r['previous'])==self.packet['before'] and self.pilot._read(r['task'])==self.packet['task']
-                and json.loads(self.pilot._read(r['evidence']))==[d['text'] for d in self.packet['documents']],'local_binding_mismatch')
-            if r.get('operations'):b.require(self.pilot._operations(r)==self.candidate['operations'],'candidate_changed')
-            binding=dict(remote_request_id=self.packet['request_id'],remote_packet_digest=self.packet['packet_digest'],
-                         base_version=self.packet['base_version'],local_request_id=r['id'],local_packet_digest=r['packet_digest'])
-            if (self.root/'binding.json').exists():b.require(b.parse((self.root/'binding.json').read_bytes())==binding,'local_binding_mismatch')
-            if r['status']=='accepted':
-                expected=b.apply_operations(self.packet['before'],[self.candidate['operations'][i] for i in r['accepted_selection']],
-                                            [d['text'] for d in self.packet['documents']])[0]
-                b.require(memory['version']==2 and len(memory['history'])==2 and self.desk._memory_text(memory['current'])==expected,'trial_memory_changed')
-            else:b.require(memory['version']==1 and self.desk._memory_text(memory['current'])==self.packet['before'],'stale_version')
-        else:b.require(memory['version']==1 and self.desk._memory_text(memory['current'])==self.packet['before'],'stale_version')
-        return memory,r
+        records=[self.record]
+        next_path=self.root/'next.json'
+        if next_path.exists():
+            b.require(self.first_packet['case_id']=='partial' and requests and requests[0]['status']=='accepted' and len(memory['history'])>=2,'unsupported_followup')
+            base=self.desk._memory_text(memory['history'][1]['artifact'])
+            saved=b.parse(next_path.read_bytes())
+            b.require(saved['packet']['request_id']!=self.first_packet['request_id'],'reply_binding_mismatch')
+            expected=followup(base,saved['packet']['request_id'])
+            b.require(set(saved)=={'packet','response','mode','refs'} and all(saved[k]==expected[k] for k in expected),'followup_changed')
+            records.append(saved)
+        b.require(len(requests)<=len(records)<=2,'invalid_trial_history')
+        expected_text=self.first_packet['before'];version=1;self.summaries=[]
+        b.require(self.desk._memory_text(memory['history'][0]['artifact'])==expected_text,'trial_memory_changed')
+        for index,record in enumerate(records):
+            packet=record['packet']
+            candidate=self.first_candidate if index==0 else b.parse(record['response']['output'][0]['content'][0]['text'].encode())
+            b.require(type(packet['base_version'])is int and packet['base_version']==version and packet['before']==expected_text,'stale_version')
+            b.require(len(record['refs'])==len(packet['documents']),'trial_sources_changed')
+            for ref,source in zip(record['refs'],packet['documents']):
+                view=self.desk.preview(ref['id'])
+                b.require(view['digest']==ref['digest'] and view['text']==source['text'],'trial_sources_changed')
+            r=requests[index] if index<len(requests) else None
+            if r:
+                b.require(r['base_version']==version and r['materials']==record['refs'],'local_binding_mismatch')
+                for key in ['previous','task','evidence','packet']:
+                    text=self.pilot._read(r[key]);b.require(hashlib.sha256(text.encode()).hexdigest()==r[key+'_digest'],'local_packet_changed')
+                b.require(self.pilot._read(r['previous'])==expected_text and self.pilot._read(r['task'])==packet['task']
+                    and json.loads(self.pilot._read(r['evidence']))==[d['text'] for d in packet['documents']],'local_binding_mismatch')
+                if r.get('operations'):b.require(self.pilot._operations(r)==candidate['operations'],'candidate_changed')
+                binding=dict(remote_request_id=packet['request_id'],remote_packet_digest=packet['packet_digest'],
+                             base_version=packet['base_version'],local_request_id=r['id'],local_packet_digest=r['packet_digest'])
+                binding_path=self.root/('binding.json' if index==0 else 'next-binding.json')
+                if binding_path.exists():b.require(b.parse(binding_path.read_bytes())==binding,'local_binding_mismatch')
+                if r['status']=='accepted':
+                    expected_text=b.apply_operations(expected_text,[candidate['operations'][i] for i in r['accepted_selection']],
+                                                     [d['text'] for d in packet['documents']])[0]
+                    version+=1
+                    b.require(len(memory['history'])>=version and memory['history'][version-1]['request']==r['id']
+                        and self.desk._memory_text(memory['history'][version-1]['artifact'])==expected_text,'trial_memory_changed')
+                elif index<len(records)-1:b.require(False,'invalid_trial_history')
+            self.summaries.append(dict(number=index+1,base_version=packet['base_version'],status=r['status'] if r else 'ready',
+                                       accepted_count=len(r.get('accepted_selection',[])) if r else 0))
+            if index==len(records)-1:
+                self.packet=packet;self.candidate=candidate;self.active_record=record;self.round=index+1;active=r
+        b.require(memory['version']==version and len(memory['history'])==version
+                  and self.desk._memory_text(memory['current'])==expected_text,'stale_version')
+        return memory,active
 
     def state(self):
         with self.lock:
@@ -121,10 +166,14 @@ class Trial:
                       'cancelled':'cancelled','addressed_no_changes':'no_changes'}
             phase=statuses.get(r['status'],'unavailable') if r else 'ready'
             b.require(phase!='unavailable','invalid_trial')
-            value=dict(phase=phase,version=memory['version'],mode='gaia_trial',origin=self.record['mode'],workspace=True,error=None,
+            value=dict(phase=phase,version=memory['version'],mode='gaia_trial',origin=self.active_record['mode'],workspace=True,error=None,
+                       round_number=self.round,can_advance=False,
                        before=self.packet['before'],memory=self.desk._memory_text(memory['current']),task=self.packet['task'],
                        sources=self.packet['documents'],operations=self.candidate['operations'] if r and r.get('operations') else [],
                        accepted_indices=r.get('accepted_selection',[]) if r else [])
+            if self.round==1 and phase=='confirmed' and self.first_packet['case_id']=='partial':
+                try:followup(value['memory'],'0'*32);value['can_advance']=True
+                except ValueError:pass
             value['view_digest']=b.digest(dict(view=value,remote=self.packet['packet_digest'],local=r['id'] if r else None))
             return value
 
@@ -133,24 +182,34 @@ class Trial:
             state=self.state()
             history=self.desk.working_memory()['history']
             return dict(state=state,project=self.desk.project,materials=self.packet['documents'],
-                        history=[dict(version=h['version'],text=h['text']) for h in history])
+                        history=[dict(version=h['version'],text=h['text']) for h in history],passes=self.summaries)
 
     def action(self,action,body):
-        schemas={'prepare':{'view_digest'},'cancel':{'view_digest'},'preview':{'view_digest','indices'},
+        schemas={'advance':{'view_digest'},'prepare':{'view_digest'},'cancel':{'view_digest'},'preview':{'view_digest','indices'},
                  'confirm':{'view_digest','indices','preview_token','confirm'}}
         b.require(action in schemas and isinstance(body,dict) and set(body)==schemas[action],'invalid_request')
         with self.lock:
             try:
                 current=self.state();b.require(body['view_digest']==current['view_digest'],'preview_changed')
                 _,r=self._request()
+                if action=='advance':
+                    b.require(current['can_advance'] and self.round==1,'sequence_closed')
+                    record=followup(current['memory'],uuid.uuid4().hex)
+                    refs=[]
+                    for number,source in enumerate(record['packet']['documents'],1):
+                        uploaded=self.desk.upload(dict(name=source['name'],data=base64.b64encode(source['text'].encode()).decode()))
+                        refs.append(dict(id=uploaded['id'],digest=uploaded['digest'],number=number))
+                    record['refs']=refs
+                    b.atomic(self.root/'next.json',record);self.ticket=None
+                    return self.state()
                 if action=='prepare':
                     if r and r['status']!='addressed_prepared':return current
                     if not r:
-                        self.pilot.prepare(dict(version=1,task=self.packet['task'],selected=self.record['refs']))
+                        self.pilot.prepare(dict(version=self.packet['base_version'],task=self.packet['task'],selected=self.active_record['refs']))
                         _,r=self._request()
                     binding=dict(remote_request_id=self.packet['request_id'],remote_packet_digest=self.packet['packet_digest'],
                         base_version=self.packet['base_version'],local_request_id=r['id'],local_packet_digest=r['packet_digest'])
-                    b.atomic(self.root/'binding.json',binding)
+                    b.atomic(self.root/('binding.json' if self.round==1 else 'next-binding.json'),binding)
                     # Original remote binding is checked above. Translation is limited to this exact local packet.
                     self.pilot.propose(dict(id=r['id'],reply=dict(request_id=r['id'],base_version=r['base_version'],
                                                                operations=self.candidate['operations'])))

@@ -11,6 +11,7 @@ import threading
 from scripts import tristan_synthetic as bridge
 
 MESSAGES = {
+    'sequence_closed': 'Новый учебный проход уже начат или недоступен. Обновите рабочее пространство.',
     'preview_changed': 'Предпросмотр устарел. Просмотрите текущий выбор заново.',
     'stale_or_closed_request': 'Проход уже закрыт или версия изменилась. Обновите страницу; повторной записи не будет.',
     'session_busy': 'Сессия занята. Память не изменена. Повторите обзор после завершения текущего действия.',
@@ -180,7 +181,7 @@ def make_server(review, port=0, *, workspace=False):
 
         def do_POST(self):
             if not self._authorized(True): self._error('unauthorized',403);return
-            if self.path not in (('/api/preview','/api/confirm','/api/cancel','/api/prepare') if workspace else ('/api/preview','/api/confirm','/api/cancel')):self._error('unknown_route',404);return
+            if self.path not in (('/api/preview','/api/confirm','/api/cancel','/api/prepare','/api/advance') if workspace else ('/api/preview','/api/confirm','/api/cancel')):self._error('unknown_route',404);return
             if self.headers.get('Content-Type') != 'application/json':self._error('invalid_request',415);return
             try:
                 size=int(self.headers.get('Content-Length','0'))
