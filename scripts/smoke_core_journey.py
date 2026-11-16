@@ -20,9 +20,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Основной Gaia: временная синтетическая проверка без моделей")
     parser.add_argument("--serve", action="store_true", help="После smoke оставить временный UI до Ctrl+C")
     parser.add_argument("--oc-evidence", action="store_true", help="В --serve показать искусственную OC-карточку для просмотра основания")
+    parser.add_argument("--oc-conflict", action="store_true", help="В --serve проверить факт, конфликт и недостаток основания на синтетике")
     args = parser.parse_args()
-    if args.oc_evidence and not args.serve:
-        parser.error("--oc-evidence используется только вместе с --serve")
+    if (args.oc_evidence or args.oc_conflict) and not args.serve:
+        parser.error("OC-проба используется только вместе с --serve")
+    if args.oc_evidence and args.oc_conflict:
+        parser.error("Выберите одну OC-пробу")
     if "gaia.config" in sys.modules:
         parser.error("Запустите команду в отдельном процессе, до импорта Gaia.")
     # Reserve an available loopback address without touching a running service.
@@ -75,7 +78,7 @@ def main() -> int:
         (folder / "Память.md").write_text("# Учебная проба\nТолько искусственные данные.\n", encoding="utf-8")
         intake = ControlledIntake()
         # Reuse the two existing preparation fixtures; no new model scenario.
-        for index, text in enumerate(() if args.oc_evidence else ("Использовать резервный маршрут.", "Резервный бюджет пока не согласован.")):
+        for index, text in enumerate(() if args.oc_evidence or args.oc_conflict else ("Использовать резервный маршрут.", "Резервный бюджет пока не согласован.")):
             admitted = intake.admit(project, [(f"synthetic-{index}.txt", text.encode())])
             workspace = admitted["workspace_id"]
             artifact = admitted["materials"][0]["sanitized_id"]
@@ -107,6 +110,27 @@ def main() -> int:
                 sensitivity="unknown", reason="Учебное предложение из сохранённого синтетического ответа.",
             ))
         detail = "OC-предложение из сохранённой синтетической фикстуры ожидает решения." if args.oc_evidence else "Один факт подтверждён тестом, второй ожидает решения."
+        if args.oc_conflict:
+            from gaia.operational_context import OperationalContextStore, SafeProvenance
+            from gaia.operational_context_review import OperationalContextCandidateStore, OperationalContextReviewService, new_candidate
+            fixture = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "oc_conflict_review_20261117.json"
+            candidates = OperationalContextCandidateStore(intake.store.root)
+            service = OperationalContextReviewService(OperationalContextStore(intake.store.root), candidates)
+            prior = ""
+            for index, case in enumerate(json.loads(fixture.read_text())["cases"]):
+                admitted = intake.admit(project, [(case["id"] + ".txt", case["source"].encode())])
+                workspace = admitted["workspace_id"]; artifact = admitted["materials"][0]["sanitized_id"]
+                review = ReviewService(intake.store, workspace, lambda _: {"status": "completed", "findings": []})
+                review.start(artifact); review.confirm(artifact)
+                candidates.add(new_candidate(
+                    scope="project", scope_ref=workspace, kind="decision", subject_ref="stand_acceptance_date",
+                    value=case["statement"], provenance=SafeProvenance(source_ref=artifact, candidate_ref="fixture_" + case["id"]),
+                    sensitivity="unknown", candidate_id=case["id"], replaces_id=prior,
+                    reason="Искусственное предложение для проверки интерфейса, не результат модели.",
+                ))
+                if index == 0:
+                    prior = service.confirm(case["id"], actor_ref="synthetic_fixture")["id"]
+            detail = "Первый факт принят фикстурой. Два искусственных предложения требуют проверки: конфликт дат и дата без утверждения."
         runtime.INDEX_HTML = runtime.INDEX_HTML.replace("<body>", '<body><aside role="note" style="padding:16px;color:white;background:#543400">Учебная проба: только искусственные данные. Модели отключены. ' + detail + ' После остановки профиль удалится. Рабочая Gaia не подключена.</aside>')
         class QuietHandler(runtime.Handler):
             def log_message(self, *_):

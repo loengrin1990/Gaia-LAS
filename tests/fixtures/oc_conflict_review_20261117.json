@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "frozen_before_implementation": true,
+  "purpose": "Synthetic application review, manually authored proposals; no model accuracy claim",
+  "cases": [
+    {
+      "id": "accepted_fact",
+      "source": "В протоколе проекта «Лира» утверждён срок приёмки стенда: 12 декабря. Других сроков протокол не устанавливает.",
+      "statement": "Срок приёмки стенда — 12 декабря.",
+      "expected": "Explicit confirm creates one current item with this source; opening does not confirm."
+    },
+    {
+      "id": "conflicting_letter",
+      "source": "В письме координатора проекта «Лира» указан срок приёмки стенда: 15 декабря. Протокол со сроком 12 декабря не отозван; причины расхождения в письме нет.",
+      "statement": "Срок приёмки стенда — 15 декабря.",
+      "expected": "Pending replacement shows previous and proposed values; both exact associated whole materials can be opened. No automatic winner; old stays current until explicit confirm."
+    },
+    {
+      "id": "insufficient_basis",
+      "source": "На обсуждении проекта «Лира» предложили рассмотреть приёмку стенда 19 декабря. Утверждения этой даты пока нет, ответ по предложению не получен.",
+      "statement": "Срок приёмки стенда — 19 декабря.",
+      "expected": "Whole material exposes unsupported assertion as engineering review; human explicitly rejects it. Application does not claim semantic validation."
+    }
+  ]
+}

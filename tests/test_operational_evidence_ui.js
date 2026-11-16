@@ -26,3 +26,14 @@ test('actual pending and accepted cards both open viewer; workspace handler clos
  for(const current of [false,true]){const card=context.operationalContextCard({id:'opaque',content:'Synthetic',kind:'Решение',context:'Проект',sensitivity:'Обычный'},current);const button=card.children.find(x=>x.textContent==='Открыть очищенное основание');assert.ok(button);button.onclick();}
  assert.equal(JSON.stringify(opened),JSON.stringify([['opaque',false],['opaque',true]]));assert.match(html,/function changeJourneyWorkspace\(\) \{\s*window\.operationalEvidenceViewer\?\.close\(\)/);
 });
+
+test('replacement card opens proposed and prior evidence with distinct labels and exact IDs',()=>{
+ const html=fs.readFileSync(require.resolve('../gaia/static/index.html'),'utf8'),opened=[];
+ const context={document:{createElement:tag=>new Element(tag)},operationalEvidenceViewer:{open:(...args)=>opened.push(args)}};
+ vm.createContext(context);const start=html.indexOf('    function operationalContextCard('),end=html.indexOf('    function operationalRetirementConfirmation(',start);vm.runInContext(html.slice(start,end),context);
+ const card=context.operationalContextCard({id:'proposal',content:'15 декабря',previous_content:'12 декабря',replacement_of:'previous',kind:'Решение',context:'Проект',sensitivity:'Обычный'});
+ for(const label of ['Открыть основание предложения','Открыть основание прежнего факта']){const button=card.children.find(x=>x.textContent===label);assert.ok(button,label);button.onclick();}
+ assert.equal(JSON.stringify(opened),JSON.stringify([['proposal',false],['previous',true]]));
+ const noPointer=context.operationalContextCard({id:'legacy',previous_content:'12 декабря'});
+ assert.ok(!noPointer.children.some(x=>x.textContent==='Открыть основание прежнего факта'));
+});
